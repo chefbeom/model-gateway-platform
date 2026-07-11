@@ -8,7 +8,15 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -44,7 +52,9 @@ public class RoutingPolicyController {
         return TargetPolicyView.from(policies.configureTarget(serviceId, targetId, request));
     }
 
+    /** A successful empty response must be 204 so the UI can proceed to reload the target list. */
     @DeleteMapping("/services/{serviceId}/targets/{targetId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteTarget(@PathVariable UUID serviceId, @PathVariable UUID targetId) {
         policies.deleteTarget(serviceId, targetId);
     }
