@@ -10,6 +10,8 @@ import jakarta.persistence.EntityManager;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
 
@@ -21,10 +23,17 @@ public class RequestContentService {
     private final RequestContentRepository contents;
     private final SecretCipher cipher;
     private final AuditService audit;
+
     public RequestContentService(EntityManager entityManager, ProjectRepository projects, ProjectContentPolicyRepository policies,
                                  RequestContentRepository contents, SecretCipher cipher, AuditService audit) {
-        this.entityManager = entityManager; this.projects = projects; this.policies = policies; this.contents = contents; this.cipher = cipher; this.audit = audit;
+        this.entityManager = entityManager;
+        this.projects = projects;
+        this.policies = policies;
+        this.contents = contents;
+        this.cipher = cipher;
+        this.audit = audit;
     }
+
     @Transactional
     public void capture(String publicRequestId, String request, String response) {
         if (publicRequestId == null || publicRequestId.isBlank()) return;
@@ -32,25 +41,51 @@ public class RequestContentService {
         if (auditRequest == null || mode(auditRequest.getProjectId()) != ContentRetentionMode.FULL_ENCRYPTED) return;
         contents.save(new RequestContent(auditRequest.getId(), cipher.encrypt(request), response == null ? null : cipher.encrypt(response)));
     }
+
     @Transactional
-    public ProjectContentPolicy setPolicy(UUID projectId, ContentRetentionMode mode) {
+    public ProjectContentPolicy setPolicy(UUID projectId, ContentRetentionMode mode, Integer retentionDays) {
         if (!projects.existsById(projectId)) throw new ApiException(HttpStatus.NOT_FOUND, "PROJECT_NOT_FOUND", "The project does not exist.");
-        ProjectContentPolicy policy = policies.save(new ProjectContentPolicy(projectId, mode));
-        audit.record(null, CurrentActor.userIdOrNull(), "REQUEST_RETENTION_POLICY_CHANGED", "PROJECT", projectId, Map.of("mode", mode.name()));
+        ProjectContentPolicy policy = policies.save(new ProjectContentPolicy(projectId, mode, retentionDays));
+        if (mode == ContentRetentionMode.METADATA_ONLY) contents.deleteAllForProject(projectId);
+        audit.record(null, CurrentActor.userIdOrNull(), "REQUEST_RETENTION_POLICY_CHANGED", "PROJECT", projectId,
+                Map.of("mode", mode.name(), "retentionDays", String.valueOf(policy.getRetentionDays())));
         return policy;
     }
+
     @Transactional(readOnly = true)
-    public ContentRetentionMode mode(UUID projectId) { return policies.findById(projectId).map(ProjectContentPolicy::getRetentionMode).orElse(ContentRetentionMode.METADATA_ONLY); }
+    public ContentRetentionMode mode(UUID projectId) { return policy(projectId).getRetentionMode(); }
+
+    @Transactional(readOnly = true)
+    public ProjectContentPolicy policy(UUID projectId) {
+        return policies.findById(projectId).orElse(new ProjectContentPolicy(projectId, ContentRetentionMode.METADATA_ONLY));
+    }
+
     @Transactional(readOnly = true)
     public StoredContent read(UUID projectId, String publicRequestId) {
         LlmRequest auditRequest = requestByPublicId(publicRequestId);
-        if (auditRequest == null || !auditRequest.getProjectId().equals(projectId)) throw new ApiException(HttpStatus.NOT_FOUND, "REQUEST_NOT_FOUND", "The request does not exist.");
-        RequestContent content = contents.findById(auditRequest.getId()).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "REQUEST_CONTENT_NOT_RETAINED", "Full request content was not retained for this request."));
+        if (auditRequest == null || !auditRequest.getProjectId().equals(projectId)) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "REQUEST_NOT_FOUND", "The request does not exist.");
+        }
+        RequestContent content = contents.findById(auditRequest.getId()).orElseThrow(() ->
+                new ApiException(HttpStatus.NOT_FOUND, "REQUEST_CONTENT_NOT_RETAINED", "Full request content was not retained for this request."));
+        audit.record(null, CurrentActor.userIdOrNull(), "REQUEST_CONTENT_VIEWED", "LLM_REQUEST", auditRequest.getId(),
+                Map.of("projectId", projectId.toString(), "requestId", publicRequestId));
         return new StoredContent(cipher.decrypt(content.getEncryptedRequest()), cipher.decrypt(content.getEncryptedResponse()));
     }
+
+    @Transactional
+    public void purgeExpired() {
+        Instant now = Instant.now();
+        for (ProjectContentPolicy policy : policies.findAll()) {
+            if (policy.getRetentionMode() != ContentRetentionMode.FULL_ENCRYPTED || policy.getRetentionDays() == null) continue;
+            contents.deleteExpiredForProject(policy.getProjectId(), now.minusSeconds(policy.getRetentionDays() * 86_400L));
+        }
+    }
+
     private LlmRequest requestByPublicId(String publicRequestId) {
         return entityManager.createQuery("select r from LlmRequest r where r.requestId = :requestId", LlmRequest.class)
                 .setParameter("requestId", publicRequestId).getResultStream().findFirst().orElse(null);
     }
+
     public record StoredContent(String request, String response) { }
 }

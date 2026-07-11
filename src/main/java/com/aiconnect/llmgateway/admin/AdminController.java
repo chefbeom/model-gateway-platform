@@ -6,6 +6,7 @@ import com.aiconnect.llmgateway.service.ApiKeyService;
 import com.aiconnect.llmgateway.service.IssuedApiKey;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
+
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -18,8 +19,11 @@ public class AdminController {
     private final ApiKeyRepository apiKeys;
 
     public AdminController(ControlPlaneService controlPlane, ApiKeyService apiKeyService, ApiKeyRepository apiKeys) {
-        this.controlPlane = controlPlane; this.apiKeyService = apiKeyService; this.apiKeys = apiKeys;
+        this.controlPlane = controlPlane;
+        this.apiKeyService = apiKeyService;
+        this.apiKeys = apiKeys;
     }
+
     @PostMapping("/organizations") public OrganizationView createOrganization(@Valid @RequestBody AdminDtos.CreateOrganization request) { return OrganizationView.from(controlPlane.create(request)); }
     @PostMapping("/projects") public ProjectView createProject(@Valid @RequestBody AdminDtos.CreateProject request) { return ProjectView.from(controlPlane.create(request)); }
     @PostMapping("/nodes") public NodeView createNode(@Valid @RequestBody AdminDtos.CreateNode request) { return NodeView.from(controlPlane.create(request)); }
@@ -39,23 +43,11 @@ public class AdminController {
     @GetMapping("/runtime-endpoints/{endpointId}/deployments") public List<DeploymentView> deployments(@PathVariable UUID endpointId) { return controlPlane.deployments(endpointId).stream().map(DeploymentView::from).toList(); }
 
     public record OrganizationView(UUID id, String name, String status, Instant createdAt) { static OrganizationView from(Organization item) { return new OrganizationView(item.getId(), item.getName(), item.getStatus(), item.getCreatedAt()); } }
-    public record ProjectView(UUID id, UUID organizationId, String name, String status) { static ProjectView from(Project item) { return new ProjectView(item.getId(), item.getOrganizationId(), item.getName(), item.getStatus()); } }
+    public record ProjectView(UUID id, UUID organizationId, UUID teamId, String name, String status) { static ProjectView from(Project item) { return new ProjectView(item.getId(), item.getOrganizationId(), item.getTeamId(), item.getName(), item.getStatus()); } }
     public record NodeView(UUID id, UUID organizationId, String name, HealthStatus status) { static NodeView from(InferenceNode item) { return new NodeView(item.getId(), item.getOrganizationId(), item.getName(), item.getStatus()); } }
     public record EndpointView(UUID id, UUID nodeId, RuntimeType runtimeType, String baseUrl, boolean enabled, HealthStatus healthStatus, Instant lastCheckedAt) { static EndpointView from(RuntimeEndpoint item) { return new EndpointView(item.getId(), item.getNodeId(), item.getRuntimeType(), item.getBaseUrl(), item.isEnabled(), item.getHealthStatus(), item.getLastCheckedAt()); } }
-    public record DeploymentView(UUID id, UUID runtimeEndpointId, String providerModelId, String compatibilityKey,
-                                 String displayName, String modelFamily, String quantization, Integer contextLength,
-                                 boolean loaded, boolean enabled, HealthStatus healthStatus, int maxConcurrency,
-                                 String capabilitiesJson, String capabilityOverridesJson) {
-        static DeploymentView from(ModelDeployment item) {
-            return new DeploymentView(item.getId(), item.getRuntimeEndpointId(), item.getProviderModelId(), item.getCompatibilityKey(),
-                    item.getDisplayName(), item.getModelFamily(), item.getQuantization(), item.getContextLength(), item.isLoaded(),
-                    item.isEnabled(), item.getHealthStatus(), item.getMaxConcurrency(), item.getCapabilitiesJson(), item.getCapabilityOverridesJson());
-        }
-    }
-    public record ServiceView(UUID id, UUID organizationId, String serviceKey, String displayName,
-                              FailoverPolicy failoverPolicy, RetryPolicy retryPolicy, boolean allowDegraded, boolean enabled) {
-        static ServiceView from(LlmService item) { return new ServiceView(item.getId(), item.getOrganizationId(), item.getServiceKey(), item.getDisplayName(), item.getFailoverPolicy(), item.getRetryPolicy(), item.isAllowDegraded(), item.isEnabled()); }
-    }
+    public record DeploymentView(UUID id, UUID runtimeEndpointId, String providerModelId, String compatibilityKey, String displayName, String modelFamily, String quantization, Integer contextLength, boolean loaded, boolean enabled, HealthStatus healthStatus, int maxConcurrency, String capabilitiesJson, String capabilityOverridesJson) { static DeploymentView from(ModelDeployment item) { return new DeploymentView(item.getId(), item.getRuntimeEndpointId(), item.getProviderModelId(), item.getCompatibilityKey(), item.getDisplayName(), item.getModelFamily(), item.getQuantization(), item.getContextLength(), item.isLoaded(), item.isEnabled(), item.getHealthStatus(), item.getMaxConcurrency(), item.getCapabilitiesJson(), item.getCapabilityOverridesJson()); } }
+    public record ServiceView(UUID id, UUID organizationId, String serviceKey, String displayName, FailoverPolicy failoverPolicy, RetryPolicy retryPolicy, boolean allowDegraded, boolean enabled) { static ServiceView from(LlmService item) { return new ServiceView(item.getId(), item.getOrganizationId(), item.getServiceKey(), item.getDisplayName(), item.getFailoverPolicy(), item.getRetryPolicy(), item.isAllowDegraded(), item.isEnabled()); } }
     public record TargetView(UUID id, UUID serviceId, UUID deploymentId, int priority, boolean degraded) { static TargetView from(ServiceTarget item) { return new TargetView(item.getId(), item.getServiceId(), item.getDeploymentId(), item.getPriority(), item.isDegraded()); } }
     public record ApiKeyView(UUID id, String name, String keyPrefix, ApiKeyStatus status, Instant expiresAt, Instant lastUsedAt, Instant createdAt) { static ApiKeyView from(ApiKey item) { return new ApiKeyView(item.getId(), item.getName(), item.getKeyPrefix(), item.getStatus(), item.getExpiresAt(), item.getLastUsedAt(), item.getCreatedAt()); } }
 }

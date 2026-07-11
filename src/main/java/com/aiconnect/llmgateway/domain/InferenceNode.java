@@ -1,6 +1,15 @@
 package com.aiconnect.llmgateway.domain;
 
-import jakarta.persistence.*;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.PreUpdate;
+import jakarta.persistence.Table;
+
 import java.time.Instant;
 import java.util.UUID;
 
@@ -19,12 +28,20 @@ public class InferenceNode {
     @Column(nullable = false) private Instant updatedAt = Instant.now();
 
     protected InferenceNode() { }
+
     public InferenceNode(UUID organizationId, String name, String description, String connectionMode, String labelsJson) {
-        this.organizationId = organizationId; this.name = name; this.description = description; this.connectionMode = connectionMode; this.labelsJson = labelsJson;
+        this.organizationId = organizationId;
+        this.name = name;
+        this.description = description;
+        this.connectionMode = connectionMode;
+        this.labelsJson = labelsJson;
     }
+
     @PreUpdate void updateTimestamp() { updatedAt = Instant.now(); }
     public UUID getId() { return id; }
     public UUID getOrganizationId() { return organizationId; }
     public String getName() { return name; }
+    public String getDescription() { return description; }
+    public String getConnectionMode() { return connectionMode; }
     public HealthStatus getStatus() { return status; }
 }
