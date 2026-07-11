@@ -7,8 +7,18 @@ import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -17,19 +27,28 @@ import java.util.UUID;
 public class UserAdminController {
     private final IdentityService identity;
     private final TeamService teams;
+    private final OrganizationAccessService access;
     private final AuditService audit;
 
-    public UserAdminController(IdentityService identity, TeamService teams, AuditService audit) {
+    public UserAdminController(IdentityService identity, TeamService teams, OrganizationAccessService access,
+                               AuditService audit) {
         this.identity = identity;
         this.teams = teams;
+        this.access = access;
         this.audit = audit;
     }
 
     @PostMapping("/users")
     public AuthController.UserView createUser(@Valid @RequestBody CreateUser request) {
         AppUser user = identity.createUser(request.email(), request.password(), request.platformAdmin());
-        audit.record(null, CurrentActor.userIdOrNull(), "USER_CREATED", "APP_USER", user.getId(), Map.of("platformAdmin", user.isPlatformAdmin()));
+        audit.record(null, CurrentActor.userIdOrNull(), "USER_CREATED", "APP_USER", user.getId(),
+                Map.of("platformAdmin", user.isPlatformAdmin()));
         return AuthController.UserView.from(user);
+    }
+
+    @GetMapping("/organizations/{organizationId}/users")
+    public List<OrganizationAccessService.OrganizationUserView> listOrganizationUsers(@PathVariable UUID organizationId) {
+        return access.organizationUsers(organizationId);
     }
 
     @PostMapping("/organizations/{organizationId}/users")
@@ -44,6 +63,18 @@ public class UserAdminController {
         audit.record(organizationId, CurrentActor.userIdOrNull(), "ORGANIZATION_USER_CREATED", "APP_USER", user.getId(),
                 Map.of("organizationRole", membership.getRole().name(), "teamId", String.valueOf(request.teamId())));
         return new OrganizationUserView(user.getId(), user.getEmail(), membership.getRole(), request.teamId(), request.teamRole());
+    }
+
+    @GetMapping("/organizations/{organizationId}/users/{userId}/removal-preview")
+    public OrganizationAccessService.UserRemovalPreview removalPreview(@PathVariable UUID organizationId,
+                                                                        @PathVariable UUID userId) {
+        return access.userRemovalPreview(organizationId, userId);
+    }
+
+    @DeleteMapping("/organizations/{organizationId}/users/{userId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void removeOrganizationUser(@PathVariable UUID organizationId, @PathVariable UUID userId) {
+        access.removeOrganizationUser(organizationId, userId);
     }
 
     @PutMapping("/organizations/{organizationId}/members/{userId}")

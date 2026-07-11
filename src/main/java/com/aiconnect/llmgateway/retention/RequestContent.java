@@ -1,6 +1,10 @@
 package com.aiconnect.llmgateway.retention;
 
-import jakarta.persistence.*;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+
 import java.time.Instant;
 import java.util.UUID;
 
@@ -8,11 +12,16 @@ import java.util.UUID;
 @Table(name = "llm_request_content")
 public class RequestContent {
     @Id @Column(name = "request_id", columnDefinition = "char(36)") private UUID requestId;
-    @Column(nullable = false, columnDefinition = "text") private String encryptedRequest;
-    @Column(columnDefinition = "text") private String encryptedResponse;
+    @Column(nullable = false, columnDefinition = "mediumtext") private String encryptedRequest;
+    @Column(columnDefinition = "mediumtext") private String encryptedResponse;
     @Column(nullable = false) private Instant capturedAt = Instant.now();
+
     protected RequestContent() { }
-    public RequestContent(UUID requestId, String encryptedRequest, String encryptedResponse) { this.requestId = requestId; this.encryptedRequest = encryptedRequest; this.encryptedResponse = encryptedResponse; }
+    public RequestContent(UUID requestId, String encryptedRequest, String encryptedResponse) {
+        this.requestId = requestId;
+        this.encryptedRequest = encryptedRequest;
+        this.encryptedResponse = encryptedResponse;
+    }
     public UUID getRequestId() { return requestId; }
     public String getEncryptedRequest() { return encryptedRequest; }
     public String getEncryptedResponse() { return encryptedResponse; }

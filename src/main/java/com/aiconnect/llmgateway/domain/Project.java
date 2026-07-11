@@ -59,4 +59,13 @@ public class Project {
     public UUID getTeamId() { return teamId; }
     public String getName() { return name; }
     public String getStatus() { return status; }
+
+    /**
+     * Retains request and usage history after an owning team is removed, while
+     * ensuring that the former team project cannot continue to accept traffic.
+     */
+    public void unassignTeamAndSuspend() {
+        teamId = null;
+        status = "SUSPENDED";
+    }
 }

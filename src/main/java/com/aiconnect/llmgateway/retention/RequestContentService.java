@@ -43,6 +43,11 @@ public class RequestContentService {
     }
 
     @Transactional
+    public ProjectContentPolicy setPolicy(UUID projectId, ContentRetentionMode mode) {
+        return setPolicy(projectId, mode, null);
+    }
+
+    @Transactional
     public ProjectContentPolicy setPolicy(UUID projectId, ContentRetentionMode mode, Integer retentionDays) {
         if (!projects.existsById(projectId)) throw new ApiException(HttpStatus.NOT_FOUND, "PROJECT_NOT_FOUND", "The project does not exist.");
         ProjectContentPolicy policy = policies.save(new ProjectContentPolicy(projectId, mode, retentionDays));

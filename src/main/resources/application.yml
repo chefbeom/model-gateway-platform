@@ -37,4 +37,6 @@ gateway:
   api-key-pepper: ${API_KEY_PEPPER:change-me-before-production}
   health-check-delay-ms: ${HEALTH_CHECK_DELAY_MS:30000}
   connect-timeout-ms: ${RUNTIME_CONNECT_TIMEOUT_MS:3000}
-  response-timeout-ms: ${RUNTIME_RESPONSE_TIMEOUT_MS:120000}
+  # Keep this longer than a caller's own response timeout. Local GPU inference
+  # can take several minutes for long, non-streaming completions.
+  response-timeout-ms: ${RUNTIME_RESPONSE_TIMEOUT_MS:360000}

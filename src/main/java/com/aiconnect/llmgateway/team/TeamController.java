@@ -1,14 +1,18 @@
 package com.aiconnect.llmgateway.team;
 
+import com.aiconnect.llmgateway.identity.OrganizationAccessService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -18,9 +22,11 @@ import java.util.UUID;
 @RequestMapping("/api/admin/organizations/{organizationId}/teams")
 public class TeamController {
     private final TeamService service;
+    private final OrganizationAccessService access;
 
-    public TeamController(TeamService service) {
+    public TeamController(TeamService service, OrganizationAccessService access) {
         this.service = service;
+        this.access = access;
     }
 
     @GetMapping
@@ -42,6 +48,24 @@ public class TeamController {
     public TeamMemberView grantMembership(@PathVariable UUID organizationId, @PathVariable UUID teamId,
                                           @Valid @RequestBody GrantTeamMembership request) {
         return TeamMemberView.from(service.grantMembership(organizationId, teamId, request.userId(), request.role()));
+    }
+
+    @DeleteMapping("/{teamId}/members/{userId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void removeMember(@PathVariable UUID organizationId, @PathVariable UUID teamId, @PathVariable UUID userId) {
+        access.removeTeamMember(organizationId, teamId, userId);
+    }
+
+    @GetMapping("/{teamId}/deletion-preview")
+    public OrganizationAccessService.TeamDeletionPreview deletionPreview(@PathVariable UUID organizationId,
+                                                                          @PathVariable UUID teamId) {
+        return access.teamDeletionPreview(organizationId, teamId);
+    }
+
+    @DeleteMapping("/{teamId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void delete(@PathVariable UUID organizationId, @PathVariable UUID teamId) {
+        access.deleteTeam(organizationId, teamId);
     }
 
     public record CreateTeam(@NotBlank @Size(max = 120) String name) { }
