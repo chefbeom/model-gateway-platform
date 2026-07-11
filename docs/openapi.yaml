@@ -1,0 +1,518 @@
+openapi: 3.1.0
+info:
+  title: AIConnect LLM Service Platform API
+  version: 0.2.0
+  description: Hardware-independent LLM control plane and OpenAI-compatible data plane.
+servers:
+  - url: https://llm.example.com
+tags:
+  - name: OpenAI compatible
+  - name: Authentication
+  - name: Control plane
+  - name: Usage
+paths:
+  /v1/models:
+    get:
+      tags: [OpenAI compatible]
+      summary: List logical models available to the project API key
+      security: [{ ProjectApiKey: [] }]
+      responses:
+        '200':
+          description: Logical model list
+          content: { application/json: { schema: { $ref: '#/components/schemas/ModelList' } } }
+        '401': { $ref: '#/components/responses/OpenAiError' }
+  /v1/chat/completions:
+    post:
+      tags: [OpenAI compatible]
+      summary: Route an OpenAI-compatible completion through the logical service policy
+      security: [{ ProjectApiKey: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ChatCompletionRequest' } } }
+      responses:
+        '200':
+          description: Completion JSON or SSE when stream=true
+          headers: { X-Request-Id: { schema: { type: string } } }
+          content:
+            application/json: { schema: { type: object, additionalProperties: true } }
+            text/event-stream: { schema: { type: string } }
+        '401': { $ref: '#/components/responses/OpenAiError' }
+        '403': { $ref: '#/components/responses/OpenAiError' }
+        '429': { $ref: '#/components/responses/OpenAiError' }
+        '502': { $ref: '#/components/responses/OpenAiError' }
+        '503': { $ref: '#/components/responses/OpenAiError' }
+  /api/auth/bootstrap:
+    post:
+      tags: [Authentication]
+      summary: Create the first platform administrator
+      requestBody: { $ref: '#/components/requestBodies/Credentials' }
+      responses: { '200': { $ref: '#/components/responses/AuthSession' }, '409': { $ref: '#/components/responses/ApiError' } }
+  /api/auth/login:
+    post:
+      tags: [Authentication]
+      summary: Login and set an HttpOnly refresh cookie
+      requestBody: { $ref: '#/components/requestBodies/Credentials' }
+      responses: { '200': { $ref: '#/components/responses/AuthSession' }, '401': { $ref: '#/components/responses/ApiError' } }
+  /api/auth/refresh:
+    post:
+      tags: [Authentication]
+      summary: Rotate the refresh token
+      responses: { '200': { $ref: '#/components/responses/AuthSession' }, '401': { $ref: '#/components/responses/ApiError' } }
+  /api/auth/logout:
+    post:
+      tags: [Authentication]
+      summary: Revoke the refresh token
+      responses: { '204': { description: Logged out } }
+  /api/admin/organizations:
+    get:
+      tags: [Control plane]
+      summary: List all organizations for a platform administrator or membership-scoped organizations for another administrator
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      responses: { '200': { description: Accessible organizations } }
+    post:
+      tags: [Control plane]
+      summary: Create an organization
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties: { name: { type: string, maxLength: 120 } }
+      responses: { '200': { $ref: '#/components/responses/EntityCreated' } }
+  /api/admin/overview:
+    get:
+      tags: [Observability]
+      summary: Get platform-wide 24-hour operations overview
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      responses: { '200': { description: Requests, rates, p95 latency, tokens, cost, failovers, endpoints and incidents } }
+  /api/admin/organizations/{organizationId}/overview:
+    get:
+      tags: [Observability]
+      summary: Get organization-scoped 24-hour operations overview
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrganizationId' }]
+      responses: { '200': { description: Organization operations overview } }
+  /api/admin/organizations/{organizationId}/projects:
+    get:
+      tags: [Control plane]
+      summary: List projects in an authorized organization
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrganizationId' }]
+      responses: { '200': { description: Organization project list } }
+  /api/admin/projects:
+    post:
+      tags: [Control plane]
+      summary: Create an organization project
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [organizationId, name]
+              properties:
+                organizationId: { type: string, format: uuid }
+                name: { type: string, maxLength: 120 }
+      responses: { '200': { $ref: '#/components/responses/EntityCreated' } }
+  /api/admin/nodes:
+    post:
+      tags: [Control plane]
+      summary: Register a hardware-independent inference node
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateNode' } } }
+      responses: { '200': { $ref: '#/components/responses/EntityCreated' } }
+  /api/admin/nodes/{nodeId}/accelerators:
+    parameters: [{ $ref: '#/components/parameters/NodeId' }]
+    get:
+      tags: [Control plane]
+      summary: List optional accelerator metadata
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      responses: { '200': { description: Accelerator list } }
+    post:
+      tags: [Control plane]
+      summary: Register free-form accelerator metadata
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/RegisterAccelerator' } } }
+      responses: { '200': { $ref: '#/components/responses/EntityCreated' } }
+  /api/admin/runtime-endpoints:
+    get:
+      tags: [Control plane]
+      summary: List all endpoints as platform administrator
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      responses: { '200': { description: Runtime endpoint list } }
+    post:
+      tags: [Control plane]
+      summary: Register an LM Studio endpoint
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateRuntimeEndpoint' } } }
+      responses:
+        '200': { $ref: '#/components/responses/EntityCreated' }
+        '400': { $ref: '#/components/responses/ApiError' }
+        '409': { $ref: '#/components/responses/ApiError' }
+  /api/admin/organizations/{organizationId}/runtime-endpoints:
+    get:
+      tags: [Control plane]
+      summary: List endpoints in an authorized organization
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrganizationId' }]
+      responses: { '200': { description: Organization endpoint list } }
+  /api/admin/model-deployments:
+    post:
+      tags: [Control plane]
+      summary: Register a deployment and optional administrator-validated compatibility key
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateModelDeployment' } } }
+      responses: { '200': { $ref: '#/components/responses/EntityCreated' } }
+  /api/admin/runtime-endpoints/{endpointId}/probe:
+    post:
+      tags: [Control plane]
+      summary: Probe LM Studio and list provider model IDs
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/EndpointId' }]
+      responses: { '200': { description: Probe result } }
+  /api/admin/runtime-endpoints/{endpointId}/sync-models:
+    post:
+      tags: [Control plane]
+      summary: Discover unknown model deployments
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/EndpointId' }]
+      responses: { '200': { description: Newly discovered deployments } }
+  /api/admin/runtime-endpoints/{endpointId}/drain:
+    post:
+      tags: [Control plane]
+      summary: Stop routing new requests while in-flight work finishes
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/EndpointId' }]
+      responses: { '200': { description: Endpoint state } }
+  /api/admin/runtime-endpoints/{endpointId}/resume:
+    post:
+      tags: [Control plane]
+      summary: Probe and warm up before restoring routing
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/EndpointId' }]
+      responses: { '200': { description: Endpoint state } }
+  /api/admin/services:
+    post:
+      tags: [Control plane]
+      summary: Create a logical service with compatibility and replay policies
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateLogicalService' } } }
+      responses: { '200': { $ref: '#/components/responses/EntityCreated' } }
+  /api/admin/services/{serviceId}/targets:
+    post:
+      tags: [Control plane]
+      summary: Attach a prioritized, weighted deployment target
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/ServiceId' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateServiceTarget' } } }
+      responses: { '200': { $ref: '#/components/responses/EntityCreated' } }
+  /api/admin/projects/{projectId}/service-access:
+    post:
+      tags: [Control plane]
+      summary: Grant project access to a logical service
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      responses: { '200': { description: Access granted } }
+  /api/admin/projects/{projectId}/api-keys:
+    get:
+      tags: [Control plane]
+      summary: List API-key metadata without raw secrets
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      responses: { '200': { description: API-key metadata } }
+    post:
+      tags: [Control plane]
+      summary: Issue an API key; the raw secret is returned once
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                expiresAt: { type: [string, 'null'], format: date-time }
+      responses: { '200': { description: One-time API-key response } }
+  /api/admin/projects/{projectId}/quota:
+    put:
+      tags: [Control plane]
+      summary: Set RPM and monthly token quota
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      responses: { '200': { description: Applied quota } }
+  /api/admin/projects/{projectId}/content-policy:
+    put:
+      tags: [Control plane]
+      summary: Set request-content retention policy
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      responses: { '200': { description: Applied content policy } }
+  /api/admin/organizations/{organizationId}/notification-channels:
+    get:
+      tags: [Control plane]
+      summary: List organization notification channels without returning encrypted credentials
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrganizationId' }]
+      responses: { '200': { description: Notification channel states } }
+    post:
+      tags: [Control plane]
+      summary: Add a Discord or Telegram incident channel
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrganizationId' }]
+      responses: { '200': { $ref: '#/components/responses/EntityCreated' } }
+  /api/admin/organizations/{organizationId}/notification-channels/{channelId}:
+    patch:
+      tags: [Control plane]
+      summary: Enable or disable an organization notification channel
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrganizationId' }
+        - { name: channelId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties: { enabled: { type: boolean } }
+      responses:
+        '200': { description: Updated notification channel state }
+        '404': { $ref: '#/components/responses/ApiError' }
+  /api/admin/organizations/{organizationId}/incidents:
+    get:
+      tags: [Control plane]
+      summary: List organization incidents and notification delivery outcomes
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrganizationId' }
+        - { name: status, in: query, schema: { type: string, enum: [OPEN, RECOVERED] } }
+      responses:
+        '200':
+          description: Incidents with endpoint identity and per-channel delivery status
+  /api/admin/organizations/{organizationId}/requests:
+    get:
+      tags: [Control plane]
+      summary: Search requests and per-deployment attempts
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrganizationId' }
+        - { name: projectId, in: query, schema: { type: string, format: uuid } }
+        - { name: serviceId, in: query, schema: { type: string, format: uuid } }
+        - { name: deploymentId, in: query, schema: { type: string, format: uuid } }
+        - { name: status, in: query, schema: { type: string, enum: [IN_PROGRESS, SUCCEEDED, FAILED] } }
+        - { name: failoverOnly, in: query, schema: { type: boolean, default: false } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+      responses: { '200': { description: Filtered request page } }
+  /api/me/usage:
+    get:
+      tags: [Usage]
+      summary: Get project usage totals for a date range
+      security: [{ ProjectApiKey: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+      responses: { '200': { description: Token, request, error, and cost totals } }
+  /api/me/requests:
+    get:
+      tags: [Usage]
+      summary: Get the latest project requests
+      security: [{ ProjectApiKey: [] }]
+      responses:
+        '200':
+          description: Latest 50 project requests with logical service, actual deployment, stream mode, usage, latency, failover and error fields
+components:
+  securitySchemes:
+    ProjectApiKey: { type: http, scheme: bearer, bearerFormat: sk_llmg_... }
+    AdminBearer: { type: http, scheme: bearer, bearerFormat: signed access token }
+    BreakGlassAdmin: { type: apiKey, in: header, name: X-Admin-Token }
+  parameters:
+    OrganizationId: { name: organizationId, in: path, required: true, schema: { type: string, format: uuid } }
+    ProjectId: { name: projectId, in: path, required: true, schema: { type: string, format: uuid } }
+    NodeId: { name: nodeId, in: path, required: true, schema: { type: string, format: uuid } }
+    EndpointId: { name: endpointId, in: path, required: true, schema: { type: string, format: uuid } }
+    ServiceId: { name: serviceId, in: path, required: true, schema: { type: string, format: uuid } }
+  requestBodies:
+    Credentials:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [email, password]
+            properties:
+              email: { type: string, format: email, maxLength: 320 }
+              password: { type: string, minLength: 12, maxLength: 128 }
+  responses:
+    AuthSession:
+      description: Access token plus a Secure HttpOnly refresh cookie
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              accessToken: { type: string }
+              user: { type: object, additionalProperties: true }
+    EntityCreated:
+      description: Created entity
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [id]
+            properties: { id: { type: string, format: uuid } }
+            additionalProperties: true
+    ApiError:
+      description: Control-plane error
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+    OpenAiError:
+      description: OpenAI-compatible error
+      content: { application/json: { schema: { $ref: '#/components/schemas/OpenAiError' } } }
+  schemas:
+    ApiError:
+      type: object
+      required: [code, message]
+      properties: { code: { type: string }, message: { type: string } }
+    OpenAiError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [message, type, code]
+          properties:
+            message: { type: string }
+            type: { type: string }
+            code: { type: string }
+            request_id: { type: [string, 'null'] }
+    ModelList:
+      type: object
+      required: [object, data]
+      properties:
+        object: { const: list }
+        data:
+          type: array
+          items:
+            type: object
+            required: [id, object]
+            properties:
+              id: { type: string, description: Logical service key }
+              object: { const: model }
+              owned_by: { type: string }
+    ChatCompletionRequest:
+      type: object
+      required: [model, messages]
+      properties:
+        model: { type: string, description: Logical service key, examples: [text-pro] }
+        messages:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [role, content]
+            properties:
+              role: { type: string, enum: [system, user, assistant, tool] }
+              content: {}
+            additionalProperties: true
+        stream: { type: boolean, default: false }
+        max_tokens: { type: integer, minimum: 1 }
+        temperature: { type: number }
+        response_format: { type: object, additionalProperties: true }
+        tools: { type: array, items: { type: object, additionalProperties: true } }
+      additionalProperties: true
+    CreateNode:
+      type: object
+      required: [organizationId, name]
+      properties:
+        organizationId: { type: string, format: uuid }
+        name: { type: string, maxLength: 120 }
+        description: { type: [string, 'null'] }
+        connectionMode: { type: string, enum: [DIRECT, AGENT], default: DIRECT }
+        labelsJson: { type: [string, 'null'] }
+    RegisterAccelerator:
+      type: object
+      required: [deviceIndex]
+      properties:
+        vendor: { type: [string, 'null'] }
+        productName: { type: [string, 'null'], description: Free-form metadata, never a routing enum }
+        deviceIndex: { type: integer, minimum: 0 }
+        deviceUuid: { type: [string, 'null'] }
+        memoryTotalMb: { type: [integer, 'null'], minimum: 1 }
+        driverVersion: { type: [string, 'null'] }
+        metadataJson: { type: [string, 'null'] }
+    CreateRuntimeEndpoint:
+      type: object
+      required: [nodeId, runtimeType, baseUrl]
+      properties:
+        nodeId: { type: string, format: uuid }
+        runtimeType: { const: LM_STUDIO }
+        baseUrl: { type: string, format: uri, examples: ['http://gpu-node-01:1234'] }
+        apiToken: { type: [string, 'null'], writeOnly: true }
+    CreateModelDeployment:
+      type: object
+      required: [runtimeEndpointId, providerModelId, displayName]
+      properties:
+        runtimeEndpointId: { type: string, format: uuid }
+        providerModelId: { type: string, maxLength: 500 }
+        compatibilityKey:
+          type: [string, 'null']
+          maxLength: 500
+          description: Defaults to providerModelId; identical values declare STRICT failover equivalence.
+        displayName: { type: string, maxLength: 200 }
+        modelFamily: { type: [string, 'null'] }
+        quantization: { type: [string, 'null'] }
+        contextLength: { type: [integer, 'null'], minimum: 1 }
+        maxConcurrency: { type: [integer, 'null'], minimum: 1, default: 1 }
+        capabilitiesJson: { type: string, default: '[]' }
+    CreateLogicalService:
+      type: object
+      required: [organizationId, serviceKey, displayName]
+      properties:
+        organizationId: { type: string, format: uuid }
+        serviceKey: { type: string, pattern: '^[a-z0-9][a-z0-9-]{0,119}$' }
+        displayName: { type: string }
+        failoverPolicy:
+          type: string
+          enum: [STRICT, COMPATIBLE, DEGRADED]
+          default: STRICT
+          description: Controls which attached deployment models may replace the primary.
+        retryPolicy:
+          type: string
+          enum: [SAFE, AGGRESSIVE]
+          default: SAFE
+          description: Controls whether an ambiguous or acknowledged upstream request may be replayed.
+        allowDegraded: { type: boolean, default: false }
+        requiredCapabilitiesJson: { type: string, default: '[]' }
+        inputPricePerMillion: { type: number, minimum: 0 }
+        outputPricePerMillion: { type: number, minimum: 0 }
+    CreateServiceTarget:
+      type: object
+      required: [deploymentId, priority]
+      properties:
+        deploymentId: { type: string, format: uuid }
+        priority: { type: integer, minimum: 1 }
+        weight: { type: integer, minimum: 1, default: 100 }
+        degraded: { type: boolean, default: false }
+        maxConcurrencyOverride: { type: [integer, 'null'], minimum: 1 }

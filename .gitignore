@@ -1,0 +1,12 @@
+.gradle/
+build/
+node_modules/
+dist/
+backups/
+secrets/
+.tls-validation/
+.env
+*.log
+*.bak*
+.idea/
+*.iml

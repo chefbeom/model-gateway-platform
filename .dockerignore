@@ -1,0 +1,11 @@
+.git
+.gradle
+build
+frontend/node_modules
+frontend/dist
+backups
+secrets
+.tls-validation
+*.bak*
+*.log
+.env
