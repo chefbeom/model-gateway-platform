@@ -5,6 +5,7 @@ import com.aiconnect.llmgateway.identity.CurrentActor;
 import com.aiconnect.llmgateway.identity.OrganizationMemberRepository;
 import com.aiconnect.llmgateway.repository.OrganizationRepository;
 import com.aiconnect.llmgateway.repository.ProjectRepository;
+import com.aiconnect.llmgateway.team.TeamAccessService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -20,12 +21,14 @@ public class OrganizationQueryController {
     private final OrganizationRepository organizations;
     private final ProjectRepository projects;
     private final OrganizationMemberRepository memberships;
+    private final TeamAccessService access;
 
     public OrganizationQueryController(OrganizationRepository organizations, ProjectRepository projects,
-                                       OrganizationMemberRepository memberships) {
+                                       OrganizationMemberRepository memberships, TeamAccessService access) {
         this.organizations = organizations;
         this.projects = projects;
         this.memberships = memberships;
+        this.access = access;
     }
 
     @GetMapping("/organizations")
@@ -46,6 +49,10 @@ public class OrganizationQueryController {
 
     @GetMapping("/organizations/{organizationId}/projects")
     public List<AdminController.ProjectView> projects(@PathVariable UUID organizationId) {
-        return projects.findByOrganizationId(organizationId).stream().map(AdminController.ProjectView::from).toList();
+        AuthPrincipal actor = CurrentActor.principal().orElse(null);
+        return projects.findByOrganizationId(organizationId).stream()
+                .filter(project -> access.canViewProject(actor, project.getId()))
+                .map(AdminController.ProjectView::from)
+                .toList();
     }
 }

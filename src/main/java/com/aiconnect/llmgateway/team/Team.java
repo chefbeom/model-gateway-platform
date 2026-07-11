@@ -1,4 +1,4 @@
-package com.aiconnect.llmgateway.domain;
+package com.aiconnect.llmgateway.team;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -12,8 +12,8 @@ import java.time.Instant;
 import java.util.UUID;
 
 @Entity
-@Table(name = "project")
-public class Project {
+@Table(name = "team")
+public class Team {
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     @Column(columnDefinition = "char(36)")
@@ -21,9 +21,6 @@ public class Project {
 
     @Column(nullable = false, columnDefinition = "char(36)")
     private UUID organizationId;
-
-    @Column(columnDefinition = "char(36)")
-    private UUID teamId;
 
     @Column(nullable = false, length = 120)
     private String name;
@@ -37,15 +34,10 @@ public class Project {
     @Column(nullable = false)
     private Instant updatedAt = Instant.now();
 
-    protected Project() { }
+    protected Team() { }
 
-    public Project(UUID organizationId, String name) {
-        this(organizationId, null, name);
-    }
-
-    public Project(UUID organizationId, UUID teamId, String name) {
+    public Team(UUID organizationId, String name) {
         this.organizationId = organizationId;
-        this.teamId = teamId;
         this.name = name;
     }
 
@@ -56,7 +48,6 @@ public class Project {
 
     public UUID getId() { return id; }
     public UUID getOrganizationId() { return organizationId; }
-    public UUID getTeamId() { return teamId; }
     public String getName() { return name; }
     public String getStatus() { return status; }
 }
