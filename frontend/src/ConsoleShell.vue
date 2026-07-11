@@ -206,7 +206,7 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
         <ProjectsPage v-else-if="isAdminConsole && page === 'projects'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" @organizations-changed="loadOrganizations" @organization-selected="loadOrganizations($event)" />
         <ObservabilityPage v-else-if="isAdminConsole && page === 'observability'" :organization-id="organizationId" :auth="auth" />
         <NotificationsPage v-else-if="isAdminConsole && page === 'notifications'" :organization-id="organizationId" :auth="auth" />
-        <UsagePage v-else-if="page === 'usage'" />
+        <UsagePage v-else-if="page === 'usage'" :organization-id="organizationId" :auth="auth" />
         <DevDocsPage v-else-if="page === 'docs'" @navigate="navigate" />
         <DeveloperPortalPage v-else :organization-id="organizationId" :auth="auth" />
       </main>

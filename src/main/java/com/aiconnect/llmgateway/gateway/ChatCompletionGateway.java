@@ -56,7 +56,8 @@ public class ChatCompletionGateway {
         }
 
         String requestId = UUID.randomUUID().toString();
-        LlmRequest audit = requests.save(new LlmRequest(requestId, credentials.project().getId(), credentials.apiKey().getId(), service, false));
+        LlmRequest audit = requests.save(new LlmRequest(requestId, credentials.project().getId(), credentials.apiKey().getId(),
+                credentials.apiKey().getIssuedByUserId(), service, false));
         List<ResolvedTarget> candidates = routing.candidates(service, RequestCapabilityDetector.detect(request));
         if (candidates.isEmpty()) {
             audit.fail("MODEL_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), elapsed(audit.getStartedAt()), 0); requests.save(audit);

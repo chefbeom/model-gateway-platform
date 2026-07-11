@@ -62,7 +62,8 @@ public class StreamingChatCompletionGateway {
             throw new ApiException(HttpStatus.FORBIDDEN, "MODEL_NOT_ALLOWED", "This API key is not allowed to use the requested model.");
         }
         String requestId = UUID.randomUUID().toString();
-        LlmRequest audit = requests.save(new LlmRequest(requestId, credentials.project().getId(), credentials.apiKey().getId(), service, true));
+        LlmRequest audit = requests.save(new LlmRequest(requestId, credentials.project().getId(), credentials.apiKey().getId(),
+                credentials.apiKey().getIssuedByUserId(), service, true));
         int failures = 0;
         for (ResolvedTarget candidate : routing.candidates(service, RequestCapabilityDetector.detect(request))) {
             if (!routing.acquire(candidate)) continue;

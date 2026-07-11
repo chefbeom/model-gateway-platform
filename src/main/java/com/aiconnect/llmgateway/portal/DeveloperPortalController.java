@@ -1,6 +1,7 @@
 package com.aiconnect.llmgateway.portal;
 
 import com.aiconnect.llmgateway.domain.ApiKey;
+import com.aiconnect.llmgateway.domain.ApiKeyStatus;
 import com.aiconnect.llmgateway.domain.LlmService;
 import com.aiconnect.llmgateway.domain.Project;
 import com.aiconnect.llmgateway.identity.AuthPrincipal;
@@ -18,22 +19,22 @@ import com.aiconnect.llmgateway.web.ApiException;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
-/**
- * The deliberately small, role-safe API surface used by the developer portal.
- * Administrative control-plane endpoints remain under /api/admin.
- */
+/** Role-safe API surface used by the developer portal. */
 @RestController
 @RequestMapping("/api/portal")
 public class DeveloperPortalController {
@@ -44,10 +45,14 @@ public class DeveloperPortalController {
     private final ApiKeyRepository apiKeys;
     private final ApiKeyService apiKeyService;
     private final TeamAccessService access;
+    private final String internalBaseUrl;
+    private final String externalBaseUrl;
 
     public DeveloperPortalController(OrganizationMemberRepository memberships, ProjectRepository projects,
                                     ProjectServiceAccessRepository serviceAccess, LlmServiceRepository services,
-                                    ApiKeyRepository apiKeys, ApiKeyService apiKeyService, TeamAccessService access) {
+                                    ApiKeyRepository apiKeys, ApiKeyService apiKeyService, TeamAccessService access,
+                                    @Value("${gateway.internal-base-url:}") String internalBaseUrl,
+                                    @Value("${gateway.external-base-url:}") String externalBaseUrl) {
         this.memberships = memberships;
         this.projects = projects;
         this.serviceAccess = serviceAccess;
@@ -55,6 +60,8 @@ public class DeveloperPortalController {
         this.apiKeys = apiKeys;
         this.apiKeyService = apiKeyService;
         this.access = access;
+        this.internalBaseUrl = internalBaseUrl;
+        this.externalBaseUrl = externalBaseUrl;
     }
 
     @GetMapping("/session")
@@ -66,13 +73,22 @@ public class DeveloperPortalController {
         return new SessionView(actor.platformAdmin(), memberOf);
     }
 
+    @GetMapping("/connection")
+    public ConnectionView connection() {
+        actor();
+        return new ConnectionView(List.of(
+                endpoint("INTERNAL", "Internal network / VPN", internalBaseUrl),
+                endpoint("EXTERNAL", "External HTTPS", externalBaseUrl)
+        ).stream().filter(item -> item.url() != null).toList());
+    }
+
     @GetMapping("/organizations/{organizationId}/projects")
     public List<ProjectView> projectList(@PathVariable UUID organizationId) {
         AuthPrincipal actor = actor();
         requireOrganizationAccess(actor, organizationId);
         return projects.findByOrganizationId(organizationId).stream()
                 .filter(project -> access.canViewProject(actor, project.getId()))
-                .map(project -> ProjectView.from(project, access.canManageProject(actor, project.getId()), modelsFor(project)))
+                .map(project -> ProjectView.from(project, true, modelsFor(project)))
                 .toList();
     }
 
@@ -80,17 +96,54 @@ public class DeveloperPortalController {
     public List<ApiKeyView> apiKeys(@PathVariable UUID projectId) {
         AuthPrincipal actor = actor();
         requireProjectView(actor, projectId);
-        return apiKeys.findByProjectId(projectId).stream().map(ApiKeyView::from).toList();
+        return apiKeys.findByProjectId(projectId).stream()
+                .map(key -> ApiKeyView.from(key, canManageKey(actor, key)))
+                .toList();
     }
 
     @PostMapping("/projects/{projectId}/api-keys")
     public IssuedApiKey issueApiKey(@PathVariable UUID projectId, @Valid @RequestBody CreateApiKey request) {
         AuthPrincipal actor = actor();
-        if (!access.canManageProject(actor, projectId)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "PROJECT_MANAGE_REQUIRED",
-                    "Only a project owner, team administrator, or organization administrator can issue API keys.");
+        requireProjectView(actor, projectId);
+        return apiKeyService.issue(projectId, request.name(), request.expiresAt(), actor.userId());
+    }
+
+    @DeleteMapping("/projects/{projectId}/api-keys/{apiKeyId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void revokeApiKey(@PathVariable UUID projectId, @PathVariable UUID apiKeyId) {
+        ApiKey key = managedKey(actor(), projectId, apiKeyId);
+        if (key.getStatus() != ApiKeyStatus.ACTIVE) return;
+        apiKeyService.revoke(apiKeyId);
+    }
+
+    @DeleteMapping("/projects/{projectId}/api-keys/{apiKeyId}/record")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteApiKeyRecord(@PathVariable UUID projectId, @PathVariable UUID apiKeyId) {
+        managedKey(actor(), projectId, apiKeyId);
+        apiKeyService.deleteRevoked(apiKeyId);
+    }
+
+    private ApiKey managedKey(AuthPrincipal actor, UUID projectId, UUID apiKeyId) {
+        requireProjectView(actor, projectId);
+        ApiKey key = apiKeys.findById(apiKeyId)
+                .filter(item -> item.getProjectId().equals(projectId))
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "API_KEY_NOT_FOUND", "The API key does not exist in this project."));
+        if (!canManageKey(actor, key)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "API_KEY_MANAGEMENT_DENIED",
+                    "Only the key issuer, project owner, team administrator, or organization administrator can manage this API key.");
         }
-        return apiKeyService.issue(projectId, request.name(), request.expiresAt());
+        return key;
+    }
+
+    private boolean canManageKey(AuthPrincipal actor, ApiKey key) {
+        return actor.userId().equals(key.getIssuedByUserId()) || access.canManageProject(actor, key.getProjectId());
+    }
+
+    private ConnectionEndpointView endpoint(String scope, String label, String value) {
+        if (value == null || value.isBlank()) return new ConnectionEndpointView(scope, label, null);
+        String normalized = value.trim().replaceAll("/+$", "");
+        if (!normalized.endsWith("/v1")) normalized += "/v1";
+        return new ConnectionEndpointView(scope, label, normalized);
     }
 
     private List<ServiceView> modelsFor(Project project) {
@@ -116,26 +169,29 @@ public class DeveloperPortalController {
     private void requireProjectView(AuthPrincipal actor, UUID projectId) {
         if (!access.canViewProject(actor, projectId)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "PROJECT_ACCESS_DENIED",
-                    "The current role cannot view this project.");
+                    "The current role cannot access this project.");
         }
     }
 
     public record SessionView(boolean platformAdmin, List<MembershipView> memberships) { }
+    public record ConnectionView(List<ConnectionEndpointView> endpoints) { }
+    public record ConnectionEndpointView(String scope, String label, String url) { }
     public record MembershipView(UUID organizationId, OrganizationRole role) { }
     public record CreateApiKey(@NotBlank @Size(max = 120) String name, Instant expiresAt) { }
-    public record ProjectView(UUID id, String name, String status, boolean canManage, List<ServiceView> services) {
-        static ProjectView from(Project project, boolean canManage, List<ServiceView> services) {
-            return new ProjectView(project.getId(), project.getName(), project.getStatus(), canManage, services);
+    public record ProjectView(UUID id, String name, String status, boolean canIssueApiKeys, List<ServiceView> services) {
+        static ProjectView from(Project project, boolean canIssueApiKeys, List<ServiceView> services) {
+            return new ProjectView(project.getId(), project.getName(), project.getStatus(), canIssueApiKeys, services);
         }
     }
     public record ServiceView(String serviceKey, String displayName) {
         static ServiceView from(LlmService service) { return new ServiceView(service.getServiceKey(), service.getDisplayName()); }
     }
     public record ApiKeyView(UUID id, String name, String keyPrefix, String status, Instant expiresAt,
-                             Instant lastUsedAt, Instant createdAt) {
-        static ApiKeyView from(ApiKey key) {
+                             Instant lastUsedAt, Instant createdAt, boolean canRevoke, boolean canDelete) {
+        static ApiKeyView from(ApiKey key, boolean canManage) {
             return new ApiKeyView(key.getId(), key.getName(), key.getKeyPrefix(), key.getStatus().name(),
-                    key.getExpiresAt(), key.getLastUsedAt(), key.getCreatedAt());
+                    key.getExpiresAt(), key.getLastUsedAt(), key.getCreatedAt(), canManage,
+                    canManage && key.getStatus() == ApiKeyStatus.REVOKED);
         }
     }
 }
