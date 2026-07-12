@@ -8,6 +8,7 @@ export type DocsDestination =
   | 'observability'
   | 'audit'
   | 'notifications'
+  | 'external'
 
 export type DocAudience = '공통' | '사용자' | '관리자'
 export type CalloutTone = 'info' | 'success' | 'warning' | 'danger'
