@@ -1,369 +1,363 @@
-# AIConnect — 하드웨어 독립형 LLM 서비스 플랫폼
+# AIConnect
 
-AIConnect는 여러 대의 개인·회사 소유 LLM 서버를 하나의 **OpenAI 호환 API**로 제공하는 API Gateway이자 관리·모니터링 플랫폼입니다.
+<div align="center">
 
-사용자는 GPU 서버나 LM Studio 주소를 직접 알 필요 없이 논리 모델명과 프로젝트 API 키만 사용합니다. AIConnect는 인증, 권한, 요청 제한, 배포 선택, 장애 전환, 사용량 및 예상 비용 기록을 담당합니다.
+### 여러 GPU와 외부 AI를 하나의 API로 운영하는 LLM Control Plane
+
+**OpenAI 호환 API Gateway · 논리 모델 라우팅 · 장애 전환 · 사용량 관측 · 멀티테넌시**
+
+[![Java](https://img.shields.io/badge/Java-17-ED8B00?logo=openjdk&logoColor=white)](https://openjdk.org/)
+[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5-6DB33F?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
+[![Vue](https://img.shields.io/badge/Vue-3.5-42B883?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
+[![MariaDB](https://img.shields.io/badge/MariaDB-11.4-003545?logo=mariadb&logoColor=white)](https://mariadb.org/)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![OpenAI Compatible](https://img.shields.io/badge/API-OpenAI%20Compatible-111111)](#openai-호환-api)
+
+</div>
+
+![AIConnect 개발자 포털](./docs/assets/readme/developer-portal.png)
+
+## 프로젝트 소개
+
+AIConnect는 여러 서버에서 실행되는 **LM Studio 기반 로컬 LLM**과 선택적으로 사용하는 **외부 AI Provider**를 하나의 OpenAI 호환 API로 제공하는 관리 플랫폼입니다.
+
+사용자는 GPU 서버 주소나 실제 모델 파일을 알 필요 없이 `text-pro`와 같은 논리 모델명과 프로젝트 API 키만 사용합니다. 관리자는 실제 모델 배포, 우선순위, 장애 전환, 요청량, 토큰, 비용과 장애 이력을 중앙에서 관리합니다.
 
 ```text
-API 사용자 ── HTTPS ──> AIConnect Gateway ── 사설망 ──> LM Studio / GPU 서버
-                              │
-                              ├─ MariaDB
-                              ├─ Prometheus
-                              └─ Grafana
+사용자 애플리케이션
+    ↓ OpenAI 호환 API
+AIConnect Gateway
+    ↓ 논리 모델 해석 · 권한 · Quota · 라우팅
+LM Studio GPU 서버 또는 승인된 외부 AI Provider
 ```
 
-GPU 제품명은 라우팅 기준으로 하드코딩하지 않습니다. RTX, H100, AMD GPU, Apple Silicon 또는 아직 출시되지 않은 장비도 코드와 DB 스키마 변경 없이 자유 메타데이터로 등록할 수 있습니다.
+### 해결하려는 문제
 
-## 주요 기능
+| 기존 운영의 문제 | AIConnect의 해결 방식 |
+|---|---|
+| GPU 서버 주소와 모델명이 애플리케이션에 직접 노출됨 | 사용자에게 논리 모델과 단일 Base URL만 제공 |
+| 서버 장애 시 클라이언트 설정을 직접 변경해야 함 | 우선순위와 상태를 기준으로 다음 배포로 자동 전환 |
+| 사용자·팀별 사용량을 알기 어려움 | 프로젝트, API 키, 서비스, 배포 단위로 사용량 집계 |
+| 각 서버의 모델을 개별적으로 관리해야 함 | LM Studio Endpoint와 모델을 중앙에서 발견·동기화 |
+| 로컬 GPU가 모두 중단되면 서비스가 멈춤 | 관리자 승인 기반 외부 AI 사용과 선택적 자동 전환 |
+| 특정 GPU 종류에 종속된 관리 로직 | GPU가 아닌 Endpoint와 Deployment 상태로 라우팅 |
 
-### API Gateway
+## 핵심 설계
 
-- OpenAI 호환 `GET /v1/models`
-- OpenAI 호환 `POST /v1/chat/completions`
+```mermaid
+flowchart LR
+    Client["사용자 애플리케이션<br/>OpenAI SDK"] -->|"HTTPS + Project API Key"| Proxy["Nginx"]
+    Proxy --> Gateway["Spring Boot API Gateway"]
+    Gateway --> Auth["인증 · 프로젝트 권한 · Quota"]
+    Gateway --> Router["논리 모델 라우터 · Failover"]
+    Gateway --> Usage["사용량 · 비용 · 감사 로그"]
+    Router -->|"Tailscale 사설망"| LMS1["LM Studio Node A"]
+    Router -->|"Tailscale 사설망"| LMS2["LM Studio Node B"]
+    Router -->|"승인 또는 선택적 자동 전환"| Cloud["External AI Provider"]
+    Auth --> DB[("MariaDB")]
+    Usage --> DB
+    Gateway --> Metrics["Prometheus · Grafana"]
+```
+
+### 물리 인프라와 API 계약의 분리
+
+```mermaid
+flowchart TB
+    Key["Project API Key"] --> Service["Logical Service<br/>text-pro"]
+    Service --> T1["Priority 1<br/>LM Studio Deployment A"]
+    Service --> T2["Priority 2<br/>LM Studio Deployment B"]
+    Service --> T3["Priority 100<br/>External Provider Model"]
+```
+
+API 키는 특정 GPU나 서버가 아니라 프로젝트에 귀속됩니다. 관리자가 Target을 교체해도 사용자의 Base URL, API 키와 `model` 값은 바뀌지 않습니다.
+
+## 주요 화면
+
+### 개발자 포털
+
+개발자는 자신이 참여한 프로젝트, 사용 가능한 논리 모델과 API 키를 한 화면에서 확인합니다. API 키는 마스킹해 표시하며 인프라와 라우팅 설정은 관리자 화면으로 분리합니다.
+
+### 논리 서비스와 라우팅
+
+사용자에게 공개할 논리 모델과 실제 Deployment의 우선순위를 분리합니다. Target별 우선순위, 가중치, 활성 상태와 동시성 제한을 설정할 수 있습니다.
+
+![서비스와 라우팅](./docs/assets/readme/routing.png)
+
+### 사용량과 관측성
+
+관리자는 조직 전체를, 프로젝트 소유자는 프로젝트 전체를, 개발자는 자신이 발급한 API 키 범위를 조회합니다. 요청, 토큰, 비용, 처리 배포와 Failover를 API 키 입력 없이 확인할 수 있습니다.
+
+![전체 사용량](./docs/assets/readme/usage.png)
+
+### 장애 알림
+
+Endpoint 장애와 복구 이벤트를 Discord 또는 Telegram으로 전달하고 채널 상태와 전송 결과를 관리합니다.
+
+![알림 채널](./docs/assets/readme/alerts.png)
+
+### 서비스 정책
+
+서비스 키, Failover·Retry 정책, 필수 Capability, 토큰 단가와 Degraded Target 허용 여부를 관리합니다.
+
+<p align="center">
+  <img src="./docs/assets/readme/service-policy.png" alt="서비스 정책 편집" width="620" />
+</p>
+
+## 핵심 기능
+
+### OpenAI 호환 API
+
+- `GET /v1/models`
+- `POST /v1/chat/completions`
 - 일반 JSON 응답과 SSE 스트리밍
-- 외부 논리 모델명을 내부 LM Studio 모델 ID로 변환
-- 사용자 응답에서 물리 서버·모델 식별자 비공개
-- 입력·출력·Reasoning 토큰과 응답시간 기록
+- 논리 모델명을 실제 Provider 모델 ID로 변환
+- 입력·출력·Reasoning 토큰, 지연시간, 첫 토큰 시간과 처리 배포 기록
 
-### 조직과 접근 제어
+### Control Plane
 
-- 조직, 프로젝트, API 키, 논리 서비스 단위의 멀티테넌시
-- Platform Administrator, Organization Administrator, Developer 역할
-- 짧은 만료 Access Token과 HttpOnly Refresh Cookie
-- API 키 원문은 발급 직후 한 번만 표시
-- API 키는 HMAC 해시만 저장하며 폐기·만료 지원
+- 조직, 팀·부서, 사용자와 역할 관리
+- 프로젝트 생성·수정·중지·재개·삭제
+- API 키 발급·폐기·폐기 기록 삭제
+- 프로젝트별 논리 서비스 권한
+- 관리자, 프로젝트 소유자, 개발자 권한 분리
+- 관리자 작업 Audit Log
+
+### LM Studio 운영
+
+- Endpoint 연결 검사와 모델 자동 발견
+- 모델 로드·언로드·다운로드 요청
+- 컨텍스트 길이, GPU Offload, CPU Thread Pool, Flash Attention, KV Cache 설정
+- 장치 정보가 없어도 Endpoint와 모델 운영 가능
+- 특정 GPU 이름을 라우팅 조건으로 사용하지 않는 하드웨어 독립 구조
 
 ### 라우팅과 장애 전환
 
-- 논리 서비스와 실제 Model Deployment 분리
-- 우선순위와 가중치 기반 Target 선택
+- 우선순위와 가중치 기반 Deployment 선택
+- 최대 동시 요청과 활성 요청을 고려한 라우팅
 - `STRICT`, `COMPATIBLE`, `DEGRADED` Failover 정책
-- `SAFE`, `AGGRESSIVE` 재시도 정책
-- Deployment별 최대 동시 요청 제한
-- Circuit 상태, Endpoint Health, DRAINING 지원
-- 복구 서버 Probe와 워밍업 후 자동 재투입
-- 스트리밍 응답 시작 후에는 중복 생성을 방지하기 위해 재시도하지 않음
+- `SAFE`, `AGGRESSIVE` Retry 정책
+- Endpoint Health Check, Circuit 상태, DRAINING과 복구 재투입
+- 스트리밍 첫 데이터 전 실패만 안전하게 재시도
 
-### LM Studio와 하드웨어 관리
+### 외부 AI Provider
 
-- LM Studio 네이티브 `/api/v1/models` 자동 발견
-- `/v1/models` 호환 API Fallback
-- 모델 로드 상태, 양자화, 컨텍스트 길이, 병렬 처리 및 Capability 동기화
-- 관리자 검증 Capability Override
-- GPU 제조사·제품명·VRAM·드라이버·추가 JSON 메타데이터 관리
-- GPU 정보가 없어도 Endpoint와 Gateway 기능 정상 작동
+- 조직별 Provider API 키 암호화 저장
+- 사용자 사용 요청과 관리자 승인 흐름
+- 관리자가 필요할 때 선택하는 수동 외부 모델
+- 프로젝트별 `autoFailoverEnabled`가 켜진 경우에만 자동 전환
+- 프로젝트별 월 비용 한도와 만료일
+- Provider 종류와 `MANUAL_EXTERNAL`, `AUTO_FAILOVER` 라우팅 사유 기록
 
-### 사용량과 운영
+### 사용량과 운영 관측
 
-- 프로젝트별 RPM 제한과 월간 토큰 한도
-- 입력·출력 토큰 단가 스냅샷과 예상 비용
-- 요청별 실제 Deployment와 Failover Attempt 기록
-- Discord Webhook과 Telegram Bot 장애·복구 알림
-- 알림 채널 자격증명 암호화 및 전달 결과 저장
-- 기본 `METADATA_ONLY` 요청 보관 정책
-- 선택적 `FULL_ENCRYPTED` 프롬프트·응답 보관
-- 관리자 변경 Audit Log
+- 프로젝트, API 키, 논리 서비스, 실제 배포, Provider별 집계
+- 성공률, 입력·출력 토큰, 예상 비용, Failover 횟수
+- 요청 Attempt와 오류 코드 추적
+- Discord Webhook·Telegram 장애 및 복구 알림
+- Prometheus 메트릭과 Grafana 대시보드
+- 기본 `METADATA_ONLY`, 선택적 `FULL_ENCRYPTED` 요청 보관 정책
 
-### 웹 관리 콘솔
+## 요청 처리 흐름
 
-- 로그인 우선 진입과 세션 자동 복구
-- 기능별 페이지와 왼쪽 내비게이션
-- `Ctrl/⌘ + K` 기능 검색
-- 연녹색 기반 라이트·다크 모드
-- 대시보드, 인프라, LLM 서비스, 프로젝트/API 키, 관측성, 사용량, 알림 화면
-- 노드 Accelerator 인벤토리와 프로젝트 한도·보관 정책 관리
-- 데스크톱·태블릿·모바일 반응형 UI
+```mermaid
+sequenceDiagram
+    participant App as 사용자 애플리케이션
+    participant GW as AIConnect Gateway
+    participant RT as Routing Service
+    participant P as Primary LM Studio
+    participant S as Secondary Target
+    participant DB as MariaDB
+    App->>GW: API Key + logical model
+    GW->>GW: 인증 · 권한 · Quota 검사
+    GW->>RT: 사용 가능한 Target 요청
+    RT->>P: Primary 호출
+    alt 첫 응답 전 실패
+        P--xRT: 연결 실패 또는 Timeout
+        RT->>S: Secondary 호출
+        S-->>RT: 정상 응답
+    else Primary 성공
+        P-->>RT: 정상 응답
+    end
+    RT-->>GW: OpenAI 호환 응답
+    GW->>DB: 토큰 · 비용 · Attempt · Failover 저장
+    GW-->>App: 논리 모델명으로 응답
+```
 
-## 기술 구성
+## OpenAI 호환 API
 
-| 영역 | 기술 |
-|---|---|
-| Backend | Java 17, Spring Boot 3, Spring MVC/WebClient |
-| Database | MariaDB 11.4, Flyway |
-| Frontend | Vue 3, TypeScript, Vite |
-| Runtime | LM Studio |
-| Private Network | Tailscale 또는 라우팅된 사설망 |
-| Proxy | Nginx |
-| Shared State | Standalone JVM 또는 HA Redis |
-| Monitoring | Micrometer, Prometheus, Grafana |
-| Deployment | Docker Compose, HA Compose, Kubernetes Helm |
+기존 OpenAI SDK에서 `base_url`, `api_key`, `model`만 AIConnect 값으로 변경합니다.
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://gateway.example.com/v1",
+    api_key="sk_llmg_...",
+)
+
+response = client.chat.completions.create(
+    model="text-pro",
+    messages=[
+        {"role": "user", "content": "이 문서를 세 문장으로 요약해줘."}
+    ],
+)
+
+print(response.choices[0].message.content)
+```
+
+스트리밍도 같은 Endpoint를 사용합니다.
+
+```python
+stream = client.chat.completions.create(
+    model="text-pro",
+    messages=[{"role": "user", "content": "점진적으로 답변해줘."}],
+    stream=True,
+)
+
+for chunk in stream:
+    print(chunk.choices[0].delta.content or "", end="")
+```
 
 ## 배포 프로필
 
-AIConnect는 하나의 코드, Docker 이미지와 DB 스키마를 세 가지 방식으로 설치합니다.
+하나의 코드베이스를 조직 규모에 맞게 세 가지 방식으로 배포할 수 있습니다.
 
-| 프로필 | 권장 대상 | Gateway | 상태 관리 | 설치 진입점 |
-|---|---|---:|---|---|
-| Standalone | 개인·소규모 조직 | 1개 | JVM 로컬 | 루트 `docker-compose.yml` |
-| HA | Kubernetes 없이 이중화 | 2개 이상 | Redis | `deploy/ha` |
-| Kubernetes | Kubernetes 운영 조직 | Pod 2개 이상 | Redis | `deploy/kubernetes` Helm |
+| 프로필 | 대상 | 구성 |
+|---|---|---|
+| Standalone | 개인, 소규모 팀, PoC | Gateway 1대, MariaDB, Nginx, 모니터링 |
+| HA Compose | Kubernetes 없이 이중화가 필요한 조직 | Load Balancer, Gateway 2대, Redis 공유 상태 |
+| Kubernetes | 자동 확장과 운영 표준화가 필요한 조직 | Deployment, HPA, PDB, Gateway API, 외부 DB·Redis |
 
-Standalone은 현재 기본값이며 Redis가 필요하지 않습니다. HA와 Kubernetes 프로필은 Redis가 아니면 애플리케이션 시작을 거부하여 잘못된 다중 Gateway 구성을 방지합니다.
+### Ubuntu Standalone 빠른 설치
 
-```dotenv
-AICONNECT_DEPLOYMENT_PROFILE=STANDALONE
-AICONNECT_SHARED_STATE_PROVIDER=LOCAL
-AICONNECT_INSTANCE_ID=standalone-1
-```
-
-HA와 Kubernetes에서는 RPM, Deployment 활성 요청 수, 가중 선택 카운터와 예약 작업 리더 락을 Redis로 공유합니다. 동일 DB와 암호화·서명 비밀값을 보존하면 프로필 전환 시 기존 API 키와 논리 모델명을 재발급하지 않습니다.
-
-- [Standalone 설치](deploy/standalone/README.md)
-- [HA 설치](deploy/ha/README.md)
-- [Kubernetes 설치](deploy/kubernetes/README.md)
-- [프로필 마이그레이션](docs/deployment-profile-migration.md)
-
-### Linux VM Standalone Quickstart
-
-Linux에서는 `.bat`가 아니라 Bash 스크립트를 실행합니다. Tailscale과 Docker를 준비한 전용 VM에서 다음 명령만으로 운영 비밀값 생성, Tailnet 전용 HTTPS, 전체 Compose 기동과 최초 관리자 생성을 진행할 수 있습니다.
+아무것도 설치되지 않은 Ubuntu VM에서 Docker, Tailscale Client와 AIConnect를 준비합니다.
 
 ```bash
-wget -O aiconnect.tar.gz \
-  https://github.com/chefbeom/model-gateway-platform/archive/refs/heads/main.tar.gz
-tar -xzf aiconnect.tar.gz
-cd model-gateway-platform-main
-chmod +x quickstart_standalone.sh
-./quickstart_standalone.sh
-```
+git clone https://github.com/chefbeom/model-gateway-platform.git
+cd model-gateway-platform
 
-Docker와 Tailscale도 없는 빈 Ubuntu VM은 전체 설정 파일을 사용합니다. Tailscale 로그인만 사용자 단계로 남기고 패키지 설치와 로컬 배포까지 완료합니다.
-
-```bash
 chmod +x deploy/fullsetting_quickstart_standingalone.sh
 ./deploy/fullsetting_quickstart_standingalone.sh
+```
+
+Tailscale 인증 후 배포를 완료합니다.
+
+```bash
 sudo tailscale up
 ./quickstart_standalone.sh
 ```
 
-신뢰된 사내 LAN에서 VM 내부 IP로 직접 사용할 때는 다음처럼 실행합니다. HTTP 전용이므로 인터넷에 공개하면 안 됩니다.
+기존 Docker 환경에서는 `.env`를 준비한 뒤 실행할 수 있습니다.
 
 ```bash
-AICONNECT_LAN_IP=192.168.35.101 ./quickstart_standalone.sh --lan
-# 관리 화면: http://192.168.35.101
-# OpenAI Base URL: http://192.168.35.101/v1
-```
-
-자세한 준비 사항, LM Studio 연결 검사, 비대화형 설치와 백업 절차는 [Linux VM Standalone 설치](deploy/standalone/README.md)를 참고하세요.
-
-## 사전 준비
-
-- Docker Desktop 또는 Docker Engine + Compose
-- Gateway에서 GPU 서버로 연결 가능한 Tailscale·LAN·라우팅 사설망
-- GPU 서버에서 실행 중인 LM Studio API Server
-- 로컬 개발 시 Java 17, Gradle 8.10.x, Node.js 22
-
-운영 환경에서는 LM Studio API Token 인증을 활성화하고, LM Studio 포트를 공개 인터넷에 노출하지 마세요.
-
-## 환경변수 설정
-
-새 설치에서는 스크립트로 서로 다른 난수 비밀값이 포함된 `.env`를 생성합니다.
-
-```powershell
-.\scripts\new-deployment-env.ps1
-```
-
-주소와 선택 기능 값을 실제 환경에 맞게 수정한 뒤 사전 검사를 실행합니다.
-
-```powershell
-.\scripts\check-deployment-env.ps1 -RequireTailscale -RequireTls
-```
-
-기존 설치의 `.env`가 사라졌다면 새 비밀값을 만들지 말고 백업에서 원래 값을 복원해야 합니다. `API_KEY_PEPPER`가 바뀌면 기존 API 키를 인증할 수 없고, `GATEWAY_ENCRYPTION_KEY`가 바뀌면 저장된 Runtime Token과 암호화 원문을 복호화할 수 없습니다.
-
-주요 항목:
-
-```text
-DB_PASSWORD
-MARIADB_ROOT_PASSWORD
-ADMIN_API_TOKEN
-API_KEY_PEPPER
-GATEWAY_ENCRYPTION_KEY
-AUTH_SIGNING_KEY
-AUTH_REFRESH_PEPPER
-GRAFANA_ADMIN_PASSWORD
-```
-
-`.env`와 실제 API 키, LM Studio Token, Tailscale Auth Key는 저장소에 커밋하지 않습니다. DB와 함께 암호화된 별도 저장소에 보관하고 정기적으로 복구를 시험합니다.
-
-## 기본 Docker 실행
-
-로컬 네트워크 또는 Mock Runtime 환경에서는 기본 구성을 실행합니다.
-
-```powershell
+cp .env.example .env
+# placeholder를 서로 다른 충분히 긴 비밀값으로 변경
 docker compose --env-file .env up -d --build --wait
 ```
 
-기본 접속 주소:
+> `.env`, 실제 API 키, LM Studio Token과 Tailscale Auth Key는 Git에 커밋하지 않습니다.
 
-- AIConnect: [http://localhost](http://localhost)
-- Grafana: [http://localhost:3000](http://localhost:3000) — 보안을 위해 Gateway 호스트의 loopback에만 바인딩
+## 기술 스택
 
-MariaDB, Prometheus, Backend, Frontend 컨테이너는 외부에 직접 노출되지 않습니다.
+| 영역 | 기술 |
+|---|---|
+| Backend | Java 17, Spring Boot 3.5, Spring MVC, WebClient |
+| Security | Spring Security, HMAC API Key, HttpOnly Refresh Cookie |
+| Database | MariaDB 11.4, JPA, Flyway |
+| Shared State | Local Store 또는 Redis |
+| Frontend | Vue 3.5, TypeScript 5.7, Vite 6 |
+| LLM Runtime | LM Studio OpenAI-compatible API |
+| Private Network | Tailscale |
+| Proxy | Nginx |
+| Observability | Actuator, Micrometer, Prometheus, Grafana |
+| Deployment | Docker Compose, HA Compose, Helm/Kubernetes |
 
-## Tailscale을 통한 GPU 서버 연결
+## 보안 원칙
 
-Docker Bridge 컨테이너는 호스트의 Tailscale 경로를 자동으로 공유하지 않을 수 있습니다. 특히 Docker Desktop에서는 userspace sidecar 구성을 권장합니다.
+- 사용자 API 키와 내부 LM Studio Token을 분리합니다.
+- API 키 원문은 발급 직후 한 번만 표시하고 HMAC 해시만 저장합니다.
+- Provider 및 Runtime Token은 암호화해 저장합니다.
+- GPU 서버의 LM Studio 포트를 공개 인터넷에 노출하지 않습니다.
+- Gateway에서 GPU Runtime 포트로 향하는 최소 권한만 허용합니다.
+- 프롬프트와 응답 원문은 기본적으로 저장하지 않습니다.
+- Prometheus Label에 API 키, 요청 ID와 사용자 입력을 넣지 않습니다.
 
-1. Tailscale에서 `tag:llm-gateway`용 Pre-authorized Auth Key를 발급합니다.
-2. `.env`의 `TS_AUTHKEY`에 설정합니다.
-3. Tailscale Compose Override를 함께 실행합니다.
+## 검증
 
-```powershell
-docker compose `
-  -f docker-compose.yml `
-  -f docker-compose.tailscale.yml `
-  --env-file .env `
-  up -d --build --wait
-```
-
-권장 접근 정책:
-
-```text
-tag:llm-gateway → tag:gpu-node → TCP 1234
-```
-
-GPU 서버에서는 LM Studio를 Tailnet 인터페이스에서 접근 가능하게 실행하고, 가능하면 `100.x` IP 대신 MagicDNS 이름을 등록합니다.
-
-자세한 내용은 [Tailscale 네트워크 운영 문서](docs/tailscale-network.md)를 참고하세요.
-
-## 첫 설정
-
-1. 웹 콘솔에서 **첫 관리자 생성**을 선택합니다.
-2. 조직과 프로젝트를 생성합니다.
-3. `인프라스트럭처`에서 LM Studio Runtime Endpoint를 등록합니다.
-4. Endpoint Probe와 모델 동기화를 실행합니다.
-5. `LLM 서비스`에서 논리 서비스와 Service Target을 구성합니다.
-6. 프로젝트에 서비스 사용 권한을 부여합니다.
-7. 프로젝트 API 키를 발급합니다.
-8. 사용자 애플리케이션에서 AIConnect의 `/v1` API를 호출합니다.
-
-첫 관리자 생성은 비어 있는 설치에서 한 번만 성공합니다. `X-Admin-Token`은 일반 로그인 수단이 아닌 비상용 Break-glass 인증으로만 사용합니다.
-
-## API 호출 예제
-
-```http
-POST /v1/chat/completions
-Authorization: Bearer sk_llmg_...
-Content-Type: application/json
-
-{
-  "model": "text-pro",
-  "messages": [
-    {
-      "role": "user",
-      "content": "다음 문서를 요약해 주세요."
-    }
-  ],
-  "stream": false
-}
-```
-
-스트리밍 요청:
-
-```json
-{
-  "model": "text-pro",
-  "messages": [{ "role": "user", "content": "안녕하세요" }],
-  "stream": true,
-  "stream_options": {
-    "include_usage": true
-  }
-}
-```
-
-Primary가 첫 응답 전에 실패하면 다음 Target으로 자동 전환합니다. 일부 SSE 데이터가 이미 전송된 후 장애가 발생하면 현재 스트림을 오류로 종료하고, 다음 요청부터 정상 Target으로 라우팅합니다.
-
-## 빌드와 테스트
-
-Pull Request와 `main` Push에서는 GitHub Actions가 Backend 테스트·패키징, Frontend 타입 검사·빌드, 모든 Compose 조합과 프로덕션 이미지 빌드를 자동 실행합니다. 운영 브랜치에서는 이 품질 게이트를 필수 상태 검사로 설정하세요.
-
-Backend 전체 테스트와 실행 JAR 생성:
-
-```powershell
-gradle clean test bootJar --offline --no-daemon
-```
-
-Frontend 프로덕션 빌드:
-
-```powershell
-npm --prefix frontend run build
-```
-
-Compose 계약 확인:
-
-```powershell
-docker compose --env-file .env config -q
-docker compose -f docker-compose.yml -f docker-compose.tailscale.yml --env-file .env config -q
-docker compose -f docker-compose.yml -f docker-compose.tls.yml --env-file .env config -q
-```
-
-로컬 Smoke 검증:
-
-```powershell
-$adminPassword = Read-Host 'Smoke 관리자 비밀번호'
-
-.\scripts\verify-compose-smoke.ps1 `
-  -AdminEmail 'admin@example.com' `
-  -AdminPassword $adminPassword
-```
-
-Smoke 검증은 다음 흐름을 확인합니다.
-
-- 조직·프로젝트·노드·Endpoint 생성
+- API 키 인증과 역할별 데이터 범위
 - LM Studio 모델 발견과 동기화
-- 논리 서비스·Target·API 키 구성
 - 일반 응답과 SSE 스트리밍
-- 물리 모델 ID의 논리 모델명 변환
-- 토큰·비용·요청 Attempt 저장
-- 사용자 사용량과 관리자 요청 탐색
+- Primary 실패와 안전한 Failover
+- 동시 요청·RPM·월 토큰 Quota
+- 외부 Provider 승인 전 차단과 승인 후 성공
+- 외부 Provider 자동 전환 OFF/ON
+- 사용량, 비용, Attempt와 감사 로그 저장
+- Redis 공유 상태와 배포 프로필 검증
+- Docker Compose 및 VM 종단간 시나리오
 
-현재 테스트 스위트는 인증, 조직 격리, 모델 발견, 라우팅, Failover, 스트리밍 경계, Quota, 요청 보관, 알림 격리, Tailscale Proxy 및 OpenAPI 계약을 검증합니다.
+```bash
+# Backend
+gradle clean test bootJar --no-daemon
+
+# Frontend
+npm --prefix frontend run build
+
+# Compose 계약
+docker compose --env-file .env config -q
+```
 
 ## 프로젝트 구조
 
 ```text
 .
-├─ src/                         Spring Boot Backend
-│  ├─ main/java/                Gateway 및 Control Plane
-│  ├─ main/resources/           설정 및 Flyway Migration
-│  └─ test/                     Unit/Integration Test
-├─ frontend/                    Vue 3 관리 콘솔
-├─ infra/                       Nginx, Prometheus, Grafana 설정
-├─ scripts/                     Smoke, Failover, Backup/Restore 검증 도구
-├─ docs/                        설계·보안·운영 문서
-├─ docker-compose.yml           기본 스택
-├─ docker-compose.tailscale.yml Tailscale Override
-└─ docker-compose.tls.yml       TLS Override
+├─ src/                         Spring Boot Gateway와 Control Plane
+│  ├─ main/java/                인증, 라우팅, Runtime, 사용량, 알림
+│  ├─ main/resources/           설정과 Flyway Migration
+│  └─ test/                     단위·통합 테스트
+├─ frontend/                    Vue 3 관리·개발자 콘솔
+├─ infra/                       Nginx, Prometheus, Grafana
+├─ deploy/
+│  ├─ standalone/               단일 Gateway 배포
+│  ├─ ha/                       Load Balancer + 이중 Gateway + Redis
+│  └─ kubernetes/               Helm Chart
+├─ scripts/                     Smoke, Failover, 백업·복구 검증
+├─ docs/                        사용자·관리자·운영 문서
+└─ docker-compose.yml           기본 Standalone 스택
 ```
 
-## 운영 문서
+## 문서
 
-- [인증과 운영](docs/auth-and-operations.md)
-- [모델 발견](docs/model-discovery.md)
-- [라우팅 정책 관리](docs/routing-policy-management.md)
-- [Failover 운영](docs/failover-operations.md)
-- [장애와 알림](docs/incident-and-alerts.md)
-- [요청 보관 정책](docs/request-retention.md)
-- [백업과 복구](docs/backup-and-restore.md)
-- [TLS 운영](docs/tls-operations.md)
-- [운영 전 준비와 승인 기준](docs/production-readiness.md)
-- [Tailnet Runtime 검증](docs/tailnet-runtime-verification.md)
-- [Tailnet Failover 검증](docs/tailnet-failover-verification.md)
-- [전체 구현 완료 감사](docs/completion-audit.md)
+- [Dev-Docs 목차](./docs/DEV_DOCS_INDEX_KO.md)
+- [사용자 가이드](./docs/USER_GUIDE_KO.md)
+- [관리자 가이드](./docs/ADMIN_GUIDE_KO.md)
+- [외부 AI Provider 운영](./docs/EXTERNAL_PROVIDER_GUIDE_KO.md)
+- [배포 프로필 전환](./docs/deployment-profile-migration.md)
+- [운영 준비도](./docs/production-readiness.md)
+- [전체 구현 감사](./docs/completion-audit.md)
+- [OpenAPI 명세](./docs/openapi.yaml)
 
-## 보안 원칙
+## 포트폴리오 핵심 경험
 
-- 모든 외부 API는 운영 환경에서 HTTPS로 제공합니다.
-- API 키 원문과 LM Studio Token을 로그에 기록하지 않습니다.
-- LM Studio는 Gateway가 접근하는 Tailnet 내부에만 배치합니다.
-- Tailscale Grants에서 Gateway → GPU Node Runtime 포트만 허용합니다.
-- 프롬프트와 응답 원문은 기본적으로 저장하지 않습니다.
-- `FULL_ENCRYPTED`는 사용자 고지와 보관 정책이 준비된 프로젝트에서만 사용합니다.
-- Prometheus Label에 요청 ID, 사용자 입력, API 키와 같은 고유·민감값을 넣지 않습니다.
-- Grafana는 기본적으로 `127.0.0.1:3000`에만 노출하며 원격 접속은 SSH 터널 또는 인증된 내부 프록시를 사용합니다.
+- 물리 GPU와 API 계약을 분리한 **Logical Service 추상화**
+- 스트리밍 특성을 고려한 **안전한 Failover 경계 설계**
+- API Key → Project → Team → Organization으로 이어지는 **멀티테넌트 권한 모델**
+- 정확한 사용량 원본과 시스템 메트릭을 분리한 **관측성 설계**
+- 로컬 GPU와 외부 Provider를 함께 다루는 **정책 기반 하이브리드 라우팅**
+- 단일 서버에서 HA·Kubernetes까지 확장 가능한 **배포 프로필 설계**
+- 실제 VM, Tailscale, LM Studio를 연결한 **종단간 배포 및 장애 진단 경험**
 
-## 라이선스
+## 향후 계획
 
-라이선스 정책을 확정한 뒤 저장소 루트에 `LICENSE` 파일을 추가하세요.
+- `/v1/responses`, Embeddings 등 OpenAI 호환 Endpoint 확장
+- 외부 Provider별 비용 정산과 예산 알림 고도화
+- 다중 Relay·사설 네트워크를 위한 `ai-mesh-net` 연구
+- 운영 대시보드 추세 차트와 SLO 리포트
+- Agent 기반 선택적 GPU Telemetry
 
-- [외부 OpenAI Provider 운영 가이드](docs/EXTERNAL_PROVIDER_GUIDE_KO.md)
+---
+
+<div align="center">
+
+**AIConnect는 GPU 종류가 아니라 서비스 계약, 상태, 용량과 정책을 기준으로 LLM을 운영합니다.**
+
+</div>
