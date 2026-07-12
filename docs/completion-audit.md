@@ -30,7 +30,7 @@ This audit maps the original platform requirements to current repository evidenc
 | Prompt privacy | Default metadata-only; explicit `FULL_ENCRYPTED`; streaming response is never buffered for retention; project policy modal explains and controls both modes | `RequestContentRetentionIntegrationTest`; live policy round-trip passed |
 | Audit trail | Successful admin mutations, identity, alert, retention, hardware and endpoint actions are audited | Schema and integration test gate |
 | Monitoring | Micrometer/Prometheus metrics, internal scrape, Grafana datasource, readiness healthchecks on all six services | Live Prometheus target `up`; `docker compose up --wait` reported all services healthy |
-| Operations UI | Login-first session restoration, grouped sidebar navigation, feature search, light/dark themes, organization/project discovery, runtime and accelerator inventory, logical routing, API keys, quota/retention policies, requests, incidents, notifications and usage | Vue TypeScript production build (32 modules); rebuilt frontend image served through Nginx with HTTP 200 |
+| Operations UI | Login-first session restoration, grouped sidebar navigation, feature search, light/dark themes, organization/project discovery, runtime and accelerator inventory, logical routing, API keys, quota/retention policies, requests, incidents, notifications, usage and administrator audit-log explorer | Vue TypeScript production build (59 modules); rebuilt frontend image served through Nginx with HTTP 200 |
 | Deployment | Base, optional Tailscale, and optional TLS Compose layers; required secrets, health dependencies, timeout settings, certificate mounts and health checks | All two- and three-layer Compose contracts valid; production images built; base six-service stack live and healthy |
 | TLS | TLS 1.2/1.3 Nginx termination, HTTP 308 redirect, Secure browser session and unbuffered HTTPS SSE | Actual self-signed rehearsal: frontend/login/refresh/SSE passed; temporary certificate removed; `tls-operations.md` |
 | API contract | OpenAPI 3.1 data/control/usage/incident/operations contract including compatibility, replay, discovery, overview and endpoint conflicts | All `OpenApi*ContractTest` classes |
@@ -40,8 +40,8 @@ This audit maps the original platform requirements to current repository evidenc
 ## Final local gates
 
 ```text
-clean test bootJar --offline --no-daemon: passed (61 tests, 0 failures)
-npm run build: passed (32 modules)
+clean test bootJar --no-daemon: passed (65 tests, 0 failures)
+npm run build: passed (59 modules)
 base, Tailscale, TLS, and combined docker compose config: passed
 Docker production image build and six-service `up --wait`: passed
 PowerShell backup/restore/runtime/failover verification and Python mock syntax: passed
@@ -51,7 +51,9 @@ actual incident open/recovery and Webhook delivery rehearsal: passed
 actual HTTPS browser-session and SSE rehearsal: passed
 ```
 
-Flyway 11.20.1 validated and applied migrations V1 through V9 on a real MariaDB 11.4.12 container. Exact runtime, failover, smoke, health, restore, authentication, alert, and TLS evidence is recorded in the corresponding documents under `docs/`.
+Flyway 11.20.1 validated and applied migrations V1 through V18 on a real MariaDB 11.4 container. Exact runtime, failover, smoke, health, restore, authentication, alert, and TLS evidence is recorded in the corresponding documents under `docs/`.
+
+The repository now includes a GitHub Actions quality gate for Backend tests and packaging, Frontend typecheck/build, Compose contracts, and production image builds. Deployment secrets can be generated without shared placeholders and are checked before startup. Grafana is bound to host loopback by default. See `production-readiness.md` for the operator approval boundary.
 
 ## External-state checks still requiring the operator environment
 
@@ -62,4 +64,4 @@ Flyway 11.20.1 validated and applied migrations V1 through V9 on a real MariaDB 
 - Install a trusted certificate for the final hostname and verify without certificate bypass.
 - Confirm final Tailscale Grants and GPU-host firewall policy.
 
-Docker Desktop and the complete base stack are currently running. A physical Tailnet LM Studio peer was enrolled and passed native discovery, Gateway non-streaming inference, JSON Schema output and SSE logical-model privacy. Remaining checks are production hardening and multi-physical-node acceptance.
+A physical Tailnet LM Studio peer was enrolled and passed native discovery plus a full Nginx → Gateway → LM Studio non-streaming inference. The successful request and physical attempt were persisted with token usage and latency. Remaining external checks are trusted-certificate, real notification-provider and multi-physical-node acceptance.

@@ -6,6 +6,7 @@ export type DocsDestination =
   | 'services'
   | 'teams'
   | 'observability'
+  | 'audit'
   | 'notifications'
 
 export type DocAudience = '공통' | '사용자' | '관리자'

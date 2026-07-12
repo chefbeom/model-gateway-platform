@@ -1,6 +1,7 @@
 services:
   mariadb:
     image: mariadb:11.4
+    restart: unless-stopped
     environment:
       MARIADB_DATABASE: aiconnect
       MARIADB_USER: aiconnect
@@ -17,6 +18,7 @@ services:
 
   api:
     build: .
+    restart: unless-stopped
     environment:
       DB_URL: jdbc:mariadb://mariadb:3306/aiconnect
       DB_USERNAME: aiconnect
@@ -45,6 +47,7 @@ services:
 
   frontend:
     build: ./frontend
+    restart: unless-stopped
     expose: ["80"]
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
@@ -55,6 +58,7 @@ services:
 
   nginx:
     image: nginx:1.27-alpine
+    restart: unless-stopped
     ports: ["80:80"]
     volumes:
       - ./infra/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
@@ -72,6 +76,7 @@ services:
 
   prometheus:
     image: prom/prometheus:v3.4.2
+    restart: unless-stopped
     command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
     volumes:
       - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
@@ -89,6 +94,7 @@ services:
 
   grafana:
     image: grafana/grafana:12.0.2
+    restart: unless-stopped
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
@@ -96,7 +102,9 @@ services:
     volumes:
       - grafana-data:/var/lib/grafana
       - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
-    ports: ["3000:3000"]
+    # Grafana is an operator surface, not a public application endpoint.
+    # Use an SSH tunnel or an authenticated internal proxy for remote access.
+    ports: ["127.0.0.1:3000:3000"]
     depends_on:
       prometheus:
         condition: service_healthy

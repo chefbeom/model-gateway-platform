@@ -12,6 +12,7 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest
@@ -41,6 +42,14 @@ class OrganizationAuthorizationIntegrationTest {
         mvc.perform(post("/api/admin/nodes").header("Authorization", "Bearer " + orgAdminToken).contentType(MediaType.APPLICATION_JSON)
                         .content("{\"organizationId\":\"" + organizationId + "\",\"name\":\"private-node\"}"))
                 .andExpect(status().isOk());
+        mvc.perform(get("/api/admin/organizations/{organizationId}/audit-logs", organizationId)
+                        .param("action", "ADMIN_CONFIGURATION_CHANGED")
+                        .header("Authorization", "Bearer " + orgAdminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.items[0].action").value("ADMIN_CONFIGURATION_CHANGED"));
+        mvc.perform(get("/api/admin/audit-logs").header("Authorization", "Bearer " + orgAdminToken))
+                .andExpect(status().isForbidden());
         mvc.perform(post("/api/admin/organizations").header("Authorization", "Bearer " + orgAdminToken).contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"Unauthorized organization\"}"))
                 .andExpect(status().isForbidden());
