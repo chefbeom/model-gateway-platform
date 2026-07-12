@@ -63,6 +63,24 @@ paths:
       tags: [Authentication]
       summary: Revoke the refresh token
       responses: { '204': { description: Logged out } }
+  /api/admin/deployment-profile:
+    get:
+      tags: [Control plane]
+      summary: Inspect the active deployment and shared-state profile
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      responses:
+        '200':
+          description: Active Standalone, HA, or Kubernetes profile
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [profile, sharedStateProvider, instanceId, redisConfigured]
+                properties:
+                  profile: { type: string, enum: [STANDALONE, HA, KUBERNETES] }
+                  sharedStateProvider: { type: string, enum: [LOCAL, REDIS] }
+                  instanceId: { type: string }
+                  redisConfigured: { type: boolean }
   /api/admin/organizations:
     get:
       tags: [Control plane]
@@ -399,6 +417,70 @@ paths:
           description: Login session required.
         '403':
           description: Organization or project usage scope denied.
+  /api/admin/organizations/{organizationId}/external-providers:
+    get:
+      tags: [Control plane]
+      summary: List administrator-managed external AI providers
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrganizationId' }]
+      responses: { '200': { description: Provider metadata without secret API keys } }
+  /api/admin/external-providers:
+    post:
+      tags: [Control plane]
+      summary: Register an external OpenAI-compatible provider
+      description: The provider API key is encrypted at rest and is never returned by this API.
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      responses: { '200': { description: Registered provider metadata } }
+  /api/admin/external-providers/{providerId}/probe:
+    post:
+      tags: [Control plane]
+      summary: Probe provider connectivity with the stored credential
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ name: providerId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '200': { description: Probe status and latency } }
+  /api/admin/external-providers/{providerId}/models:
+    get:
+      tags: [Control plane]
+      summary: List explicitly registered models for an external provider
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ name: providerId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '200': { description: Registered external deployments } }
+    post:
+      tags: [Control plane]
+      summary: Register a provider model as a routing deployment
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ name: providerId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '200': { description: Registered external model deployment } }
+  /api/portal/projects/{projectId}/external-access:
+    get:
+      tags: [Control plane]
+      summary: List external-provider access visible to a project member
+      security: [{ AdminBearer: [] }]
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      responses: { '200': { description: Project access requests and approved policy } }
+    post:
+      tags: [Control plane]
+      summary: Request use of an administrator-managed external provider
+      security: [{ AdminBearer: [] }]
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      responses: { '200': { description: Created or updated access request } }
+  /api/admin/organizations/{organizationId}/external-access:
+    get:
+      tags: [Control plane]
+      summary: List project requests for external-provider access
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrganizationId' }]
+      responses: { '200': { description: Organization access-request queue } }
+  /api/admin/projects/{projectId}/external-access/{providerId}:
+    patch:
+      tags: [Control plane]
+      summary: Directly grant, approve, reject, or revoke external-provider access and set manual/automatic routing policy
+      description: Automatic external failover remains disabled unless autoFailoverEnabled is explicitly approved.
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ProjectId' }
+        - { name: providerId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses: { '200': { description: Updated project external-access policy } }
   /api/me/usage:
     get:
       tags: [Usage]

@@ -10,6 +10,7 @@
 | 플랫폼·조직 관리자 | [관리자 가이드](ADMIN_GUIDE_KO.md) | 조직, 팀, Runtime, 모델, 서비스, 프로젝트, 관측과 장애 대응 |
 | 네트워크 운영자 | [Tailscale 네트워크](tailscale-network.md) | Gateway와 GPU 서버 사이의 사설 연결 |
 | Runtime 운영자 | [모델 발견](model-discovery.md), [Failover 운영](failover-operations.md) | LM Studio 모델 동기화와 장애 전환 |
+| 배포 운영자 | [Linux VM Standalone](../deploy/standalone/README.md), [배포 프로필과 마이그레이션](deployment-profile-migration.md) | wget 빠른 설치, Standalone·HA·Kubernetes 선택·전환·롤백 |
 | API 구현자 | [OpenAPI](openapi.yaml) | 공개 API 및 관리자 API 계약 |
 
 ## 웹 Dev-Docs 정보 구조
@@ -29,6 +30,7 @@
    - 논리 서비스와 라우팅
    - 사용량·관측·알림
 4. **운영과 참조**
+   - 배포 프로필 선택과 설치·마이그레이션
    - 보안·보관·Timeout
    - 운영 전 자동 품질 게이트와 승인 체크리스트
    - 문제 해결
@@ -67,3 +69,8 @@ frontend/src/
 - [ ] 코드 예제의 model 값이 실제 모델 ID가 아닌 논리 서비스 키인가?
 - [ ] 현재 기본 Timeout과 환경 변수명이 코드와 일치하는가?
 - [ ] 다크·라이트 모드와 작은 화면에서 문서 레이아웃을 확인했는가?
+
+
+## 외부 OpenAI Provider
+
+관리자 등록, 프로젝트 요청·승인, 수동 사용과 명시적 자동 Failover 설정은 [외부 OpenAI Provider 운영 가이드](EXTERNAL_PROVIDER_GUIDE_KO.md)를 참고하세요.

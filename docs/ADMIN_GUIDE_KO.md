@@ -481,3 +481,8 @@ POST /api/admin/services/{serviceId}/targets
 - [장애 전환 운영](failover-operations.md)
 - [알림과 Incident](incident-and-alerts.md)
 - [백업과 복구](backup-and-restore.md)
+
+
+## 외부 OpenAI Provider
+
+관리자 등록, 프로젝트 요청·승인, 수동 사용과 명시적 자동 Failover 설정은 [외부 OpenAI Provider 운영 가이드](EXTERNAL_PROVIDER_GUIDE_KO.md)를 참고하세요.

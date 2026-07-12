@@ -84,8 +84,66 @@ GPU 제품명은 라우팅 기준으로 하드코딩하지 않습니다. RTX, H1
 | Runtime | LM Studio |
 | Private Network | Tailscale 또는 라우팅된 사설망 |
 | Proxy | Nginx |
+| Shared State | Standalone JVM 또는 HA Redis |
 | Monitoring | Micrometer, Prometheus, Grafana |
-| Deployment | Docker Compose |
+| Deployment | Docker Compose, HA Compose, Kubernetes Helm |
+
+## 배포 프로필
+
+AIConnect는 하나의 코드, Docker 이미지와 DB 스키마를 세 가지 방식으로 설치합니다.
+
+| 프로필 | 권장 대상 | Gateway | 상태 관리 | 설치 진입점 |
+|---|---|---:|---|---|
+| Standalone | 개인·소규모 조직 | 1개 | JVM 로컬 | 루트 `docker-compose.yml` |
+| HA | Kubernetes 없이 이중화 | 2개 이상 | Redis | `deploy/ha` |
+| Kubernetes | Kubernetes 운영 조직 | Pod 2개 이상 | Redis | `deploy/kubernetes` Helm |
+
+Standalone은 현재 기본값이며 Redis가 필요하지 않습니다. HA와 Kubernetes 프로필은 Redis가 아니면 애플리케이션 시작을 거부하여 잘못된 다중 Gateway 구성을 방지합니다.
+
+```dotenv
+AICONNECT_DEPLOYMENT_PROFILE=STANDALONE
+AICONNECT_SHARED_STATE_PROVIDER=LOCAL
+AICONNECT_INSTANCE_ID=standalone-1
+```
+
+HA와 Kubernetes에서는 RPM, Deployment 활성 요청 수, 가중 선택 카운터와 예약 작업 리더 락을 Redis로 공유합니다. 동일 DB와 암호화·서명 비밀값을 보존하면 프로필 전환 시 기존 API 키와 논리 모델명을 재발급하지 않습니다.
+
+- [Standalone 설치](deploy/standalone/README.md)
+- [HA 설치](deploy/ha/README.md)
+- [Kubernetes 설치](deploy/kubernetes/README.md)
+- [프로필 마이그레이션](docs/deployment-profile-migration.md)
+
+### Linux VM Standalone Quickstart
+
+Linux에서는 `.bat`가 아니라 Bash 스크립트를 실행합니다. Tailscale과 Docker를 준비한 전용 VM에서 다음 명령만으로 운영 비밀값 생성, Tailnet 전용 HTTPS, 전체 Compose 기동과 최초 관리자 생성을 진행할 수 있습니다.
+
+```bash
+wget -O aiconnect.tar.gz \
+  https://github.com/chefbeom/model-gateway-platform/archive/refs/heads/main.tar.gz
+tar -xzf aiconnect.tar.gz
+cd model-gateway-platform-main
+chmod +x quickstart_standalone.sh
+./quickstart_standalone.sh
+```
+
+Docker와 Tailscale도 없는 빈 Ubuntu VM은 전체 설정 파일을 사용합니다. Tailscale 로그인만 사용자 단계로 남기고 패키지 설치와 로컬 배포까지 완료합니다.
+
+```bash
+chmod +x deploy/fullsetting_quickstart_standingalone.sh
+./deploy/fullsetting_quickstart_standingalone.sh
+sudo tailscale up
+./quickstart_standalone.sh
+```
+
+신뢰된 사내 LAN에서 VM 내부 IP로 직접 사용할 때는 다음처럼 실행합니다. HTTP 전용이므로 인터넷에 공개하면 안 됩니다.
+
+```bash
+AICONNECT_LAN_IP=192.168.35.101 ./quickstart_standalone.sh --lan
+# 관리 화면: http://192.168.35.101
+# OpenAI Base URL: http://192.168.35.101/v1
+```
+
+자세한 준비 사항, LM Studio 연결 검사, 비대화형 설치와 백업 절차는 [Linux VM Standalone 설치](deploy/standalone/README.md)를 참고하세요.
 
 ## 사전 준비
 
@@ -307,3 +365,5 @@ Smoke 검증은 다음 흐름을 확인합니다.
 ## 라이선스
 
 라이선스 정책을 확정한 뒤 저장소 루트에 `LICENSE` 파일을 추가하세요.
+
+- [외부 OpenAI Provider 운영 가이드](docs/EXTERNAL_PROVIDER_GUIDE_KO.md)

@@ -330,3 +330,8 @@ AI가 사용자의 AICONNECT 사용을 돕는 경우 다음 규칙을 지킨다.
 - [라우팅 정책 관리](routing-policy-management.md)
 - [장애 전환 운영](failover-operations.md)
 - [요청 보관 정책](request-retention.md)
+
+
+## 외부 OpenAI Provider
+
+관리자 등록, 프로젝트 요청·승인, 수동 사용과 명시적 자동 Failover 설정은 [외부 OpenAI Provider 운영 가이드](EXTERNAL_PROVIDER_GUIDE_KO.md)를 참고하세요.

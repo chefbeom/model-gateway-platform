@@ -32,6 +32,9 @@ This audit maps the original platform requirements to current repository evidenc
 | Monitoring | Micrometer/Prometheus metrics, internal scrape, Grafana datasource, readiness healthchecks on all six services | Live Prometheus target `up`; `docker compose up --wait` reported all services healthy |
 | Operations UI | Login-first session restoration, grouped sidebar navigation, feature search, light/dark themes, organization/project discovery, runtime and accelerator inventory, logical routing, API keys, quota/retention policies, requests, incidents, notifications, usage and administrator audit-log explorer | Vue TypeScript production build (59 modules); rebuilt frontend image served through Nginx with HTTP 200 |
 | Deployment | Base, optional Tailscale, and optional TLS Compose layers; required secrets, health dependencies, timeout settings, certificate mounts and health checks | All two- and three-layer Compose contracts valid; production images built; base six-service stack live and healthy |
+| Deployment profiles | One Backend/Frontend release and DB schema select Standalone/LOCAL, HA/REDIS, or KUBERNETES/REDIS; unsafe combinations fail startup | Profile validator tests; actual clean Ubuntu 22.04 VM installed Docker/Tailscale and reached six healthy Standalone services; rerun preserved the `.env`; HA validation passed; profile shown in administrator dashboard |
+| Multi-Gateway shared state | Redis rolling RPM, per-instance active-request leases with heartbeat, weighted-selection counters and leader locks for health, usage alerts and retention purge | Real two-Gateway HA stack alternated instances; cross-Gateway RPM returned 404,404,429 with Redis ZCARD 2; active-request Redis integration test passed |
+| HA and Kubernetes packaging | Nginx least-connection LB with SSE settings and fast upstream retry, optional dual Tailscale sidecars, and Helm Deployment/Service/PDB/HPA/Gateway API templates | Real `gateway-1` stop routed to `gateway-2` in 3008ms; all Compose overlays valid; Helm lint and template passed |
 | TLS | TLS 1.2/1.3 Nginx termination, HTTP 308 redirect, Secure browser session and unbuffered HTTPS SSE | Actual self-signed rehearsal: frontend/login/refresh/SSE passed; temporary certificate removed; `tls-operations.md` |
 | API contract | OpenAPI 3.1 data/control/usage/incident/operations contract including compatibility, replay, discovery, overview and endpoint conflicts | All `OpenApi*ContractTest` classes |
 | Backup and restore | Guarded dump/restore scripts, SHA-256 verification and rehearsal procedure | Live MariaDB dump/restore passed: sentinel removed, counts restored, API health and login recovered |
@@ -40,9 +43,13 @@ This audit maps the original platform requirements to current repository evidenc
 ## Final local gates
 
 ```text
-clean test bootJar --no-daemon: passed (65 tests, 0 failures)
+clean test bootJar --no-daemon: passed (71 tests, 0 failures; Redis gate skipped without TEST_REDIS_HOST and passed separately against Redis 7.4)
 npm run build: passed (59 modules)
 base, Tailscale, TLS, and combined docker compose config: passed
+HA and HA+Tailscale compose config: passed
+real HA two-Gateway distribution and 3008ms process failover: passed
+real Redis cross-Gateway RPM and active-request sharing: passed
+Kubernetes Helm lint and template rendering: passed
 Docker production image build and six-service `up --wait`: passed
 PowerShell backup/restore/runtime/failover verification and Python mock syntax: passed
 actual MariaDB refresh rotation/reuse rejection: passed
