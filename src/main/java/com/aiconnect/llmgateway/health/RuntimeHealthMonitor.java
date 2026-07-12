@@ -22,7 +22,8 @@ public class RuntimeHealthMonitor {
                                 RecoveryWarmupService warmup, NotificationService notifications) {
         this.endpoints = endpoints; this.incidents = incidents; this.controlPlane = controlPlane; this.warmup = warmup; this.notifications = notifications;
     }
-    @Scheduled(fixedDelayString = "${gateway.health-check-delay-ms:30000}")
+    @Scheduled(fixedDelayString = "${gateway.health-check-delay-ms:30000}",
+            initialDelayString = "${gateway.health-check-initial-delay-ms:30000}")
     @Transactional
     public void checkEndpoints() {
         for (RuntimeEndpoint endpoint : endpoints.findByEnabledTrue()) {

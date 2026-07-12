@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string]$EnvFile = '.env',
     [switch]$RequireTailscale,
@@ -46,6 +46,15 @@ if ($duplicateSecrets) {
     throw "서로 다른 용도의 비밀값을 재사용했습니다: $($duplicateSecretNames -join ', ')"
 }
 
+$healthCheckDelay = 0L
+$healthCheckInitialDelay = 0L
+if (-not [long]::TryParse($values['HEALTH_CHECK_DELAY_MS'], [ref]$healthCheckDelay) -or $healthCheckDelay -lt 1000 -or $healthCheckDelay -gt 3600000) {
+    throw 'HEALTH_CHECK_DELAY_MS는 1000~3600000ms 범위의 정수여야 합니다.'
+}
+if (-not [long]::TryParse($values['HEALTH_CHECK_INITIAL_DELAY_MS'], [ref]$healthCheckInitialDelay) -or $healthCheckInitialDelay -lt 1000 -or $healthCheckInitialDelay -gt 3600000) {
+    throw 'HEALTH_CHECK_INITIAL_DELAY_MS는 1000~3600000ms 범위의 정수여야 합니다.'
+}
+
 $connectTimeout = 0L
 $responseTimeout = 0L
 if (-not [long]::TryParse($values['RUNTIME_CONNECT_TIMEOUT_MS'], [ref]$connectTimeout) -or $connectTimeout -lt 100 -or $connectTimeout -gt 60000) {
@@ -72,6 +81,7 @@ if ($RequireTls) {
 
 Write-Host "배포 환경 파일을 확인했습니다: $EnvFile"
 Write-Host "필수 비밀값 $($required.Count)개가 설정되어 있으며 원문은 표시하지 않습니다."
+Write-Host "Health check: initial=${healthCheckInitialDelay}ms, interval=${healthCheckDelay}ms"
 Write-Host "Runtime timeout: connect=${connectTimeout}ms, response=${responseTimeout}ms"
 if ($warnings.Count -eq 0) { Write-Host '경고 없음' }
 else { $warnings | ForEach-Object { Write-Warning $_ } }
