@@ -138,12 +138,17 @@ public class ControlPlaneService {
             endpoints.save(endpoint);
             List<DiscoveredRuntimeModel> discovered = modelDiscovery.discover(result.body());
             syncDeploymentHealth(endpoint, discovered, healthy);
-            return new ProbeResult(healthy, result.statusCode(), modelIds(discovered));
+            return healthy
+                    ? new ProbeResult(true, result.statusCode(), modelIds(discovered), null)
+                    : new ProbeResult(false, result.statusCode(), modelIds(discovered),
+                    "LM Studio returned HTTP " + result.statusCode() + ".");
         } catch (RuntimeUnavailableException exception) {
             endpoint.recordHealth(false);
             endpoints.save(endpoint);
             syncDeploymentHealth(endpoint, List.of(), false);
-            return new ProbeResult(false, 0, List.of());
+            String reason = exception.getMessage();
+            return new ProbeResult(false, 0, List.of(),
+                    reason == null || reason.isBlank() ? "The runtime endpoint is unreachable." : reason);
         }
     }
 
@@ -238,5 +243,10 @@ public class ControlPlaneService {
         }
     }
 
-    public record ProbeResult(boolean reachable, int httpStatus, List<String> modelIds) { }
+    public record ProbeResult(boolean reachable, int httpStatus, List<String> modelIds, String errorMessage) {
+        /** Preserves compatibility for existing callers that only need reachability, status, and discovered model IDs. */
+        public ProbeResult(boolean reachable, int httpStatus, List<String> modelIds) {
+            this(reachable, httpStatus, modelIds, null);
+        }
+    }
 }

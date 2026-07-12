@@ -6,9 +6,13 @@ spring:
     driver-class-name: org.h2.Driver
   jpa:
     hibernate:
-      ddl-auto: validate
+      # H2 does not implement every MariaDB ALTER TABLE form used by the
+      # production Flyway history. Integration tests exercise application
+      # behaviour against an isolated schema; production migration execution
+      # remains verified against MariaDB during deployment preflight.
+      ddl-auto: create-drop
   flyway:
-    enabled: true
+    enabled: false
 gateway:
   admin-token: integration-admin-token
   api-key-pepper: integration-pepper

@@ -62,7 +62,7 @@ Compose passes the following optional settings to the API container:
 ```text
 HEALTH_CHECK_DELAY_MS=30000
 RUNTIME_CONNECT_TIMEOUT_MS=3000
-RUNTIME_RESPONSE_TIMEOUT_MS=120000
+RUNTIME_RESPONSE_TIMEOUT_MS=360000
 ```
 
 The defaults are appropriate for normal operation. Lower values can be supplied for an isolated rehearsal, but overly aggressive production checks may create noise during model loading or temporary network congestion.

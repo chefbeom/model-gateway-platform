@@ -221,6 +221,14 @@ print(result.choices[0].message.content)
 
 ### 8.1 사용량 화면
 
+**사용량** 메뉴는 프로젝트 API 키 원문을 입력하지 않고 로그인 계정의 권한으로 조회한다.
+
+- Developer: 자신이 직접 발급한 API 키의 요청만 조회
+- Project Owner 또는 Team Admin: 소유 팀 프로젝트의 모든 API 키 요청과 자신이 직접 발급한 키 조회
+- Organization Admin 또는 Platform Admin: 선택한 조직의 모든 프로젝트와 API 키 요청 조회
+
+폐기된 API 키 기록을 정리한 뒤에도 요청에 저장된 발급자 스냅샷으로 과거 사용량 범위가 유지된다. 기간과 접근 가능한 프로젝트 필터로 조회 범위를 좁힐 수 있다.
+
 **사용량** 메뉴에서 다음을 확인한다.
 
 - 기간별 요청 수

@@ -1,5 +1,7 @@
 package com.aiconnect.llmgateway.admin;
 
+import com.aiconnect.llmgateway.identity.CurrentActor;
+
 import com.aiconnect.llmgateway.domain.*;
 import com.aiconnect.llmgateway.repository.ApiKeyRepository;
 import com.aiconnect.llmgateway.service.ApiKeyService;
@@ -34,7 +36,7 @@ public class AdminController {
     @PostMapping("/projects/{projectId}/service-access")
     public void grantServiceAccess(@PathVariable UUID projectId, @Valid @RequestBody AdminDtos.GrantServiceAccess request) { controlPlane.grantAccess(projectId, request.serviceId()); }
     @PostMapping("/services/{serviceId}/targets") public TargetView addTarget(@PathVariable UUID serviceId, @Valid @RequestBody AdminDtos.CreateTarget request) { return TargetView.from(controlPlane.addTarget(serviceId, request)); }
-    @PostMapping("/projects/{projectId}/api-keys") public IssuedApiKey createApiKey(@PathVariable UUID projectId, @Valid @RequestBody AdminDtos.CreateApiKey request) { return apiKeyService.issue(projectId, request.name(), request.expiresAt()); }
+    @PostMapping("/projects/{projectId}/api-keys") public IssuedApiKey createApiKey(@PathVariable UUID projectId, @Valid @RequestBody AdminDtos.CreateApiKey request) { return apiKeyService.issue(projectId, request.name(), request.expiresAt(), CurrentActor.userIdOrNull()); }
     @DeleteMapping("/api-keys/{apiKeyId}") public void revokeApiKey(@PathVariable UUID apiKeyId) { apiKeyService.revoke(apiKeyId); }
     @GetMapping("/projects/{projectId}/api-keys") public List<ApiKeyView> apiKeys(@PathVariable UUID projectId) { return apiKeys.findByProjectId(projectId).stream().map(ApiKeyView::from).toList(); }
     @PostMapping("/runtime-endpoints/{endpointId}/probe") public ControlPlaneService.ProbeResult probe(@PathVariable UUID endpointId) { return controlPlane.probe(endpointId); }

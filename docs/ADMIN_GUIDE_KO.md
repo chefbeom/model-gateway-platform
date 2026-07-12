@@ -329,6 +329,8 @@ Target 3: 5060 Runtime / model-B / priority 3 / degraded
 
 MariaDB의 요청·토큰·비용 정보는 사용량의 기준 데이터다. Prometheus/Grafana는 시스템 상태와 시계열 모니터링용이며 과금 원본으로 사용하지 않는다.
 
+사용량 화면은 API 키 원문을 요구하지 않는다. 로그인 세션을 기준으로 Project Owner와 Team Admin은 소유 프로젝트 전체, Organization Admin과 Platform Admin은 선택 조직 전체를 조회한다. 일반 Developer는 자신이 발급한 키의 사용량만 조회한다. 키 레코드를 영구 삭제해도 요청의 발급자 스냅샷은 감사·사용량 범위 판정을 위해 보존된다.
+
 관리 화면에서 확인할 항목:
 
 - 프로젝트·팀·API 키별 요청 수

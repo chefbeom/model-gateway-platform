@@ -4,12 +4,14 @@ import com.aiconnect.llmgateway.domain.LlmRequest;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 
 public interface LlmRequestRepository extends JpaRepository<LlmRequest, UUID> {
+    long countByProjectId(UUID projectId);
     List<LlmRequest> findTop50ByProjectIdOrderByStartedAtDesc(UUID projectId);
     List<LlmRequest> findByStartedAtAfter(Instant startedAt);
     List<LlmRequest> findByProjectIdInAndStartedAtAfter(Collection<UUID> projectIds, Instant startedAt);

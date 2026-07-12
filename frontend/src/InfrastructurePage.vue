@@ -72,14 +72,20 @@ async function action(name: 'probe' | 'sync-models' | 'drain' | 'resume') {
   busy.value = true
   message.value = ''
   try {
-    const result = await adminFetch<{ modelIds?: string[] }>(`/api/admin/runtime-endpoints/${selected.value.id}/${name}`, props.auth, { method: 'POST' })
-    const labels = {
-      probe: `연결을 확인했습니다${result.modelIds ? ` · ${result.modelIds.length}개 모델 발견` : ''}.`,
-      'sync-models': '모델 목록을 동기화했습니다.',
-      drain: '새 요청을 중지하고 Drain 상태로 전환했습니다.',
-      resume: 'Endpoint 복구 및 재투입을 요청했습니다.'
+    if (name === 'probe') {
+      const result = await adminFetch<{ reachable: boolean; httpStatus: number; modelIds: string[]; errorMessage?: string | null }>(
+        `/api/admin/runtime-endpoints/${selected.value.id}/probe`, props.auth, { method: 'POST' }
+      )
+      message.value = result.reachable
+        ? `연결 성공 · ${result.modelIds.length}개 모델을 확인했습니다.`
+        : `연결 실패${result.httpStatus ? ` · HTTP ${result.httpStatus}` : ''}${result.errorMessage ? ` · ${result.errorMessage}` : ''}`
+      await load(selected.value.id)
+      return
     }
-    message.value = labels[name]
+    await adminFetch<unknown>(`/api/admin/runtime-endpoints/${selected.value.id}/${name}`, props.auth, { method: 'POST' })
+    if (name === 'sync-models') message.value = '모델 목록을 동기화했습니다.'
+    else if (name === 'drain') message.value = '새 요청을 중지하고 Drain 상태로 전환했습니다.'
+    else message.value = 'Endpoint 복구 및 재투입을 요청했습니다.'
     await load(selected.value.id)
   } catch (error) { message.value = error instanceof Error ? error.message : '작업을 완료하지 못했습니다.' }
   finally { busy.value = false }
