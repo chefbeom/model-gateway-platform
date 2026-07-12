@@ -30,6 +30,14 @@ class OrganizationAuthorizationIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"Acme\"}"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         String organizationId = objectMapper.readTree(organizationResponse).path("id").asText();
+        mvc.perform(post("/api/admin/nodes").header("Authorization", "Bearer " + ownerToken).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"organizationId\":\"" + organizationId + "\",\"name\":\"platform-node\"}"))
+                .andExpect(status().isOk());
+        mvc.perform(get("/api/admin/organizations/{organizationId}/audit-logs", organizationId)
+                        .param("action", "ADMIN_CONFIGURATION_CHANGED")
+                        .header("Authorization", "Bearer " + ownerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(1));
         String userResponse = mvc.perform(post("/api/admin/users").header("Authorization", "Bearer " + ownerToken)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"email\":\"operator@example.com\",\"password\":\"correct-horse-battery-staple\",\"platformAdmin\":false}"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
@@ -46,7 +54,7 @@ class OrganizationAuthorizationIntegrationTest {
                         .param("action", "ADMIN_CONFIGURATION_CHANGED")
                         .header("Authorization", "Bearer " + orgAdminToken))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.totalElements").value(3))
                 .andExpect(jsonPath("$.items[0].action").value("ADMIN_CONFIGURATION_CHANGED"));
         mvc.perform(get("/api/admin/audit-logs").header("Authorization", "Bearer " + orgAdminToken))
                 .andExpect(status().isForbidden());

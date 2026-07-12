@@ -16,7 +16,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Map;
-import java.util.UUID;
 
 @Component
 public class AdminTokenFilter extends OncePerRequestFilter {
@@ -34,12 +33,16 @@ public class AdminTokenFilter extends OncePerRequestFilter {
             response.getWriter().write("{\"code\":\"ADMIN_AUTH_REQUIRED\",\"message\":\"A platform token or authenticated administrator is required.\"}");
             return;
         }
-        if (platformToken) request.setAttribute("aiconnect.platform-admin", true);
-        filterChain.doFilter(request, response);
-        if (isMutation(request) && response.getStatus() < 400) {
-            UUID organizationId = request.getAttribute("aiconnect.organization-id") instanceof UUID value ? value : null;
-            audit.record(organizationId, CurrentActor.userIdOrNull(), "ADMIN_CONFIGURATION_CHANGED", "HTTP_ENDPOINT", null,
-                    Map.of("method", request.getMethod(), "path", request.getRequestURI(), "status", response.getStatus()));
+        AdminAuditContext auditContext = AdminAuditContext.open();
+        try {
+            if (platformToken) request.setAttribute("aiconnect.platform-admin", true);
+            filterChain.doFilter(request, response);
+            if (isMutation(request) && response.getStatus() < 400) {
+                audit.record(auditContext.organizationId(), CurrentActor.userIdOrNull(), "ADMIN_CONFIGURATION_CHANGED", "HTTP_ENDPOINT", null,
+                        Map.of("method", request.getMethod(), "path", request.getRequestURI(), "status", response.getStatus()));
+            }
+        } finally {
+            AdminAuditContext.clear();
         }
     }
     private boolean isMutation(HttpServletRequest request) { return !("GET".equals(request.getMethod()) || "HEAD".equals(request.getMethod()) || "OPTIONS".equals(request.getMethod())); }

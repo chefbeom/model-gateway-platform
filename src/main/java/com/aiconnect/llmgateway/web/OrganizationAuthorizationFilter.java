@@ -60,7 +60,7 @@ public class OrganizationAuthorizationFilter extends OncePerRequestFilter {
         if (Boolean.TRUE.equals(request.getAttribute("aiconnect.platform-admin"))) {
             byte[] body = request.getInputStream().readAllBytes();
             UUID organizationId = organizationFor(request.getMethod(), request.getRequestURI(), parse(body));
-            if (organizationId != null) request.setAttribute("aiconnect.organization-id", organizationId);
+            attachOrganization(request, organizationId);
             filterChain.doFilter(new BufferedBodyRequest(request, body), response);
             return;
         }
@@ -70,7 +70,10 @@ public class OrganizationAuthorizationFilter extends OncePerRequestFilter {
             return;
         }
         if (actor.platformAdmin()) {
-            filterChain.doFilter(request, response);
+            byte[] body = request.getInputStream().readAllBytes();
+            UUID organizationId = organizationFor(request.getMethod(), request.getRequestURI(), parse(body));
+            attachOrganization(request, organizationId);
+            filterChain.doFilter(new BufferedBodyRequest(request, body), response);
             return;
         }
         String uri = request.getRequestURI();
@@ -82,7 +85,7 @@ public class OrganizationAuthorizationFilter extends OncePerRequestFilter {
         byte[] body = request.getInputStream().readAllBytes();
         JsonNode parsed = parse(body);
         UUID organizationId = organizationFor(request.getMethod(), uri, parsed);
-        if (organizationId != null) request.setAttribute("aiconnect.organization-id", organizationId);
+        attachOrganization(request, organizationId);
         if (organizationId == null || !access.canViewOrganization(actor, organizationId)) {
             deny(response, "ORGANIZATION_SCOPE_REQUIRED", "This operation requires membership in the organization.");
             return;
@@ -127,6 +130,13 @@ public class OrganizationAuthorizationFilter extends OncePerRequestFilter {
             return;
         }
         deny(response, "ORGANIZATION_ADMIN_REQUIRED", "An organization administrator is required for this operation.");
+    }
+
+    private void attachOrganization(HttpServletRequest request, UUID organizationId) {
+        if (organizationId == null) return;
+        request.setAttribute("aiconnect.organization-id", organizationId);
+        AdminAuditContext auditContext = AdminAuditContext.current();
+        if (auditContext != null) auditContext.organizationId(organizationId);
     }
 
     private boolean isProjectCreate(String method, String uri) {
