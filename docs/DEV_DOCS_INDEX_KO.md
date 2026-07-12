@@ -30,6 +30,7 @@
    - 사용량·관측·알림
 4. **운영과 참조**
    - 보안·보관·Timeout
+   - 운영 전 자동 품질 게이트와 승인 체크리스트
    - 문제 해결
 
 ## 프론트엔드 파일 구조
@@ -55,6 +56,7 @@ frontend/src/
 6. API 계약이 바뀌면 `docs/openapi.yaml`도 갱신한다.
 7. 운영 세부사항이 길어지면 `docs/`의 주제 문서를 갱신하고 Dev-Docs에서 연결한다.
 8. API 키, 비밀번호, LM Studio Token, Tailscale Auth Key 같은 실제 비밀값은 예시나 검증 결과에 기록하지 않는다.
+9. 배포·보안·복구 기준을 바꾸면 `docs/production-readiness.md`와 웹 Dev-Docs의 운영 전 체크리스트를 함께 갱신한다.
 
 ## 문서 검증 체크리스트
 

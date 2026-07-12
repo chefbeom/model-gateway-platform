@@ -5,7 +5,7 @@ AIConnect는 여러 대의 개인·회사 소유 LLM 서버를 하나의 **OpenA
 사용자는 GPU 서버나 LM Studio 주소를 직접 알 필요 없이 논리 모델명과 프로젝트 API 키만 사용합니다. AIConnect는 인증, 권한, 요청 제한, 배포 선택, 장애 전환, 사용량 및 예상 비용 기록을 담당합니다.
 
 ```text
-API 사용자 ── HTTPS ──> AIConnect Gateway ── Tailscale ──> LM Studio / GPU 서버
+API 사용자 ── HTTPS ──> AIConnect Gateway ── 사설망 ──> LM Studio / GPU 서버
                               │
                               ├─ MariaDB
                               ├─ Prometheus
@@ -82,7 +82,7 @@ GPU 제품명은 라우팅 기준으로 하드코딩하지 않습니다. RTX, H1
 | Database | MariaDB 11.4, Flyway |
 | Frontend | Vue 3, TypeScript, Vite |
 | Runtime | LM Studio |
-| Private Network | Tailscale |
+| Private Network | Tailscale 또는 라우팅된 사설망 |
 | Proxy | Nginx |
 | Monitoring | Micrometer, Prometheus, Grafana |
 | Deployment | Docker Compose |
@@ -90,7 +90,7 @@ GPU 제품명은 라우팅 기준으로 하드코딩하지 않습니다. RTX, H1
 ## 사전 준비
 
 - Docker Desktop 또는 Docker Engine + Compose
-- GPU 서버에 설치된 Tailscale
+- Gateway에서 GPU 서버로 연결 가능한 Tailscale·LAN·라우팅 사설망
 - GPU 서버에서 실행 중인 LM Studio API Server
 - 로컬 개발 시 Java 17, Gradle 8.10.x, Node.js 22
 
@@ -98,13 +98,19 @@ GPU 제품명은 라우팅 기준으로 하드코딩하지 않습니다. RTX, H1
 
 ## 환경변수 설정
 
-예제 파일을 복사해 Git에서 제외되는 `.env`를 생성합니다.
+새 설치에서는 스크립트로 서로 다른 난수 비밀값이 포함된 `.env`를 생성합니다.
 
 ```powershell
-Copy-Item .env.example .env
+.\scripts\new-deployment-env.ps1
 ```
 
-`.env`의 모든 placeholder를 서로 다른 충분히 긴 비밀값으로 변경합니다.
+주소와 선택 기능 값을 실제 환경에 맞게 수정한 뒤 사전 검사를 실행합니다.
+
+```powershell
+.\scripts\check-deployment-env.ps1 -RequireTailscale -RequireTls
+```
+
+기존 설치의 `.env`가 사라졌다면 새 비밀값을 만들지 말고 백업에서 원래 값을 복원해야 합니다. `API_KEY_PEPPER`가 바뀌면 기존 API 키를 인증할 수 없고, `GATEWAY_ENCRYPTION_KEY`가 바뀌면 저장된 Runtime Token과 암호화 원문을 복호화할 수 없습니다.
 
 주요 항목:
 
@@ -119,7 +125,7 @@ AUTH_REFRESH_PEPPER
 GRAFANA_ADMIN_PASSWORD
 ```
 
-`.env`와 실제 API 키, LM Studio Token, Tailscale Auth Key는 저장소에 커밋하지 않습니다.
+`.env`와 실제 API 키, LM Studio Token, Tailscale Auth Key는 저장소에 커밋하지 않습니다. DB와 함께 암호화된 별도 저장소에 보관하고 정기적으로 복구를 시험합니다.
 
 ## 기본 Docker 실행
 
@@ -132,7 +138,7 @@ docker compose --env-file .env up -d --build --wait
 기본 접속 주소:
 
 - AIConnect: [http://localhost](http://localhost)
-- Grafana: [http://localhost:3000](http://localhost:3000)
+- Grafana: [http://localhost:3000](http://localhost:3000) — 보안을 위해 Gateway 호스트의 loopback에만 바인딩
 
 MariaDB, Prometheus, Backend, Frontend 컨테이너는 외부에 직접 노출되지 않습니다.
 
@@ -211,6 +217,8 @@ Primary가 첫 응답 전에 실패하면 다음 Target으로 자동 전환합�
 
 ## 빌드와 테스트
 
+Pull Request와 `main` Push에서는 GitHub Actions가 Backend 테스트·패키징, Frontend 타입 검사·빌드, 모든 Compose 조합과 프로덕션 이미지 빌드를 자동 실행합니다. 운영 브랜치에서는 이 품질 게이트를 필수 상태 검사로 설정하세요.
+
 Backend 전체 테스트와 실행 JAR 생성:
 
 ```powershell
@@ -280,6 +288,7 @@ Smoke 검증은 다음 흐름을 확인합니다.
 - [요청 보관 정책](docs/request-retention.md)
 - [백업과 복구](docs/backup-and-restore.md)
 - [TLS 운영](docs/tls-operations.md)
+- [운영 전 준비와 승인 기준](docs/production-readiness.md)
 - [Tailnet Runtime 검증](docs/tailnet-runtime-verification.md)
 - [Tailnet Failover 검증](docs/tailnet-failover-verification.md)
 - [전체 구현 완료 감사](docs/completion-audit.md)
@@ -293,6 +302,7 @@ Smoke 검증은 다음 흐름을 확인합니다.
 - 프롬프트와 응답 원문은 기본적으로 저장하지 않습니다.
 - `FULL_ENCRYPTED`는 사용자 고지와 보관 정책이 준비된 프로젝트에서만 사용합니다.
 - Prometheus Label에 요청 ID, 사용자 입력, API 키와 같은 고유·민감값을 넣지 않습니다.
+- Grafana는 기본적으로 `127.0.0.1:3000`에만 노출하며 원격 접속은 SSH 터널 또는 인증된 내부 프록시를 사용합니다.
 
 ## 라이선스
 
