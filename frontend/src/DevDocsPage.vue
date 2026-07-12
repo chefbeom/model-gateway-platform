@@ -1,24 +1,37 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
 import DevDocsArticle from './dev-docs/DevDocsArticle.vue'
-import { devDocs, docGroups, findDoc, searchDocs } from './dev-docs/catalog'
+import { devDocs, docGroups } from './dev-docs/catalog'
+import { runtimeDiagnosticsDoc } from './dev-docs/runtimeDiagnostics'
 import type { DocAudience, DocsDestination } from './dev-docs/types'
 
 const emit = defineEmits<{ navigate: [target: DocsDestination] }>()
+const documents = [...devDocs, runtimeDiagnosticsDoc]
 const savedDoc = sessionStorage.getItem('aiconnect.devdocs.article')
-const activeId = ref(findDoc(savedDoc).id)
 const query = ref('')
 const audience = ref<'전체' | DocAudience>('전체')
 const articleTop = ref<HTMLElement | null>(null)
 
-const activePage = computed(() => findDoc(activeId.value))
-const activeIndex = computed(() => devDocs.findIndex(doc => doc.id === activePage.value.id))
-const previousPage = computed(() => activeIndex.value > 0 ? devDocs[activeIndex.value - 1] : null)
-const nextPage = computed(() => activeIndex.value < devDocs.length - 1 ? devDocs[activeIndex.value + 1] : null)
-const results = computed(() => searchDocs(query.value).slice(0, 8))
+function findDocument(id?: string | null) {
+  return documents.find(doc => doc.id === id) ?? documents[0]
+}
+
+function searchDocuments(value: string) {
+  const normalized = value.trim().toLowerCase()
+  if (!normalized) return []
+  return documents.filter(doc => [doc.title, doc.shortTitle, doc.description, ...doc.keywords]
+    .some(item => item.toLowerCase().includes(normalized)))
+}
+
+const activeId = ref(findDocument(savedDoc).id)
+const activePage = computed(() => findDocument(activeId.value))
+const activeIndex = computed(() => documents.findIndex(doc => doc.id === activePage.value.id))
+const previousPage = computed(() => activeIndex.value > 0 ? documents[activeIndex.value - 1] : null)
+const nextPage = computed(() => activeIndex.value < documents.length - 1 ? documents[activeIndex.value + 1] : null)
+const results = computed(() => searchDocuments(query.value).slice(0, 8))
 
 function docsForGroup(group: typeof docGroups[number]) {
-  return devDocs.filter(doc => doc.group === group && (audience.value === '전체' || doc.audience === audience.value || doc.audience === '공통'))
+  return documents.filter(doc => doc.group === group && (audience.value === '전체' || doc.audience === audience.value || doc.audience === '공통'))
 }
 
 async function selectDoc(id: string) {
@@ -54,7 +67,7 @@ function scrollToSection(id: string) {
       <span>문서 대상</span>
       <button v-for="item in (['전체', '사용자', '관리자'] as const)" :key="item" :class="{ active: audience === item }" @click="audience = item">{{ item }}</button>
       <i></i>
-      <small>총 {{ devDocs.length }}개 문서 · 현재 구현 기준</small>
+      <small>총 {{ documents.length }}개 문서 · 현재 구현 기준</small>
     </div>
 
     <div class="docs-layout">
