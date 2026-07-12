@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { copyText } from '../clipboard'
 import type { DocPage, DocsDestination } from './types'
 
 defineProps<{ page: DocPage }>()
@@ -8,7 +9,7 @@ const copied = ref('')
 
 async function copyCode(code: string, key: string) {
   try {
-    await navigator.clipboard.writeText(code)
+    await copyText(code)
     copied.value = key
     window.setTimeout(() => { if (copied.value === key) copied.value = '' }, 1600)
   } catch {

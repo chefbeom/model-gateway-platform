@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import BaseModal from './BaseModal.vue'
 import { adminFetch, type AdminAuth } from './api'
+import { copyText } from './clipboard'
 
 const props = defineProps<{ organizationId: string; auth: AdminAuth; platformAdmin: boolean }>()
 const emit = defineEmits<{ organizationsChanged: []; organizationSelected: [id: string] }>()
@@ -103,7 +104,7 @@ async function savePolicy() { if (!selectedId.value) return; busy.value = true; 
 async function revoke(key: ApiKey) { if (!selectedId.value || !confirm(`${key.name} 키를 폐기할까요?`)) return; busy.value = true; try { await adminFetch(`/api/admin/projects/${selectedId.value}/api-keys/${key.id}/revoke`, props.auth, { method: 'POST' }); await selectProject(selectedId.value); message.value = `'${key.name}' API 키를 폐기했습니다.` } catch (error) { message.value = error instanceof Error ? error.message : 'API 키 폐기에 실패했습니다.' } finally { busy.value = false } }
 async function openControl() { if (!selectedId.value) return; busy.value = true; try { control.value = await adminFetch<ProjectControl>(`/api/admin/projects/${selectedId.value}/control`, props.auth); revokeActiveKeys.value = false; controlOpen.value = true } catch (error) { message.value = error instanceof Error ? error.message : '프로젝트 제어 정보를 불러오지 못했습니다.' } finally { busy.value = false } }
 async function changeProjectStatus() { if (!selectedId.value || !control.value) return; const nextStatus = control.value.status === 'SUSPENDED' ? 'ACTIVE' : 'SUSPENDED'; busy.value = true; try { const updated = await adminFetch<ProjectControl>(`/api/admin/projects/${selectedId.value}/status`, props.auth, { method: 'PATCH', body: JSON.stringify({ status: nextStatus, revokeActiveApiKeys: nextStatus === 'SUSPENDED' && revokeActiveKeys.value }) }); control.value = updated; projects.value = projects.value.map(project => project.id === selectedId.value ? { ...project, status: updated.status } : project); await selectProject(selectedId.value); controlOpen.value = false; message.value = nextStatus === 'SUSPENDED' ? `프로젝트를 강제 중지했습니다.${updated.revokedApiKeyCount ? ` 활성 키 ${updated.revokedApiKeyCount}개도 폐기했습니다.` : ''}` : '프로젝트를 재개했습니다. 폐기된 API 키는 자동으로 복구되지 않습니다.' } catch (error) { message.value = error instanceof Error ? error.message : '프로젝트 상태 변경에 실패했습니다.' } finally { busy.value = false } }
-async function copySecret() { await navigator.clipboard.writeText(issuedSecret.value); message.value = 'API 키를 복사했습니다.' }
+async function copySecret() { try { await copyText(issuedSecret.value); message.value = 'API 키를 복사했습니다.' } catch { message.value = 'API 키를 복사하지 못했습니다. 값을 직접 선택해 복사해 주세요.' } }
 watch(() => props.organizationId, () => { selectedId.value = ''; void load() }); onMounted(() => { void load() })
 </script>
 

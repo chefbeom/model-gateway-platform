@@ -1,0 +1,64 @@
+backend:
+  replicaCount: 2
+  image:
+    repository: ghcr.io/chefbeom/aiconnect-api
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8080
+  resources:
+    requests: { cpu: 500m, memory: 768Mi }
+    limits: { cpu: "2", memory: 2Gi }
+
+frontend:
+  replicaCount: 2
+  image:
+    repository: ghcr.io/chefbeom/aiconnect-frontend
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  service:
+    port: 80
+
+database:
+  url: jdbc:mariadb://mariadb.database.svc.cluster.local:3306/aiconnect
+  username: aiconnect
+
+redis:
+  host: redis-master.redis.svc.cluster.local
+  port: 6379
+
+existingSecret: aiconnect-secrets
+
+gateway:
+  enabled: false
+  className: ""
+  name: aiconnect
+  listenerName: https
+  hostname: api.company.example
+  tlsSecretName: aiconnect-tls
+
+httpRoute:
+  enabled: false
+  parentGatewayName: aiconnect
+  parentGatewayNamespace: ""
+  hostname: api.company.example
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+podDisruptionBudget:
+  minAvailable: 1
+
+runtime:
+  connectTimeoutMs: 3000
+  responseTimeoutMs: 360000
+  healthCheckDelayMs: 30000
+  healthCheckInitialDelayMs: 30000
+
+extraEnv: []
+
+nameOverride: ""
+fullnameOverride: ""

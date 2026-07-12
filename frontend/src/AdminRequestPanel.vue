@@ -2,7 +2,7 @@
 import { ref } from 'vue'
 
 type Attempt = { deploymentId: string; attemptNumber: number; status: string; latencyMs?: number; httpStatus?: number; errorType?: string }
-type RequestItem = { requestId: string; projectId: string; serviceId: string; finalDeploymentId?: string; status: string; inputTokens?: number; outputTokens?: number; estimatedCost?: number; latencyMs?: number; failoverCount: number; startedAt: string; attempts: Attempt[] }
+type RequestItem = { requestId: string; projectId: string; serviceId: string; finalDeploymentId?: string; status: string; inputTokens?: number; outputTokens?: number; estimatedCost?: number; latencyMs?: number; failoverCount: number; providerType?: string; routingReason?: string; startedAt: string; attempts: Attempt[] }
 type PageResult = { items: RequestItem[]; page: number; size: number; totalElements: number; totalPages: number }
 
 const organizationId = ref(sessionStorage.getItem('aiconnect.requestExplorerOrganization') ?? '')
@@ -40,7 +40,7 @@ async function search() {
       <p class="notice">{{ message }}</p>
       <div v-if="result?.items.length" class="request-list">
         <details v-for="item in result.items" :key="item.requestId">
-          <summary><span class="status" :class="item.status === 'SUCCEEDED' ? 'healthy' : 'unhealthy'">{{ item.status }}</span><span class="mono">{{ item.requestId }}</span><span>{{ new Date(item.startedAt).toLocaleString() }}</span><span>{{ item.inputTokens ?? 0 }} + {{ item.outputTokens ?? 0 }} tokens</span><span>{{ item.latencyMs ?? 0 }} ms</span><span>Failover {{ item.failoverCount }}</span></summary>
+          <summary><span class="status" :class="item.status === 'SUCCEEDED' ? 'healthy' : 'unhealthy'">{{ item.status }}</span><span class="mono">{{ item.requestId }}</span><span>{{ new Date(item.startedAt).toLocaleString() }}</span><span>{{ item.inputTokens ?? 0 }} + {{ item.outputTokens ?? 0 }} tokens</span><span>{{ item.latencyMs ?? 0 }} ms</span><span>Failover {{ item.failoverCount }}</span><span>{{ item.providerType ?? 'LOCAL' }} · {{ item.routingReason ?? 'LOCAL_PRIMARY' }}</span></summary>
           <div class="attempts"><div v-for="attempt in item.attempts" :key="attempt.attemptNumber"><strong>#{{ attempt.attemptNumber }} {{ attempt.status }}</strong><span class="mono">{{ attempt.deploymentId }}</span><span>{{ attempt.latencyMs ?? 0 }} ms · HTTP {{ attempt.httpStatus ?? '-' }} · {{ attempt.errorType ?? '정상' }}</span></div></div>
         </details>
       </div>

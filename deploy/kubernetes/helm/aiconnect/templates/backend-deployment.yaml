@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aiconnect.fullname" . }}-backend
+  labels:
+    {{- include "aiconnect.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  replicas: {{ .Values.backend.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: backend
+  template:
+    metadata:
+      labels:
+        {{- include "aiconnect.labels" . | nindent 8 }}
+        app.kubernetes.io/component: backend
+    spec:
+      terminationGracePeriodSeconds: 60
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/instance: {{ .Release.Name }}
+                    app.kubernetes.io/component: backend
+      containers:
+        - name: backend
+          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+          imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - { name: AICONNECT_DEPLOYMENT_PROFILE, value: KUBERNETES }
+            - { name: AICONNECT_SHARED_STATE_PROVIDER, value: REDIS }
+            - name: AICONNECT_INSTANCE_ID
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - { name: DB_URL, value: {{ .Values.database.url | quote }} }
+            - { name: DB_USERNAME, value: {{ .Values.database.username | quote }} }
+            - { name: REDIS_HOST, value: {{ .Values.redis.host | quote }} }
+            - { name: REDIS_PORT, value: {{ .Values.redis.port | quote }} }
+            - { name: REDIS_HEALTH_ENABLED, value: "true" }
+            - { name: HEALTH_CHECK_DELAY_MS, value: {{ .Values.runtime.healthCheckDelayMs | quote }} }
+            - { name: HEALTH_CHECK_INITIAL_DELAY_MS, value: {{ .Values.runtime.healthCheckInitialDelayMs | quote }} }
+            - { name: RUNTIME_CONNECT_TIMEOUT_MS, value: {{ .Values.runtime.connectTimeoutMs | quote }} }
+            - { name: RUNTIME_RESPONSE_TIMEOUT_MS, value: {{ .Values.runtime.responseTimeoutMs | quote }} }
+            {{- range $name := list "DB_PASSWORD" "REDIS_PASSWORD" "ADMIN_API_TOKEN" "API_KEY_PEPPER" "GATEWAY_ENCRYPTION_KEY" "AUTH_SIGNING_KEY" "AUTH_REFRESH_PEPPER" }}
+            - name: {{ $name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.existingSecret }}
+                  key: {{ $name }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            initialDelaySeconds: 40
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec: { command: ["sh", "-c", "sleep 10"] }
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}

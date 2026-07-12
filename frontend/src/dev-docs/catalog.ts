@@ -495,6 +495,109 @@ export const devDocs: DocPage[] = [
     ]
   },
   {
+    id: 'deployment-profiles', group: '운영과 참조', title: '배포 프로필 선택과 설치', shortTitle: '배포 프로필',
+    description: '동일한 AICONNECT 릴리스를 Standalone, HA, Kubernetes 중 조직 환경에 맞게 설치합니다.',
+    audience: '공통', minutes: 12, icon: '◇', keywords: ['standalone', 'ha', 'redis', 'kubernetes', 'helm', 'gateway'],
+    sections: [
+      { id: 'choose', title: '세 가지 설치 방식', blocks: [
+        { type: 'table', columns: ['프로필', '대상', 'Gateway', '공유 상태'], rows: [
+          ['Standalone', '개인·소규모 조직', '1개', 'JVM 로컬'],
+          ['HA', 'Kubernetes 없이 이중화', '2개 이상', 'Redis'],
+          ['Kubernetes', '대규모 운영 조직', 'Pod 2개 이상', 'Redis']
+        ] },
+        { type: 'callout', tone: 'info', title: '코드와 API는 하나입니다', text: '같은 이미지와 DB 스키마를 사용하며 설치 방식과 공유 상태 구현만 달라집니다.' },
+        { type: 'callout', tone: 'warning', title: '프로필 값만 변경하면 이중화되지 않습니다', text: 'HA에는 Redis, 두 Gateway와 LB가 필요하고 Kubernetes에는 Redis, MariaDB와 Gateway API가 필요합니다.' }
+      ] },
+      { id: 'standalone', title: 'Linux VM Standalone 빠른 설치', blocks: [
+        { type: 'paragraph', text: '전용 Linux VM에 Docker와 Tailscale을 먼저 설치하고 GPU 서버와 같은 Tailnet에 연결합니다. Linux 실행 파일은 .bat가 아니라 quickstart_standalone.sh입니다.' },
+        { type: 'code', language: 'bash', title: 'GitHub에서 다운로드', code: 'wget -O aiconnect.tar.gz \\\n  https://github.com/chefbeom/model-gateway-platform/archive/refs/heads/main.tar.gz\ntar -xzf aiconnect.tar.gz\ncd model-gateway-platform-main\nchmod +x quickstart_standalone.sh' },
+        { type: 'code', language: 'bash', title: 'Docker와 Tailscale도 없는 빈 VM', code: 'chmod +x deploy/fullsetting_quickstart_standingalone.sh\n./deploy/fullsetting_quickstart_standingalone.sh\nsudo tailscale up\n./quickstart_standalone.sh' },
+        { type: 'callout', tone: 'info', title: 'Tailscale 인증은 자동화하지 않습니다', text: '전체 설정 파일은 Docker 공식 저장소, Compose v2, Tailscale stable 패키지와 AICONNECT 로컬 배포까지 진행합니다. 사용자가 sudo tailscale up으로 인증한 뒤 일반 Quickstart를 다시 실행하면 Tailnet HTTPS와 Base URL이 완성됩니다.' },
+        { type: 'code', language: 'bash', title: '한 번에 설치', code: './quickstart_standalone.sh' },
+        { type: 'steps', items: [
+          { title: '사전 조건 검사', text: 'Linux, Docker Compose v2, Docker 권한과 Tailscale 연결을 확인합니다.' },
+          { title: 'Tailnet 전용 HTTPS 준비', text: 'Tailscale Serve가 VM의 Nginx 포트 80을 신뢰된 ts.net HTTPS 주소로 전달합니다.' },
+          { title: '운영 비밀값 생성', text: '.env가 없을 때만 서로 다른 난수 Secret을 만들고 파일 권한을 600으로 제한합니다.' },
+          { title: '전체 스택 시작', text: 'MariaDB, Gateway, Frontend, Nginx, Prometheus, Grafana를 빌드하고 Health Check를 기다립니다.' },
+          { title: '최초 관리자 생성', text: '입력한 이메일과 비밀번호로 빈 설치의 플랫폼 관리자를 생성하고 접속 주소를 출력합니다.' }
+        ] },
+        { type: 'code', language: 'bash', title: 'LM Studio 경로까지 검사', code: 'AICONNECT_LM_STUDIO_URL=http://100.92.170.22:1234 \\\n  ./quickstart_standalone.sh' },
+        { type: 'code', language: 'bash', title: '신뢰된 사내 LAN에서 직접 접속', code: 'AICONNECT_LAN_IP=192.168.35.101 \\\n  ./quickstart_standalone.sh --lan\n# 관리 화면: http://192.168.35.101\n# OpenAI Base URL: http://192.168.35.101/v1' },
+        { type: 'callout', tone: 'warning', title: 'LAN HTTP 모드는 인터넷에 공개하면 안 됩니다', text: '--lan은 HTTP 로그인을 위해 AUTH_COOKIE_SECURE=false를 설정하고 Nginx를 지정한 내부 IP에 바인딩합니다. 신뢰된 사내 대역만 방화벽으로 허용하고 외부 공개 시에는 HTTPS와 Secure Cookie로 복귀하세요.' },
+        { type: 'callout', tone: 'warning', title: '일반 HTTP Tailscale IP로 로그인하지 마세요', text: 'Refresh Cookie는 Secure입니다. 스크립트가 출력하는 https://<host>.<tailnet>.ts.net 주소를 사용해야 로그인 갱신이 정상 동작합니다.' },
+        { type: 'callout', tone: 'warning', title: '.env를 잃어버리면 새로 만들지 마세요', text: '기존 MariaDB와 다른 API_KEY_PEPPER 또는 GATEWAY_ENCRYPTION_KEY를 사용하면 API 키 인증과 저장된 Token 복호화가 깨집니다. VM 밖의 암호화 저장소에서 원래 파일을 복원하세요.' },
+        { type: 'paragraph', text: 'Redis 없이 로컬 RPM·활성 요청 카운터를 사용합니다. 같은 DB에 Standalone Gateway를 여러 개 실행하지 마세요. 전체 절차는 deploy/standalone/README.md에 정리되어 있습니다.' }
+      ] },
+      { id: 'ha', title: 'Kubernetes 없는 HA 설치', blocks: [
+        { type: 'code', language: 'powershell', title: '참조 HA 실행', code: '.\\scripts\\new-deployment-env.ps1 -Profile HA -OutputPath deploy\\ha\\.env\ndocker compose --env-file deploy/ha/.env -f deploy/ha/docker-compose.yml up -d --build' },
+        { type: 'flow', items: [
+          { label: '1', title: 'Load Balancer', text: '준비된 Gateway로 요청을 분산하고 SSE 버퍼링을 끕니다.' },
+          { label: '2', title: 'Gateway 2개 이상', text: '같은 Secret·DB와 서로 다른 instance ID를 사용합니다.' },
+          { label: '3', title: 'Redis', text: 'RPM, 활성 요청과 예약 작업 락을 공유합니다.' }
+        ] },
+        { type: 'callout', tone: 'warning', title: '한 호스트 Compose는 호스트 HA가 아닙니다', text: '물리 장애 대응은 서로 다른 호스트, Redis HA와 DB 복제가 필요합니다.' }
+      ] },
+      { id: 'kubernetes', title: 'Kubernetes와 프로필 전환', blocks: [
+        { type: 'code', language: 'bash', title: 'Helm 설치', code: 'helm lint deploy/kubernetes/helm/aiconnect\nhelm upgrade --install aiconnect deploy/kubernetes/helm/aiconnect -f values-production.yaml' },
+        { type: 'checklist', items: ['Backend Pod 최소 2개', 'Redis HA', 'MariaDB HA', 'Gateway API와 TLS', 'PDB·anti-affinity·readiness', 'Tailscale Egress 또는 사설망'] },
+        { type: 'steps', items: [
+          { title: 'DB와 Secret 백업', text: 'DB와 암호화·서명 키를 보존합니다.' },
+          { title: '새 프로필 병행 배포', text: '기존 Gateway를 유지한 채 신규 인스턴스를 준비합니다.' },
+          { title: 'Readiness·Redis·LM Studio 확인', text: '공유 상태와 Runtime 접근을 검증합니다.' },
+          { title: 'LB 또는 DNS 전환', text: '검증 후 신규 진입점으로 트래픽을 이동합니다.' }
+        ] },
+        { type: 'callout', tone: 'success', title: '사용자 계약은 유지됩니다', text: '동일 DB와 Secret을 유지하면 API 키와 논리 model은 재발급하지 않습니다.' }
+      ] }
+    ]
+  },
+  {
+    id: 'external-provider', group: '관리자 가이드', title: '외부 OpenAI Provider', shortTitle: '외부 AI',
+    description: '관리자 관리형 외부 API를 프로젝트 승인, 수동 사용, 선택형 자동 Failover 정책으로 안전하게 연결합니다.',
+    audience: '관리자', minutes: 10, icon: 'C', keywords: ['OpenAI', '외부 API', 'Provider', '수동 사용', '자동 Failover', '비용'],
+    sections: [
+      {
+        id: 'external-principles', title: '먼저 알아야 할 원칙',
+        blocks: [
+          { type: 'cards', items: [
+            { label: 'SECRET', title: 'API 키는 관리자 소유', text: '외부 Provider 키는 암호화 저장되며 프로젝트 사용자와 Gateway 응답에 노출되지 않습니다.' },
+            { label: 'APPROVAL', title: '프로젝트별 승인', text: '등록만으로 외부 호출이 시작되지 않습니다. 프로젝트의 사용 요청과 관리자 승인이 필요합니다.' },
+            { label: 'DEFAULT OFF', title: '자동 전환은 기본 OFF', text: '자동 Failover는 관리자가 프로젝트 정책에서 명시적으로 켠 경우에만 후보가 됩니다.' }
+          ] },
+          { type: 'callout', tone: 'warning', title: '외부 전송 정책을 확인하세요', text: '외부 모델을 호출하면 프롬프트와 첨부 입력이 회사 네트워크 밖으로 전달될 수 있습니다. 민감정보와 데이터 반출 정책을 승인 전에 검토하세요.' }
+        ]
+      },
+      {
+        id: 'external-setup', title: '관리자 설정 순서',
+        blocks: [
+          { type: 'steps', items: [
+            { title: 'Provider 등록', text: '외부 AI에서 표시 이름, OpenAI 호환 Base URL, API 키를 등록합니다.', action: { label: '외부 AI 열기', destination: 'external' } },
+            { title: '연결 확인', text: '저장된 자격 증명으로 Provider 인증과 네트워크 상태를 검사합니다.' },
+            { title: '허용 모델 등록', text: '사용할 모델 ID만 등록하고 Capability, 컨텍스트, 동시 요청 수, 입력·출력 단가를 설정합니다.' },
+            { title: '프로젝트 승인', text: '사용자 요청을 검토하거나 관리자가 직접 프로젝트를 선택하고 수동 사용, 자동 Failover, 월 비용 상한, 만료일을 승인합니다.' },
+            { title: '논리 서비스 Target 연결', text: '수동 전용 서비스에는 외부 Target만, 자동 전환 서비스에는 로컬 우선·외부 후순위 Target을 연결합니다.', action: { label: 'LLM 서비스 열기', destination: 'services' } }
+          ] }
+        ]
+      },
+      {
+        id: 'external-modes', title: '수동 사용과 자동 Failover 차이',
+        blocks: [
+          { type: 'table', columns: ['방식', '구성', '호출 조건', '권장 용도'], rows: [
+            ['수동 사용', '외부 모델만 가진 별도 논리 서비스', '사용자가 해당 model 값을 명시', '무거운 작업, 관리자가 허용한 선택 호출'],
+            ['자동 Failover', '로컬 P1 + 외부 P2', '로컬 사용 불가 + 자동 전환 승인 ON', '로컬 장애 시 선택적 연속성 확보'],
+            ['자동 전환 OFF', '외부 Target이 있어도 제외', '관리자가 ON으로 바꾸기 전에는 호출 안 됨', '예상치 못한 비용과 데이터 반출 방지']
+          ] }
+        ]
+      },
+      {
+        id: 'external-observe', title: '비용·관측·감사',
+        blocks: [
+          { type: 'checklist', items: ['관측성에서 Provider=OPENAI 확인', '라우팅 사유 MANUAL_EXTERNAL 또는 AUTO_FAILOVER 확인', '사용량에서 CLOUD Provider·모델별 비용 확인', '월 비용 상한과 승인 만료 확인', '감사 로그에서 Provider·승인 정책 변경 확인'] },
+          { type: 'callout', tone: 'info', title: '테스트 완료 기준', text: '수동 승인 전 차단, 승인 후 성공, 자동 전환 OFF 차단, ON 전환 성공이 모두 재현되고 요청 기록에 외부 Provider와 예상 비용이 남아야 합니다.' }
+        ]
+      }
+    ]
+  },
+  {
     id: 'troubleshooting', group: '운영과 참조', title: '문제 해결', shortTitle: '문제 해결',
     description: '연결 실패, 401·403·503·504, 언로드 HTTP 400을 증상별로 해결합니다.',
     audience: '공통', minutes: 12, icon: '!', keywords: ['error', 'cannot connect', '400', '401', '403', '503', '504', 'unload'],
@@ -509,6 +612,33 @@ export const devDocs: DocPage[] = [
             { title: 'Timeout 확인', text: 'LM Studio가 결과를 만들었는데 앱이 실패하면 호출 앱의 제한 시간이 더 짧은지 확인합니다.' },
             { title: 'Request·Attempt 확인', text: 'Gateway 도착 여부와 실제 배포의 HTTP 상태를 확인합니다.', action: { label: '관측성 열기', destination: 'observability' } }
           ] }
+        ]
+      },
+      {
+        id: 'empty-success-response', title: '설정은 저장됐지만 화면이 바로 바뀌지 않음',
+        blocks: [
+          { type: 'paragraph', text: '서비스 권한 부여·해제처럼 응답 본문이 없는 관리 작업도 성공 직후 현재 목록을 다시 불러와 화면에 반영합니다.' },
+          { type: 'callout', tone: 'info', title: '이전 화면이 계속 보일 때', text: '브라우저에 이전 Frontend 정적 파일이 남아 있을 수 있습니다. 새 배포가 완료됐는지 확인한 뒤 한 번만 강력 새로고침하고, 이후 작업부터는 수동 새로고침 없이 반영되는지 확인하세요.' }
+        ]
+      },
+      {
+        id: 'clipboard-http', title: 'HTTP 내부망에서 복사 버튼 오류',
+        blocks: [
+          { type: 'paragraph', text: '일반 HTTP 주소에서는 브라우저가 보안 Clipboard API를 제공하지 않을 수 있습니다. AICONNECT는 이 경우 임시 선택 영역을 사용하는 fallback으로 API 키, Base URL, 모델명과 문서 예제를 복사합니다.' },
+          { type: 'callout', tone: 'warning', title: '비밀키 노출 시 즉시 폐기', text: 'API 키 원문이 스크린샷, 로그 또는 채팅에 노출됐다면 복사 기능 동작 여부와 관계없이 해당 키를 즉시 폐기하고 새 키를 발급하세요.' }
+        ]
+      },
+      {
+        id: 'request-capabilities', title: '같은 API 설정인데 요청별 결과가 다름',
+        blocks: [
+          { type: 'paragraph', text: 'Base URL, API 키와 논리 모델이 같아도 요청 본문이 추가 기능을 요구하면 Gateway는 해당 Capability를 가진 Deployment만 후보로 선택합니다.' },
+          { type: 'callout', tone: 'info', title: '필수 Capability는 다중 선택 드롭다운으로 설정', text: '기본값 [] 자동 판별은 서비스가 기능을 항상 강제하지 않고 요청 본문의 image_url, tools, response_format 등을 보고 필요한 기능을 자동으로 판별한다는 뜻입니다. 대부분의 일반 서비스에는 []를 권장하며, 모든 요청이 반드시 같은 기능을 요구하는 전용 서비스에서만 Capability를 선택하세요.' },
+          { type: 'table', columns: ['요청 본문', '추가 요구 Capability', '확인 위치'], rows: [
+            ['response_format.type = json_schema', 'STRUCTURED_OUTPUT', 'Deployment 운영 설정의 관리자 검증 Capability'],
+            ['tools 배열이 비어 있지 않음', 'TOOL_CALLING', '자동 발견 Capability 또는 검증 override'],
+            ['messages/input에 image_url·input_image 포함', 'VISION', '자동 발견 Capability 또는 검증 override']
+          ] },
+          { type: 'callout', tone: 'warning', title: 'Capability override는 실제 요청으로 검증한 뒤 추가', text: '모델 이름만 보고 기능을 허용하지 마세요. LM Studio에 최소 요청을 직접 보내 성공을 확인한 뒤 Deployment 운영 설정에 추가합니다.' }
         ]
       },
       {

@@ -7,4 +7,5 @@ import java.util.UUID;
 
 public interface ModelDeploymentRepository extends JpaRepository<ModelDeployment, UUID> {
     List<ModelDeployment> findByRuntimeEndpointId(UUID runtimeEndpointId);
+    List<ModelDeployment> findByExternalProviderId(UUID externalProviderId);
 }

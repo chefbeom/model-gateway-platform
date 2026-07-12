@@ -1,6 +1,7 @@
 package com.aiconnect.llmgateway.usage;
 
 import com.aiconnect.llmgateway.domain.ApiKey;
+import com.aiconnect.llmgateway.domain.ExternalProvider;
 import com.aiconnect.llmgateway.domain.InferenceNode;
 import com.aiconnect.llmgateway.domain.LlmRequest;
 import com.aiconnect.llmgateway.domain.LlmService;
@@ -10,6 +11,7 @@ import com.aiconnect.llmgateway.domain.RequestStatus;
 import com.aiconnect.llmgateway.domain.RuntimeEndpoint;
 import com.aiconnect.llmgateway.identity.AuthPrincipal;
 import com.aiconnect.llmgateway.repository.ApiKeyRepository;
+import com.aiconnect.llmgateway.repository.ExternalProviderRepository;
 import com.aiconnect.llmgateway.repository.InferenceNodeRepository;
 import com.aiconnect.llmgateway.repository.LlmRequestRepository;
 import com.aiconnect.llmgateway.repository.LlmServiceRepository;
@@ -48,6 +50,7 @@ public class AdminUsageService {
     private final RuntimeEndpointRepository endpoints;
     private final InferenceNodeRepository nodes;
     private final ApiKeyRepository apiKeys;
+    private final ExternalProviderRepository externalProviders;
     private final TeamAccessService access;
     private final EntityManager entityManager;
 
@@ -55,6 +58,7 @@ public class AdminUsageService {
                              LlmRequestRepository requests, LlmServiceRepository services,
                              ModelDeploymentRepository deployments, RuntimeEndpointRepository endpoints,
                              InferenceNodeRepository nodes, ApiKeyRepository apiKeys,
+                             ExternalProviderRepository externalProviders,
                              TeamAccessService access, EntityManager entityManager) {
         this.organizations = organizations;
         this.projects = projects;
@@ -64,6 +68,7 @@ public class AdminUsageService {
         this.endpoints = endpoints;
         this.nodes = nodes;
         this.apiKeys = apiKeys;
+        this.externalProviders = externalProviders;
         this.access = access;
         this.entityManager = entityManager;
     }
@@ -157,6 +162,7 @@ public class AdminUsageService {
         Map<UUID, RuntimeEndpoint> endpointsById = indexById(endpoints.findAll(), RuntimeEndpoint::getId);
         Map<UUID, InferenceNode> nodesById = indexById(nodes.findAll(), InferenceNode::getId);
         Map<UUID, ApiKey> apiKeysById = indexById(apiKeys.findAll(), ApiKey::getId);
+        Map<UUID, ExternalProvider> externalProvidersById = indexById(externalProviders.findAll(), ExternalProvider::getId);
 
         Aggregate total = new Aggregate("전체", scopeLabel);
         Map<UUID, Aggregate> projectGroups = new HashMap<>();
@@ -176,7 +182,7 @@ public class AdminUsageService {
                     service == null ? "삭제된 논리 서비스" : service.getServiceKey(),
                     service == null ? row.getServiceId().toString() : service.getDisplayName())).add(row);
 
-            InfrastructureLabel infrastructure = infrastructureLabel(row, deploymentsById, endpointsById, nodesById);
+            InfrastructureLabel infrastructure = infrastructureLabel(row, deploymentsById, endpointsById, nodesById, externalProvidersById);
             infrastructureGroups.computeIfAbsent(infrastructure.key(), id ->
                     new Aggregate(infrastructure.title(), infrastructure.detail())).add(row);
 
@@ -221,7 +227,8 @@ public class AdminUsageService {
     private InfrastructureLabel infrastructureLabel(LlmRequest row,
                                                      Map<UUID, ModelDeployment> deploymentsById,
                                                      Map<UUID, RuntimeEndpoint> endpointsById,
-                                                     Map<UUID, InferenceNode> nodesById) {
+                                                     Map<UUID, InferenceNode> nodesById,
+                                                     Map<UUID, ExternalProvider> externalProvidersById) {
         if (row.getFinalDeploymentId() == null) {
             return new InfrastructureLabel("unresolved", "처리 인프라 미확정", "라우팅 또는 Runtime 응답 전 실패");
         }
@@ -229,6 +236,13 @@ public class AdminUsageService {
         if (deployment == null) {
             return new InfrastructureLabel("deployment:" + row.getFinalDeploymentId(),
                     "삭제된 배포", row.getFinalDeploymentId().toString());
+        }
+        if (deployment.isExternal()) {
+            ExternalProvider provider = externalProvidersById.get(deployment.getExternalProviderId());
+            String providerName = provider == null ? "삭제된 외부 Provider" : provider.getDisplayName();
+            return new InfrastructureLabel("external:" + deployment.getId(),
+                    "CLOUD · " + providerName + " · " + deployment.getDisplayName(),
+                    deployment.getProviderModelId() + " · " + String.valueOf(row.getRoutingReason()));
         }
         RuntimeEndpoint endpoint = endpointsById.get(deployment.getRuntimeEndpointId());
         InferenceNode node = endpoint == null ? null : nodesById.get(endpoint.getNodeId());

@@ -6,6 +6,7 @@ import DashboardPage from './DashboardPage.vue'
 import DeveloperPortalPage from './DeveloperPortalPage.vue'
 import DevDocsPage from './DevDocsPage.vue'
 import InfrastructurePage from './InfrastructurePage.vue'
+import ExternalProvidersPage from './ExternalProvidersPage.vue'
 import ServicesPage from './ServicesPage.vue'
 import ProjectsPage from './ProjectsPage.vue'
 import TeamsPage from './TeamsPage.vue'
@@ -16,7 +17,7 @@ import { adminFetch, type AdminAuth, type User } from './api'
 
 type Theme = 'dark' | 'light'
 type FontScale = '100' | '115' | '125' | '135'
-type PageKey = 'dashboard' | 'infrastructure' | 'services' | 'teams' | 'projects' | 'observability' | 'usage' | 'notifications' | 'audit' | 'portal' | 'docs'
+type PageKey = 'dashboard' | 'infrastructure' | 'external' | 'services' | 'teams' | 'projects' | 'observability' | 'usage' | 'notifications' | 'audit' | 'portal' | 'docs'
 type OrganizationRole = 'ORGANIZATION_ADMIN' | 'DEVELOPER'
 type TeamRole = 'TEAM_ADMIN' | 'PROJECT_OWNER' | 'DEVELOPER' | 'AUDITOR'
 type Organization = { id: string; name: string; status: string }
@@ -32,6 +33,7 @@ const auth = computed<AdminAuth>(() => ({ accessToken: sessionStorage.getItem('a
 const adminNavItems: NavItem[] = [
   { id: 'dashboard', label: '대시보드', description: '요청·장애·런타임 핵심 지표', keywords: 'overview health dashboard', icon: '◔', group: '운영' },
   { id: 'infrastructure', label: '인프라스트럭처', description: '노드·Runtime·배포 모델', keywords: 'server gpu lm studio endpoint model', icon: '◇', group: '운영' },
+  { id: 'external', label: '외부 AI', description: 'OpenAI·승인·수동·자동 Failover', keywords: 'openai external provider cloud approval failover', icon: '◎', group: '운영' },
   { id: 'services', label: 'LLM 서비스', description: '논리 모델과 라우팅 정책', keywords: 'service model failover routing', icon: '▣', group: '운영' },
   { id: 'teams', label: '팀과 부서', description: '부서·역할·프로젝트 소유', keywords: 'team department role audit', icon: '⌘', group: '개발자 도구' },
   { id: 'projects', label: '프로젝트 & API 키', description: '프로젝트·권한·API 키', keywords: 'project key quota credential', icon: '⌘', group: '개발자 도구' },
@@ -86,7 +88,7 @@ const searchResults = computed(() => {
 })
 
 function knownPage(value: string): value is PageKey {
-  return ['dashboard', 'infrastructure', 'services', 'teams', 'projects', 'observability', 'usage', 'notifications', 'audit', 'portal', 'docs'].includes(value)
+  return ['dashboard', 'infrastructure', 'external', 'services', 'teams', 'projects', 'observability', 'usage', 'notifications', 'audit', 'portal', 'docs'].includes(value)
 }
 function isAllowedPage(target: PageKey) { return isAdminConsole.value || target === 'portal' || target === 'usage' || target === 'docs' }
 function fallbackPage(): PageKey { return isAdminConsole.value ? 'dashboard' : 'portal' }
@@ -203,6 +205,7 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
         <p v-if="message" class="inline-alert">{{ message }}</p>
         <DashboardPage v-if="isAdminConsole && page === 'dashboard'" :organization-id="organizationId" :auth="auth" @navigate="navigate" />
         <InfrastructurePage v-else-if="isAdminConsole && page === 'infrastructure'" :organization-id="organizationId" :auth="auth" />
+        <ExternalProvidersPage v-else-if="isAdminConsole && page === 'external'" :organization-id="organizationId" :auth="auth" />
         <ServicesPage v-else-if="isAdminConsole && page === 'services'" :organization-id="organizationId" :auth="auth" />
         <TeamsPage v-else-if="isAdminConsole && page === 'teams'" :organization-id="organizationId" :auth="auth" />
         <ProjectsPage v-else-if="isAdminConsole && page === 'projects'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" @organizations-changed="loadOrganizations" @organization-selected="loadOrganizations($event)" />

@@ -18,6 +18,16 @@ jobs:
     name: Backend test and package
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      TEST_REDIS_HOST: 127.0.0.1
+      TEST_REDIS_PORT: "6379"
+    services:
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s
+          --health-timeout 3s --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -67,16 +77,32 @@ jobs:
       AUTH_SIGNING_KEY: ci-auth-signing-key-000000000000000
       AUTH_REFRESH_PEPPER: ci-refresh-pepper-0000000000000000
       GRAFANA_ADMIN_PASSWORD: ci-grafana-password-0000000000000
+      REDIS_PASSWORD: ci-redis-password-00000000000000000
       TS_AUTHKEY: ci-tailscale-auth-key-000000000000000
       TLS_CERT_FILE: ./infra/nginx/nginx.conf
       TLS_KEY_FILE: ./infra/nginx/nginx.conf
     steps:
       - uses: actions/checkout@v4
+      - name: Validate Linux Standalone quickstart
+        run: |
+          bash -n quickstart_standalone.sh
+          bash -n deploy/fullsetting_quickstart_standingalone.sh
+          bash quickstart_standalone.sh --help > /dev/null
       - name: Validate base Compose contract
         run: docker compose -f docker-compose.yml config -q
       - name: Validate Tailscale Compose contract
         run: docker compose -f docker-compose.yml -f docker-compose.tailscale.yml config -q
       - name: Validate TLS Compose contract
         run: docker compose -f docker-compose.yml -f docker-compose.tls.yml config -q
+      - name: Validate HA Compose contract
+        run: docker compose -f deploy/ha/docker-compose.yml config -q
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+      - name: Validate Kubernetes Helm contract
+        run: |
+          helm lint deploy/kubernetes/helm/aiconnect
+          helm template aiconnect deploy/kubernetes/helm/aiconnect > /dev/null
       - name: Build production images
         run: docker compose -f docker-compose.yml build api frontend

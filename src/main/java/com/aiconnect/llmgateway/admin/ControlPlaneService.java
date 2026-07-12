@@ -27,6 +27,7 @@ public class ControlPlaneService {
     private final InferenceNodeRepository nodes;
     private final RuntimeEndpointRepository endpoints;
     private final ModelDeploymentRepository deployments;
+    private final ExternalProviderRepository externalProviders;
     private final LlmServiceRepository services;
     private final ProjectServiceAccessRepository access;
     private final ServiceTargetRepository targets;
@@ -37,7 +38,7 @@ public class ControlPlaneService {
 
     public ControlPlaneService(OrganizationRepository organizations, ProjectRepository projects, InferenceNodeRepository nodes,
                                RuntimeEndpointRepository endpoints, ModelDeploymentRepository deployments,
-                               LlmServiceRepository services, ProjectServiceAccessRepository access,
+                               ExternalProviderRepository externalProviders, LlmServiceRepository services, ProjectServiceAccessRepository access,
                                ServiceTargetRepository targets, TeamRepository teams, SecretCipher secretCipher,
                                InferenceRuntimeClient runtimeClient, LmStudioModelDiscovery modelDiscovery) {
         this.organizations = organizations;
@@ -45,6 +46,7 @@ public class ControlPlaneService {
         this.nodes = nodes;
         this.endpoints = endpoints;
         this.deployments = deployments;
+        this.externalProviders = externalProviders;
         this.services = services;
         this.access = access;
         this.targets = targets;
@@ -119,9 +121,17 @@ public class ControlPlaneService {
     public ServiceTarget addTarget(UUID serviceId, AdminDtos.CreateTarget request) {
         LlmService service = requireService(serviceId);
         ModelDeployment deployment = requireDeployment(request.deploymentId());
-        RuntimeEndpoint endpoint = requireEndpoint(deployment.getRuntimeEndpointId());
-        InferenceNode node = requireNode(endpoint.getNodeId());
-        if (!service.getOrganizationId().equals(node.getOrganizationId())) {
+        UUID targetOrganizationId;
+        if (deployment.isExternal()) {
+            ExternalProvider provider = externalProviders.findById(deployment.getExternalProviderId())
+                    .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "EXTERNAL_PROVIDER_NOT_FOUND",
+                            "The external provider does not exist."));
+            targetOrganizationId = provider.getOrganizationId();
+        } else {
+            RuntimeEndpoint endpoint = requireEndpoint(deployment.getRuntimeEndpointId());
+            targetOrganizationId = requireNode(endpoint.getNodeId()).getOrganizationId();
+        }
+        if (!service.getOrganizationId().equals(targetOrganizationId)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ORGANIZATION_MISMATCH", "A service target must belong to the service organization.");
         }
         return targets.save(new ServiceTarget(serviceId, deployment.getId(), request.priority(),

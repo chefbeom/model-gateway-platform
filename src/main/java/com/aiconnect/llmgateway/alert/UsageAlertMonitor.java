@@ -1,5 +1,6 @@
 package com.aiconnect.llmgateway.alert;
 
+import com.aiconnect.llmgateway.cluster.ClusterTaskCoordinator;
 import com.aiconnect.llmgateway.domain.LlmRequest;
 import com.aiconnect.llmgateway.domain.Project;
 import com.aiconnect.llmgateway.domain.RequestStatus;
@@ -10,7 +11,7 @@ import com.aiconnect.llmgateway.repository.LlmRequestRepository;
 import com.aiconnect.llmgateway.repository.ProjectRepository;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -27,20 +28,26 @@ public class UsageAlertMonitor {
     private final ProjectQuotaRepository quotas;
     private final LlmRequestRepository requests;
     private final NotificationService notifications;
+    private final ClusterTaskCoordinator coordinator;
+    private final TransactionTemplate transactions;
 
     public UsageAlertMonitor(ProjectAlertPolicyRepository policies, UsageAlertStateRepository states, ProjectRepository projects,
-                             ProjectQuotaRepository quotas, LlmRequestRepository requests, NotificationService notifications) {
+                             ProjectQuotaRepository quotas, LlmRequestRepository requests, NotificationService notifications, ClusterTaskCoordinator coordinator, TransactionTemplate transactions) {
         this.policies = policies;
         this.states = states;
         this.projects = projects;
         this.quotas = quotas;
         this.requests = requests;
         this.notifications = notifications;
+        this.coordinator = coordinator;
+        this.transactions = transactions;
     }
 
     @Scheduled(fixedDelayString = "${gateway.usage-alert-check-delay-ms:60000}")
-    @Transactional
     public void checkPolicies() {
+        coordinator.runIfLeader("usage-alerts", () -> transactions.executeWithoutResult(ignored -> checkPoliciesAsLeader()));
+    }
+    private void checkPoliciesAsLeader() {
         Instant now = Instant.now();
         for (ProjectAlertPolicy policy : policies.findAll()) {
             Project project = projects.findById(policy.getProjectId()).orElse(null);

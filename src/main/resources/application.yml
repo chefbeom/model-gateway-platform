@@ -17,6 +17,12 @@ spring:
     enabled: true
   jackson:
     default-property-inclusion: non_null
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: ${REDIS_TIMEOUT:2s}
 
 server:
   error:
@@ -31,6 +37,18 @@ management:
     health:
       probes:
         enabled: true
+  health:
+    redis:
+      enabled: ${REDIS_HEALTH_ENABLED:false}
+
+aiconnect:
+  deployment:
+    profile: ${AICONNECT_DEPLOYMENT_PROFILE:STANDALONE}
+    shared-state-provider: ${AICONNECT_SHARED_STATE_PROVIDER:LOCAL}
+    instance-id: ${AICONNECT_INSTANCE_ID:${HOSTNAME:standalone-1}}
+    lock-ttl: ${AICONNECT_DISTRIBUTED_LOCK_TTL:PT2M}
+    active-request-counter-ttl: ${AICONNECT_ACTIVE_REQUEST_COUNTER_TTL:PT2M}
+    active-request-heartbeat-ms: ${AICONNECT_ACTIVE_REQUEST_HEARTBEAT_MS:30000}
 
 gateway:
   admin-token: ${ADMIN_API_TOKEN:change-me-before-production}

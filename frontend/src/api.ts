@@ -3,7 +3,7 @@ export type AdminAuth = { accessToken?: string; platformToken?: string }
 export type User = { id: string; email: string; platformAdmin: boolean }
 export type Session = { accessToken: string; user: User }
 export type Endpoint = { id: string; nodeId: string; runtimeType: string; baseUrl: string; enabled: boolean; healthStatus: string; lastCheckedAt?: string }
-export type Deployment = { id: string; runtimeEndpointId: string; providerModelId: string; compatibilityKey: string; displayName: string; modelFamily?: string; quantization?: string; contextLength?: number; loaded: boolean; enabled: boolean; healthStatus: string; maxConcurrency: number; capabilitiesJson: string; capabilityOverridesJson?: string | null }
+export type Deployment = { id: string; runtimeEndpointId: string; externalProviderId?: string | null; providerModelId: string; compatibilityKey: string; displayName: string; modelFamily?: string; quantization?: string; contextLength?: number; loaded: boolean; enabled: boolean; healthStatus: string; maxConcurrency: number; capabilitiesJson: string; capabilityOverridesJson?: string | null }
 
 let refreshInFlight: Promise<Session> | null = null
 
@@ -68,5 +68,7 @@ export async function adminFetch<T>(path: string, auth: AdminAuth, init: Request
     response = await fetchAdmin(path, { accessToken: session.accessToken }, init)
   }
   if (!response.ok) throw await responseError(response, '요청을 처리할 수 없습니다.')
-  return response.status === 204 ? (undefined as T) : response.json() as Promise<T>
+  if (response.status === 204) return undefined as T
+  const body = await response.text()
+  return body.trim() ? JSON.parse(body) as T : undefined as T
 }

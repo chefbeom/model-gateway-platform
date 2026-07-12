@@ -6,6 +6,7 @@ import com.aiconnect.llmgateway.domain.Project;
 import com.aiconnect.llmgateway.identity.AuthPrincipal;
 import com.aiconnect.llmgateway.identity.CurrentActor;
 import com.aiconnect.llmgateway.repository.ApiKeyRepository;
+import com.aiconnect.llmgateway.repository.ExternalProviderRepository;
 import com.aiconnect.llmgateway.repository.InferenceNodeRepository;
 import com.aiconnect.llmgateway.repository.LlmServiceRepository;
 import com.aiconnect.llmgateway.repository.ModelDeploymentRepository;
@@ -34,11 +35,13 @@ public class OrganizationAuthorizationFilter extends OncePerRequestFilter {
     private final ModelDeploymentRepository deployments;
     private final LlmServiceRepository services;
     private final ApiKeyRepository apiKeys;
+    private final ExternalProviderRepository externalProviders;
     private final TeamAccessService access;
 
     public OrganizationAuthorizationFilter(ObjectMapper objectMapper, ProjectRepository projects, InferenceNodeRepository nodes,
                                            RuntimeEndpointRepository endpoints, ModelDeploymentRepository deployments,
-                                           LlmServiceRepository services, ApiKeyRepository apiKeys, TeamAccessService access) {
+                                           LlmServiceRepository services, ApiKeyRepository apiKeys,
+                                           ExternalProviderRepository externalProviders, TeamAccessService access) {
         this.objectMapper = objectMapper;
         this.projects = projects;
         this.nodes = nodes;
@@ -46,6 +49,7 @@ public class OrganizationAuthorizationFilter extends OncePerRequestFilter {
         this.deployments = deployments;
         this.services = services;
         this.apiKeys = apiKeys;
+        this.externalProviders = externalProviders;
         this.access = access;
     }
 
@@ -161,8 +165,9 @@ public class OrganizationAuthorizationFilter extends OncePerRequestFilter {
             if (uri.startsWith("/api/admin/runtime-endpoints/") && parts.length >= 5) return endpointOrganization(UUID.fromString(parts[4]));
             if (uri.startsWith("/api/admin/model-deployments/") && parts.length >= 5) return deploymentOrganization(UUID.fromString(parts[4]));
             if (uri.startsWith("/api/admin/api-keys/") && parts.length >= 5) return apiKeys.findById(UUID.fromString(parts[4])).map(key -> projectOrganization(key.getProjectId())).orElse(null);
+            if (uri.startsWith("/api/admin/external-providers/") && parts.length >= 5) return externalProviders.findById(UUID.fromString(parts[4])).map(provider -> provider.getOrganizationId()).orElse(null);
             if (!"POST".equals(method)) return null;
-            if (uri.equals("/api/admin/projects") || uri.equals("/api/admin/nodes") || uri.equals("/api/admin/services")) return uuid(body, "organizationId");
+            if (uri.equals("/api/admin/projects") || uri.equals("/api/admin/nodes") || uri.equals("/api/admin/services") || uri.equals("/api/admin/external-providers")) return uuid(body, "organizationId");
             if (uri.equals("/api/admin/runtime-endpoints")) return nodeOrganization(uuid(body, "nodeId"));
             if (uri.equals("/api/admin/model-deployments")) return endpointOrganization(uuid(body, "runtimeEndpointId"));
             return null;
@@ -204,7 +209,9 @@ public class OrganizationAuthorizationFilter extends OncePerRequestFilter {
     }
 
     private UUID deploymentOrganization(UUID deploymentId) {
-        return deployments.findById(deploymentId).map(deployment -> endpointOrganization(deployment.getRuntimeEndpointId())).orElse(null);
+        return deployments.findById(deploymentId).map(deployment -> deployment.isExternal()
+                ? externalProviders.findById(deployment.getExternalProviderId()).map(provider -> provider.getOrganizationId()).orElse(null)
+                : endpointOrganization(deployment.getRuntimeEndpointId())).orElse(null);
     }
 
     private UUID uuid(JsonNode body, String field) {

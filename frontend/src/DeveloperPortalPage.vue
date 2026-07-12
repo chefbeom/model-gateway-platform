@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import BaseModal from './BaseModal.vue'
 import { adminFetch, type AdminAuth } from './api'
+import { copyText } from './clipboard'
 
 type Service = { serviceKey: string; displayName: string }
 type Project = { id: string; name: string; status: string; canIssueApiKeys: boolean; services: Service[] }
@@ -11,6 +12,7 @@ type ApiKey = {
   canRevoke: boolean; canDelete: boolean
 }
 type ConnectionEndpoint = { scope: 'INTERNAL' | 'EXTERNAL'; label: string; url: string }
+type ExternalAccess = { providerId: string; providerName: string; providerType: string; status: string; manualAllowed: boolean; autoFailoverEnabled: boolean; monthlyCostLimit?: number | null; expiresAt?: string | null; requestedReason?: string | null }
 
 const props = defineProps<{ organizationId: string; auth: AdminAuth }>()
 const projects = ref<Project[]>([])
@@ -30,6 +32,10 @@ const keyName = ref('')
 const expiresAt = ref('')
 const issuedSecret = ref('')
 const issuedModels = ref<Service[]>([])
+const externalAccess = ref<ExternalAccess[]>([])
+const externalRequestOpen = ref(false)
+const externalProviderId = ref('')
+const externalReason = ref('')
 const selected = computed(() => projects.value.find(project => project.id === selectedId.value) ?? null)
 
 async function loadConnections() {
@@ -48,8 +54,8 @@ async function loadProjects() {
   try {
     projects.value = await adminFetch<Project[]>(`/api/portal/organizations/${props.organizationId}/projects`, props.auth)
     if (!projects.value.some(project => project.id === selectedId.value)) selectedId.value = projects.value[0]?.id ?? ''
-    if (selectedId.value) await loadKeys()
-    else keys.value = []
+    if (selectedId.value) { await loadKeys(); await loadExternalAccess() }
+    else { keys.value = []; externalAccess.value = [] }
     if (!projects.value.length) message.value = '현재 계정에 연결된 프로젝트가 없습니다. 관리자에게 프로젝트 권한을 요청하세요.'
   } catch (error) {
     message.value = error instanceof Error ? error.message : '프로젝트를 불러오지 못했습니다.'
@@ -69,6 +75,31 @@ async function selectProject() {
   if (selectedId.value) sessionStorage.setItem('aiconnect.portal.projectId', selectedId.value)
   else sessionStorage.removeItem('aiconnect.portal.projectId')
   await loadKeys()
+  await loadExternalAccess()
+}
+
+async function loadExternalAccess() {
+  if (!selectedId.value) { externalAccess.value = []; return }
+  try { externalAccess.value = await adminFetch<ExternalAccess[]>(`/api/portal/projects/${selectedId.value}/external-access`, props.auth) }
+  catch (error) { message.value = error instanceof Error ? error.message : '외부 AI 권한을 불러오지 못했습니다.' }
+}
+
+function openExternalRequest(provider: ExternalAccess) {
+  externalProviderId.value = provider.providerId
+  externalReason.value = provider.requestedReason ?? ''
+  externalRequestOpen.value = true
+}
+
+async function requestExternalAccess() {
+  if (!selected.value || !externalProviderId.value || !externalReason.value.trim()) return
+  busy.value = true
+  try {
+    const updated = await adminFetch<ExternalAccess>(`/api/portal/projects/${selected.value.id}/external-access`, props.auth, { method: 'POST', body: JSON.stringify({ providerId: externalProviderId.value, reason: externalReason.value.trim() }) })
+    externalAccess.value = externalAccess.value.map(item => item.providerId === updated.providerId ? updated : item)
+    externalRequestOpen.value = false
+    message.value = '외부 AI 사용 요청을 전송했습니다. 승인 전에는 요청이 외부로 전송되지 않습니다.'
+  } catch (error) { message.value = error instanceof Error ? error.message : '외부 AI 사용 요청에 실패했습니다.' }
+  finally { busy.value = false }
 }
 
 async function issueKey() {
@@ -136,8 +167,12 @@ async function deleteKeyRecord() {
 }
 
 async function copyValue(value: string, label: string) {
-  await navigator.clipboard.writeText(value)
-  message.value = `${label}을(를) 복사했습니다.`
+  try {
+    await copyText(value)
+    message.value = `${label}을(를) 복사했습니다.`
+  } catch {
+    message.value = `${label}을(를) 복사하지 못했습니다. 값을 직접 선택해 복사해 주세요.`
+  }
 }
 
 watch(() => props.organizationId, () => { void loadProjects() })
@@ -189,6 +224,13 @@ onMounted(() => { void loadProjects(); void loadConnections() })
         </article>
       </div>
 
+      <article class="surface-card external-access-card">
+        <header class="card-header"><div><span class="card-kicker">EXTERNAL AI ACCESS</span><h2>외부 AI 사용 권한</h2></div></header>
+        <p class="external-policy-copy">기본값은 외부 전송 금지입니다. 필요할 때 사용 요청을 보내고, 관리자가 승인한 수동 사용 또는 자동 Failover만 동작합니다.</p>
+        <div v-if="externalAccess.length" class="external-access-list"><div v-for="provider in externalAccess" :key="provider.providerId"><span class="status-chip tiny" :class="provider.status === 'APPROVED' ? 'healthy' : 'unknown'">{{ provider.status }}</span><span><b>{{ provider.providerName }}</b><small>{{ provider.providerType }} · 수동 {{ provider.manualAllowed ? 'ON' : 'OFF' }} · 자동 Failover {{ provider.autoFailoverEnabled ? 'ON' : 'OFF' }}</small></span><button v-if="provider.status !== 'APPROVED'" class="secondary-button" @click="openExternalRequest(provider)">{{ provider.status === 'REQUESTED' ? '요청 수정' : '사용 요청' }}</button><small v-else>{{ provider.expiresAt ? new Date(provider.expiresAt).toLocaleDateString() + '까지' : '만료 없음' }}</small></div></div>
+        <div v-else class="empty-state compact"><span>◇</span><p>관리자가 등록한 외부 AI Provider가 없습니다.</p></div>
+      </article>
+
       <article class="surface-card">
         <header class="card-header">
           <div><span class="card-kicker">PROJECT CREDENTIALS</span><h2>API 키</h2></div>
@@ -218,6 +260,11 @@ onMounted(() => { void loadProjects(); void loadConnections() })
         <div v-else class="empty-state"><span>⌘</span><h3>아직 발급한 API 키가 없습니다</h3><p>서비스에 연결할 첫 API 키를 발급하세요.</p><button v-if="selected.canIssueApiKeys" class="text-button" @click="keyOpen = true">첫 API 키 발급</button></div>
       </article>
     </template>
+
+    <BaseModal :open="externalRequestOpen" title="외부 AI 사용 요청" description="승인 전에는 프롬프트나 이미지가 외부 Provider로 전송되지 않습니다." size="sm" @close="externalRequestOpen = false">
+      <div class="modal-form"><label class="field">외부 Provider<select v-model="externalProviderId"><option v-for="provider in externalAccess" :key="provider.providerId" :value="provider.providerId">{{ provider.providerName }}</option></select></label><label class="field">사용 목적과 사유<textarea v-model.trim="externalReason" rows="5" placeholder="로컬 GPU 장애 시 서비스 연속성을 확보하기 위해 요청합니다." /></label></div>
+      <template #footer><button class="secondary-button" @click="externalRequestOpen = false">취소</button><button class="primary-button" :disabled="busy || !externalReason" @click="requestExternalAccess">요청 보내기</button></template>
+    </BaseModal>
 
     <BaseModal :open="keyOpen" title="API 키 발급" description="키 원문과 연결 정보는 발급 직후 한 번만 표시됩니다. 안전한 비밀 관리 도구에 보관하세요." size="sm" @close="keyOpen = false">
       <div class="modal-form"><label class="field">키 이름<input v-model.trim="keyName" placeholder="production-backend" /></label><label class="field">만료일 (선택)<input v-model="expiresAt" type="datetime-local" /></label></div>
@@ -255,5 +302,6 @@ onMounted(() => { void loadProjects(); void loadConnections() })
 .quick-endpoints { margin-top: 12px; display: grid; gap: 6px; }.quick-endpoints code { padding: 8px; overflow-x: auto; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); color: var(--accent-strong); font-size: 10px; }.configuration-warning { display: block; margin-top: 14px; color: var(--warning); font-size: 10px; line-height: 1.55; }
 .connection-reveal { display: grid; gap: 12px; }.connection-value { padding: 14px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 9px; border: 1px solid var(--accent-border); border-radius: 12px; background: var(--accent-dim); }.connection-value.unconfigured { border-color: color-mix(in srgb, var(--warning) 35%, transparent); background: var(--warning-dim); }.connection-value > span { grid-column: 1 / -1; color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .14em; }.connection-value > code, .issued-model-list code { min-width: 0; padding: 10px; overflow-x: auto; border-radius: 8px; background: var(--surface); color: var(--accent-strong); font-size: 10px; }.connection-value > small { grid-column: 1 / -1; color: var(--muted); font-size: 10px; line-height: 1.5; }.issued-model-list { grid-column: 1 / -1; display: grid; gap: 7px; }.issued-model-list > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 9px; }
 .revocation-note { padding: 16px; display: grid; gap: 8px; border: 1px solid color-mix(in srgb, var(--danger) 38%, transparent); border-radius: 12px; background: var(--danger-dim); }.revocation-note span { color: var(--danger); font-size: 9px; font-weight: 800; letter-spacing: .12em; }.revocation-note strong { font-size: 14px; }.revocation-note code { padding: 8px; overflow: auto; border-radius: 7px; background: var(--surface); color: var(--text-soft); font-size: 10px; }.revocation-note p { margin: 2px 0 0; color: var(--text-soft); font-size: 11px; line-height: 1.6; }
+.external-access-card { overflow: hidden; }.external-policy-copy { margin: 0; padding: 16px 22px; color: var(--text-soft); font-size: 11px; line-height: 1.7; border-bottom: 1px solid var(--border); }.external-access-list { display: grid; }.external-access-list > div { padding: 13px 20px; display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 11px; align-items: center; border-bottom: 1px solid var(--border); }.external-access-list > div:last-child { border-bottom: 0; }.external-access-list > div > span:nth-child(2) { display: grid; gap: 4px; }.external-access-list small { color: var(--muted); font-size: 9px; }
 @media (max-width: 760px) { .developer-summary-grid { grid-template-columns: 1fr; }.simple-card { min-height: 0; } }
 </style>

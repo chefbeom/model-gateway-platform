@@ -11,22 +11,21 @@ import java.time.Instant;
 import java.time.YearMonth;
 import java.time.ZoneOffset;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class QuotaService {
     private final ApiKeyService apiKeyService;
     private final ProjectQuotaRepository quotas;
     private final LlmRequestRepository requests;
-    private final ConcurrentHashMap<UUID, RateWindow> windows = new ConcurrentHashMap<>();
-    public QuotaService(ApiKeyService apiKeyService, ProjectQuotaRepository quotas, LlmRequestRepository requests) {
-        this.apiKeyService = apiKeyService; this.quotas = quotas; this.requests = requests;
+    private final RateLimitStore rateLimits;
+    public QuotaService(ApiKeyService apiKeyService, ProjectQuotaRepository quotas, LlmRequestRepository requests, RateLimitStore rateLimits) {
+        this.apiKeyService = apiKeyService; this.quotas = quotas; this.requests = requests; this.rateLimits = rateLimits;
     }
     public void check(String authorization, JsonNode request) {
         ApiKeyCredentials credentials = apiKeyService.authenticate(authorization);
         ProjectQuota quota = quotas.findById(credentials.project().getId()).orElse(null);
         int rpm = quota == null ? 60 : quota.getRequestsPerMinute();
-        if (!windows.computeIfAbsent(credentials.apiKey().getId(), ignored -> new RateWindow()).tryAcquire(rpm, Instant.now())) {
+        if (!rateLimits.tryAcquire(credentials.apiKey().getId(), rpm, Instant.now())) {
             throw new ApiException(HttpStatus.TOO_MANY_REQUESTS, "RATE_LIMIT_EXCEEDED", "The API key has exceeded its requests-per-minute limit.");
         }
         if (quota != null && quota.getMonthlyTokenLimit() != null) {

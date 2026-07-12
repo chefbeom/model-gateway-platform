@@ -16,7 +16,10 @@ import org.springframework.web.bind.annotation.*;
 public class AuthController {
     private static final String REFRESH_COOKIE = "aiconnect_refresh";
     private final IdentityService identity;
-    public AuthController(IdentityService identity) { this.identity = identity; }
+    private final AuthProperties properties;
+    public AuthController(IdentityService identity, AuthProperties properties) {
+        this.identity = identity; this.properties = properties;
+    }
 
     @PostMapping("/bootstrap")
     public ResponseEntity<SessionResponse> bootstrap(@Valid @RequestBody Credentials request) {
@@ -39,8 +42,14 @@ public class AuthController {
         return ResponseEntity.ok().header(HttpHeaders.SET_COOKIE, refreshCookie(session.refreshToken()).toString())
                 .body(new SessionResponse(session.accessToken(), UserView.from(session.user())));
     }
-    private ResponseCookie refreshCookie(String token) { return ResponseCookie.from(REFRESH_COOKIE, token).httpOnly(true).secure(true).sameSite("Strict").path("/api/auth").maxAge(60L * 60 * 24 * 30).build(); }
-    private ResponseCookie expiredCookie() { return ResponseCookie.from(REFRESH_COOKIE, "").httpOnly(true).secure(true).sameSite("Strict").path("/api/auth").maxAge(0).build(); }
+    private ResponseCookie refreshCookie(String token) {
+        return ResponseCookie.from(REFRESH_COOKIE, token).httpOnly(true).secure(properties.cookieSecure())
+                .sameSite("Strict").path("/api/auth").maxAge(properties.refreshTokenSeconds()).build();
+    }
+    private ResponseCookie expiredCookie() {
+        return ResponseCookie.from(REFRESH_COOKIE, "").httpOnly(true).secure(properties.cookieSecure())
+                .sameSite("Strict").path("/api/auth").maxAge(0).build();
+    }
     public record Credentials(@NotBlank @Email @Size(max = 320) String email, @NotBlank @Size(min = 12, max = 128) String password) { }
     public record SessionResponse(String accessToken, UserView user) { }
     public record UserView(java.util.UUID id, String email, boolean platformAdmin) { static UserView from(AppUser user) { return new UserView(user.getId(), user.getEmail(), user.isPlatformAdmin()); } }

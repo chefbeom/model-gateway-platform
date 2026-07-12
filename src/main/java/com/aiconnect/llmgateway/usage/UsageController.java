@@ -58,12 +58,12 @@ public class UsageController {
         return new RequestView(request.getRequestId(), service == null ? null : service.getServiceKey(),
                 service == null ? null : service.getDisplayName(), deployment == null ? null : deployment.getDisplayName(),
                 request.isStream(), request.getStatus().name(), request.getInputTokens(), request.getOutputTokens(),
-                request.getEstimatedCost(), request.getLatencyMs(), request.getFailoverCount(), request.getHttpStatus(),
+                request.getEstimatedCost(), request.getLatencyMs(), request.getFailoverCount(), request.getFinalProviderType(), request.getRoutingReason(), request.getHttpStatus(),
                 request.getErrorCode(), request.getStartedAt(), request.getCompletedAt());
     }
     public record UsageSummary(int requestCount, int inputTokens, int outputTokens, BigDecimal estimatedCost, long failedRequests, LocalDate periodFrom, LocalDate periodTo) { }
     public record RequestView(String requestId, String serviceKey, String serviceDisplayName, String deploymentDisplayName,
                               boolean stream, String status, Integer inputTokens, Integer outputTokens,
-                              BigDecimal estimatedCost, Long latencyMs, int failoverCount, Integer httpStatus,
+                              BigDecimal estimatedCost, Long latencyMs, int failoverCount, String providerType, String routingReason, Integer httpStatus,
                               String errorCode, Instant startedAt, Instant completedAt) { }
 }

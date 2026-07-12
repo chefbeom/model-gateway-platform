@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
+import CapabilityPicker from './CapabilityPicker.vue'
 import BaseModal from './BaseModal.vue'
 import { adminFetch, type AdminAuth, type Deployment, type Endpoint } from './api'
 
@@ -44,9 +45,15 @@ async function loadTargets(service: Service) {
 }
 
 async function loadDeployments() {
-  const endpoints = await adminFetch<Endpoint[]>('/api/admin/runtime-endpoints', props.auth)
-  const groups = await Promise.all(endpoints.map(endpoint => adminFetch<Deployment[]>(`/api/admin/runtime-endpoints/${endpoint.id}/deployments`, props.auth)))
-  availableDeployments.value = groups.flat().filter(item => item.enabled && item.loaded)
+  const [endpoints, providers] = await Promise.all([
+    adminFetch<Endpoint[]>('/api/admin/runtime-endpoints', props.auth),
+    adminFetch<Array<{ id: string }>>(`/api/admin/organizations/${props.organizationId}/external-providers`, props.auth)
+  ])
+  const [localGroups, externalGroups] = await Promise.all([
+    Promise.all(endpoints.map(endpoint => adminFetch<Deployment[]>(`/api/admin/runtime-endpoints/${endpoint.id}/deployments`, props.auth))),
+    Promise.all(providers.map(provider => adminFetch<Deployment[]>(`/api/admin/external-providers/${provider.id}/models`, props.auth)))
+  ])
+  availableDeployments.value = [...localGroups.flat(), ...externalGroups.flat()].filter(item => item.enabled && item.loaded !== false)
 }
 
 function openCreateService() {
@@ -151,7 +158,7 @@ async function deleteService() {
 
 function deploymentName(id: string) {
   const item = availableDeployments.value.find(candidate => candidate.id === id)
-  return item ? item.displayName : id
+  return item ? `${item.externalProviderId ? 'CLOUD · ' : ''}${item.displayName}` : id
 }
 
 watch(() => props.organizationId, () => { void load() })
@@ -177,7 +184,7 @@ onMounted(() => { void load() })
       </article>
     </div>
 
-    <BaseModal :open="serviceModal" :title="editingService ? '서비스 정책 편집' : '논리 서비스 생성'" description="실제 GPU나 모델 파일과 독립적인 API model 값을 구성합니다." @close="serviceModal = false"><div class="modal-form"><div class="form-grid"><label class="field">Service Key<input v-model.trim="serviceForm.serviceKey" :disabled="!!editingService" placeholder="text-pro" /></label><label class="field">표시 이름<input v-model.trim="serviceForm.displayName" placeholder="Text Pro" /></label></div><div class="form-grid"><label class="field">Failover 정책<select v-model="serviceForm.failoverPolicy"><option>STRICT</option><option>COMPATIBLE</option><option>DEGRADED</option></select></label><label class="field">Retry 정책<select v-model="serviceForm.retryPolicy"><option>SAFE</option><option>AGGRESSIVE</option></select></label></div><label class="field">필수 Capability<textarea v-model="serviceForm.requiredCapabilitiesJson" rows="3" placeholder='["STRUCTURED_OUTPUT"]'></textarea></label><div class="form-grid"><label class="field">입력 단가 / 1M<input v-model.number="serviceForm.inputPricePerMillion" type="number" min="0" /></label><label class="field">출력 단가 / 1M<input v-model.number="serviceForm.outputPricePerMillion" type="number" min="0" /></label></div><div class="form-grid"><label class="toggle-field"><span>Degraded 허용<small>마지막 저성능 대체 대상</small></span><input v-model="serviceForm.allowDegraded" type="checkbox" /></label><label class="toggle-field"><span>서비스 활성화<small>외부 모델 목록에 노출</small></span><input v-model="serviceForm.enabled" type="checkbox" /></label></div></div><template #footer><button class="secondary-button" @click="serviceModal = false">취소</button><button class="primary-button" :disabled="busy || !serviceForm.displayName || (!editingService && !serviceForm.serviceKey)" @click="saveService">저장</button></template></BaseModal>
+    <BaseModal :open="serviceModal" :title="editingService ? '서비스 정책 편집' : '논리 서비스 생성'" description="실제 GPU나 모델 파일과 독립적인 API model 값을 구성합니다." @close="serviceModal = false"><div class="modal-form"><div class="form-grid"><label class="field">Service Key<input v-model.trim="serviceForm.serviceKey" :disabled="!!editingService" placeholder="text-pro" /></label><label class="field">표시 이름<input v-model.trim="serviceForm.displayName" placeholder="Text Pro" /></label></div><div class="form-grid"><label class="field">Failover 정책<select v-model="serviceForm.failoverPolicy"><option>STRICT</option><option>COMPATIBLE</option><option>DEGRADED</option></select></label><label class="field">Retry 정책<select v-model="serviceForm.retryPolicy"><option>SAFE</option><option>AGGRESSIVE</option></select></label></div><CapabilityPicker v-model="serviceForm.requiredCapabilitiesJson" /><div class="form-grid"><label class="field">입력 단가 / 1M<input v-model.number="serviceForm.inputPricePerMillion" type="number" min="0" /></label><label class="field">출력 단가 / 1M<input v-model.number="serviceForm.outputPricePerMillion" type="number" min="0" /></label></div><div class="form-grid"><label class="toggle-field"><span>Degraded 허용<small>마지막 저성능 대체 대상</small></span><input v-model="serviceForm.allowDegraded" type="checkbox" /></label><label class="toggle-field"><span>서비스 활성화<small>외부 모델 목록에 노출</small></span><input v-model="serviceForm.enabled" type="checkbox" /></label></div></div><template #footer><button class="secondary-button" @click="serviceModal = false">취소</button><button class="primary-button" :disabled="busy || !serviceForm.displayName || (!editingService && !serviceForm.serviceKey)" @click="saveService">저장</button></template></BaseModal>
 
     <BaseModal :open="targetModal" :title="editingTarget ? 'Target 정책 편집' : 'Service Target 추가'" description="우선순위가 낮은 숫자부터 선택됩니다." @close="targetModal = false"><div class="modal-form"><label class="field">Deployment<select v-model="targetForm.deploymentId" :disabled="!!editingTarget"><option v-for="item in availableDeployments" :key="item.id" :value="item.id">{{ item.displayName }} · {{ item.providerModelId }}</option></select></label><div class="form-grid three"><label class="field">Priority<input v-model.number="targetForm.priority" type="number" min="1" /></label><label class="field">Weight<input v-model.number="targetForm.weight" type="number" min="1" /></label><label class="field">동시성 재정의<input v-model.number="targetForm.maxConcurrencyOverride" type="number" min="1" placeholder="선택" /></label></div><div class="form-grid"><label class="toggle-field"><span>Degraded Target</span><input v-model="targetForm.degraded" type="checkbox" /></label><label class="toggle-field"><span>Target 활성화</span><input v-model="targetForm.enabled" type="checkbox" /></label></div></div><template #footer><button class="secondary-button" @click="targetModal = false">취소</button><button class="primary-button" :disabled="busy || !targetForm.deploymentId" @click="saveTarget">Target 저장</button></template></BaseModal>
 

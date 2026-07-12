@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
@@ -24,4 +25,13 @@ public interface LlmRequestRepository extends JpaRepository<LlmRequest, UUID> {
             where r.projectId = :projectId and r.startedAt >= :from
             """)
     long sumTokensByProjectSince(@Param("projectId") UUID projectId, @Param("from") Instant from);
+
+    @Query("""
+            select coalesce(sum(r.estimatedCost), 0)
+            from LlmRequest r
+            where r.projectId = :projectId and r.finalDeploymentId in :deploymentIds and r.startedAt >= :from
+            """)
+    BigDecimal sumCostByProjectAndDeploymentsSince(@Param("projectId") UUID projectId,
+                                                   @Param("deploymentIds") Collection<UUID> deploymentIds,
+                                                   @Param("from") Instant from);
 }
