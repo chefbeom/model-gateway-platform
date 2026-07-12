@@ -41,8 +41,11 @@ public class ApiKeyService {
 
     @Transactional
     public IssuedApiKey issue(UUID projectId, String name, Instant expiresAt, UUID issuedByUserId) {
-        if (!projects.existsById(projectId)) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "PROJECT_NOT_FOUND", "The project does not exist.");
+        Project project = projects.findById(projectId)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "PROJECT_NOT_FOUND", "The project does not exist."));
+        if (!"ACTIVE".equalsIgnoreCase(project.getStatus())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "PROJECT_SUSPENDED",
+                    "This project is suspended. Resume it before issuing a new API key.");
         }
         String publicId = randomHex(8);
         String raw = PREFIX + publicId + "." + randomHex(32);

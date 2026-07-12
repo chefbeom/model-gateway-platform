@@ -1,19 +1,9 @@
 package com.aiconnect.llmgateway.portal;
 
-import com.aiconnect.llmgateway.domain.ApiKey;
-import com.aiconnect.llmgateway.domain.ApiKeyStatus;
-import com.aiconnect.llmgateway.domain.LlmService;
-import com.aiconnect.llmgateway.domain.Project;
-import com.aiconnect.llmgateway.identity.AuthPrincipal;
-import com.aiconnect.llmgateway.identity.CurrentActor;
-import com.aiconnect.llmgateway.identity.OrganizationMemberRepository;
-import com.aiconnect.llmgateway.identity.OrganizationRole;
-import com.aiconnect.llmgateway.repository.ApiKeyRepository;
-import com.aiconnect.llmgateway.repository.LlmServiceRepository;
-import com.aiconnect.llmgateway.repository.ProjectRepository;
-import com.aiconnect.llmgateway.repository.ProjectServiceAccessRepository;
-import com.aiconnect.llmgateway.service.ApiKeyService;
-import com.aiconnect.llmgateway.service.IssuedApiKey;
+import com.aiconnect.llmgateway.domain.*;
+import com.aiconnect.llmgateway.identity.*;
+import com.aiconnect.llmgateway.repository.*;
+import com.aiconnect.llmgateway.service.*;
 import com.aiconnect.llmgateway.team.TeamAccessService;
 import com.aiconnect.llmgateway.web.ApiException;
 import jakarta.validation.Valid;
@@ -21,14 +11,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
-import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.ResponseStatus;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
 import java.util.List;
@@ -88,7 +71,7 @@ public class DeveloperPortalController {
         requireOrganizationAccess(actor, organizationId);
         return projects.findByOrganizationId(organizationId).stream()
                 .filter(project -> access.canViewProject(actor, project.getId()))
-                .map(project -> ProjectView.from(project, true, modelsFor(project)))
+                .map(project -> ProjectView.from(project, "ACTIVE".equalsIgnoreCase(project.getStatus()), modelsFor(project)))
                 .toList();
     }
 
@@ -96,9 +79,7 @@ public class DeveloperPortalController {
     public List<ApiKeyView> apiKeys(@PathVariable UUID projectId) {
         AuthPrincipal actor = actor();
         requireProjectView(actor, projectId);
-        return apiKeys.findByProjectId(projectId).stream()
-                .map(key -> ApiKeyView.from(key, canManageKey(actor, key)))
-                .toList();
+        return apiKeys.findByProjectId(projectId).stream().map(key -> ApiKeyView.from(key, canManageKey(actor, key))).toList();
     }
 
     @PostMapping("/projects/{projectId}/api-keys")
@@ -112,8 +93,7 @@ public class DeveloperPortalController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void revokeApiKey(@PathVariable UUID projectId, @PathVariable UUID apiKeyId) {
         ApiKey key = managedKey(actor(), projectId, apiKeyId);
-        if (key.getStatus() != ApiKeyStatus.ACTIVE) return;
-        apiKeyService.revoke(apiKeyId);
+        if (key.getStatus() == ApiKeyStatus.ACTIVE) apiKeyService.revoke(apiKeyId);
     }
 
     @DeleteMapping("/projects/{projectId}/api-keys/{apiKeyId}/record")
@@ -125,8 +105,7 @@ public class DeveloperPortalController {
 
     private ApiKey managedKey(AuthPrincipal actor, UUID projectId, UUID apiKeyId) {
         requireProjectView(actor, projectId);
-        ApiKey key = apiKeys.findById(apiKeyId)
-                .filter(item -> item.getProjectId().equals(projectId))
+        ApiKey key = apiKeys.findById(apiKeyId).filter(item -> item.getProjectId().equals(projectId))
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "API_KEY_NOT_FOUND", "The API key does not exist in this project."));
         if (!canManageKey(actor, key)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "API_KEY_MANAGEMENT_DENIED",
@@ -150,8 +129,7 @@ public class DeveloperPortalController {
         return serviceAccess.findByIdProjectId(project.getId()).stream()
                 .map(item -> services.findById(item.getId().getServiceId()).orElse(null))
                 .filter(service -> service != null && service.isEnabled())
-                .map(ServiceView::from)
-                .toList();
+                .map(ServiceView::from).toList();
     }
 
     private AuthPrincipal actor() {
