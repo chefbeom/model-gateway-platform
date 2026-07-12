@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import BaseModal from './BaseModal.vue'
+import AuditLogPage from './AuditLogPage.vue'
 import DashboardPage from './DashboardPage.vue'
 import DeveloperPortalPage from './DeveloperPortalPage.vue'
 import DevDocsPage from './DevDocsPage.vue'
@@ -15,7 +16,7 @@ import { adminFetch, type AdminAuth, type User } from './api'
 
 type Theme = 'dark' | 'light'
 type FontScale = '100' | '115' | '125' | '135'
-type PageKey = 'dashboard' | 'infrastructure' | 'services' | 'teams' | 'projects' | 'observability' | 'usage' | 'notifications' | 'portal' | 'docs'
+type PageKey = 'dashboard' | 'infrastructure' | 'services' | 'teams' | 'projects' | 'observability' | 'usage' | 'notifications' | 'audit' | 'portal' | 'docs'
 type OrganizationRole = 'ORGANIZATION_ADMIN' | 'DEVELOPER'
 type TeamRole = 'TEAM_ADMIN' | 'PROJECT_OWNER' | 'DEVELOPER' | 'AUDITOR'
 type Organization = { id: string; name: string; status: string }
@@ -36,7 +37,8 @@ const adminNavItems: NavItem[] = [
   { id: 'projects', label: '프로젝트 & API 키', description: '프로젝트·권한·API 키', keywords: 'project key quota credential', icon: '⌘', group: '개발자 도구' },
   { id: 'observability', label: '관측성', description: '요청·장애·Failover 추적', keywords: 'request incident failover monitor', icon: '◉', group: '관측' },
   { id: 'usage', label: '사용량', description: '토큰·비용·API 호출 이력', keywords: 'usage token cost billing', icon: '◴', group: '관측' },
-  { id: 'notifications', label: '알림 채널', description: 'Discord와 Telegram 연동', keywords: 'notification discord telegram alert', icon: '◇', group: '시스템' }
+  { id: 'notifications', label: '알림 채널', description: 'Discord와 Telegram 연동', keywords: 'notification discord telegram alert', icon: '◇', group: '시스템' },
+  { id: 'audit', label: '감사 로그', description: '관리자 변경·열람 증적', keywords: 'audit log admin change security', icon: '◎', group: '시스템' }
 ]
 const developerNavItems: NavItem[] = [
   { id: 'portal', label: '내 API', description: '프로젝트·사용 모델·API 키', keywords: 'my api project model key', icon: '⌘', group: '내 작업' },
@@ -84,7 +86,7 @@ const searchResults = computed(() => {
 })
 
 function knownPage(value: string): value is PageKey {
-  return ['dashboard', 'infrastructure', 'services', 'teams', 'projects', 'observability', 'usage', 'notifications', 'portal', 'docs'].includes(value)
+  return ['dashboard', 'infrastructure', 'services', 'teams', 'projects', 'observability', 'usage', 'notifications', 'audit', 'portal', 'docs'].includes(value)
 }
 function isAllowedPage(target: PageKey) { return isAdminConsole.value || target === 'portal' || target === 'usage' || target === 'docs' }
 function fallbackPage(): PageKey { return isAdminConsole.value ? 'dashboard' : 'portal' }
@@ -206,6 +208,7 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
         <ProjectsPage v-else-if="isAdminConsole && page === 'projects'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" @organizations-changed="loadOrganizations" @organization-selected="loadOrganizations($event)" />
         <ObservabilityPage v-else-if="isAdminConsole && page === 'observability'" :organization-id="organizationId" :auth="auth" />
         <NotificationsPage v-else-if="isAdminConsole && page === 'notifications'" :organization-id="organizationId" :auth="auth" />
+        <AuditLogPage v-else-if="isAdminConsole && page === 'audit'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" />
         <UsagePage v-else-if="page === 'usage'" :organization-id="organizationId" :auth="auth" />
         <DevDocsPage v-else-if="page === 'docs'" @navigate="navigate" />
         <DeveloperPortalPage v-else :organization-id="organizationId" :auth="auth" />

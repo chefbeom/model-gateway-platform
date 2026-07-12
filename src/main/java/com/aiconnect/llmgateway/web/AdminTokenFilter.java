@@ -16,6 +16,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Map;
+import java.util.UUID;
 
 @Component
 public class AdminTokenFilter extends OncePerRequestFilter {
@@ -36,7 +37,8 @@ public class AdminTokenFilter extends OncePerRequestFilter {
         if (platformToken) request.setAttribute("aiconnect.platform-admin", true);
         filterChain.doFilter(request, response);
         if (isMutation(request) && response.getStatus() < 400) {
-            audit.record(null, CurrentActor.userIdOrNull(), "ADMIN_CONFIGURATION_CHANGED", "HTTP_ENDPOINT", null,
+            UUID organizationId = request.getAttribute("aiconnect.organization-id") instanceof UUID value ? value : null;
+            audit.record(organizationId, CurrentActor.userIdOrNull(), "ADMIN_CONFIGURATION_CHANGED", "HTTP_ENDPOINT", null,
                     Map.of("method", request.getMethod(), "path", request.getRequestURI(), "status", response.getStatus()));
         }
     }

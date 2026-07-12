@@ -58,7 +58,10 @@ public class OrganizationAuthorizationFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws IOException, ServletException {
         if (Boolean.TRUE.equals(request.getAttribute("aiconnect.platform-admin"))) {
-            filterChain.doFilter(request, response);
+            byte[] body = request.getInputStream().readAllBytes();
+            UUID organizationId = organizationFor(request.getMethod(), request.getRequestURI(), parse(body));
+            if (organizationId != null) request.setAttribute("aiconnect.organization-id", organizationId);
+            filterChain.doFilter(new BufferedBodyRequest(request, body), response);
             return;
         }
         AuthPrincipal actor = CurrentActor.principal().orElse(null);
@@ -79,6 +82,7 @@ public class OrganizationAuthorizationFilter extends OncePerRequestFilter {
         byte[] body = request.getInputStream().readAllBytes();
         JsonNode parsed = parse(body);
         UUID organizationId = organizationFor(request.getMethod(), uri, parsed);
+        if (organizationId != null) request.setAttribute("aiconnect.organization-id", organizationId);
         if (organizationId == null || !access.canViewOrganization(actor, organizationId)) {
             deny(response, "ORGANIZATION_SCOPE_REQUIRED", "This operation requires membership in the organization.");
             return;

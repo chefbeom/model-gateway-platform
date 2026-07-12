@@ -69,7 +69,7 @@ export const devDocs: DocPage[] = [
           { type: 'flow', items: [
             { label: '1', title: '사용자 애플리케이션', text: 'Gateway Base URL, API 키, 논리 모델명으로 요청' },
             { label: '2', title: 'AICONNECT Gateway', text: '인증·권한·한도 확인 후 사용할 배포 선택' },
-            { label: '3', title: 'Tailscale 사설망', text: 'Gateway와 GPU 서버 사이의 암호화된 연결' },
+            { label: '3', title: '사설망 연결', text: '현재는 Tailscale을 기본으로 사용하며 라우팅 가능한 사내망도 지원' },
             { label: '4', title: 'LM Studio Runtime', text: '실제 모델 추론 후 결과를 Gateway로 반환' }
           ] },
           { type: 'callout', tone: 'info', title: '프롬프트가 Gateway를 통과한다는 의미', text: '프롬프트와 결과는 중계를 위해 Gateway 메모리를 통과합니다. 원문을 DB에 저장하는지는 프로젝트 보관 정책(METADATA 또는 암호화 원문)에 따라 별도로 결정됩니다.' }
@@ -394,9 +394,9 @@ export const devDocs: DocPage[] = [
     ]
   },
   {
-    id: 'operations', group: '관리자 가이드', title: '사용량·관측·알림', shortTitle: '관측·알림',
-    description: '조직 전체 통계에서 이상을 찾고 요청·장애·Failover를 추적합니다.',
-    audience: '관리자', minutes: 10, icon: '◉', keywords: ['usage', 'observability', 'incident', 'discord', 'telegram', 'alert'],
+    id: 'operations', group: '관리자 가이드', title: '사용량·관측·감사·알림', shortTitle: '관측·감사',
+    description: '조직 전체 통계에서 이상을 찾고 요청·장애·Failover·관리자 변경 이력을 추적합니다.',
+    audience: '관리자', minutes: 10, icon: '◉', keywords: ['usage', 'observability', 'incident', 'audit', 'discord', 'telegram', 'alert'],
     sections: [
       {
         id: 'usage', title: '관리자 통계와 요청 추적',
@@ -415,6 +415,18 @@ export const devDocs: DocPage[] = [
         ]
       },
       {
+        id: 'audit', title: '관리자 감사 로그',
+        blocks: [
+          { type: 'paragraph', text: '감사 로그는 누가 언제 어떤 관리 작업을 수행했는지 확인하는 변경 불가 운영 증적입니다. 조직 관리자는 자신의 조직 기록만, 플랫폼 관리자는 전체 플랫폼 또는 선택 조직 기록을 조회합니다.' },
+          { type: 'steps', items: [
+            { title: '감사 로그 열기', text: '기간, 작업 이름, 리소스 유형으로 변경 이력을 좁힙니다.', action: { label: '감사 로그 열기', destination: 'audit' } },
+            { title: '실행자와 리소스 확인', text: '계정 이메일, 작업, 리소스 유형·식별자와 발생 시각을 확인합니다.' },
+            { title: '상세 JSON 확인', text: '비밀 원문 없이 저장된 변경 전후 맥락을 검토하고 사고 보고서의 Request ID와 연결합니다.' }
+          ] },
+          { type: 'callout', tone: 'danger', title: '감사 로그에 비밀값을 넣지 마세요', text: 'API 키, 비밀번호, LM Studio Token, Webhook 원문은 감사 상세에도 기록하지 않습니다.' }
+        ]
+      },
+      {
         id: 'alerts', title: 'Discord·Telegram 알림',
         blocks: [
           { type: 'checklist', items: ['운영·개발 채널 분리', 'Webhook URL·Bot Token 재노출 금지', '알림 재전송 간격으로 반복 폭주 방지', '장애와 복구 메시지를 모두 시험', '프롬프트 원문을 알림 본문에 포함하지 않기'] },
@@ -429,8 +441,8 @@ export const devDocs: DocPage[] = [
   },
   {
     id: 'security-timeout', group: '운영과 참조', title: '보안·보관·Timeout', shortTitle: '보안·Timeout',
-    description: '비밀값 경계, 프롬프트 보관, Gateway Runtime Timeout을 정리합니다.',
-    audience: '공통', minutes: 10, icon: '◆', keywords: ['security', 'retention', 'secret', 'timeout', '360000', 'backup'],
+    description: '비밀값 경계, 프롬프트 보관, Gateway Runtime Timeout과 운영 승인 기준을 정리합니다.',
+    audience: '공통', minutes: 12, icon: '◆', keywords: ['security', 'retention', 'secret', 'timeout', '360000', 'backup', 'ci', 'tls', 'production'],
     sections: [
       {
         id: 'secrets', title: '비밀값을 구분하세요',
@@ -466,7 +478,15 @@ export const devDocs: DocPage[] = [
       {
         id: 'production', title: '운영 전 체크리스트',
         blocks: [
-          { type: 'checklist', items: ['외부 Gateway HTTPS 적용', '기본 비밀번호와 운영 Secret 변경', 'LM Studio 공개 포트 차단', 'Tailnet ACL 최소 허용', '.env·API 키·Token Git 커밋 금지', 'MariaDB와 암호화 키를 함께 백업하고 복구 시험'] }
+          { type: 'steps', items: [
+            { title: '자동 품질 게이트 통과', text: 'GitHub Actions의 Backend, Frontend, Compose·이미지 빌드 작업이 모두 성공해야 합니다.' },
+            { title: '운영 비밀값 생성·검증', text: 'new-deployment-env.ps1로 새 설치의 값을 만들고 check-deployment-env.ps1로 placeholder, 중복 Secret, URL, Timeout과 인증서 파일을 검사합니다.' },
+            { title: '외부 HTTPS와 내부 포트 제한', text: '신뢰된 인증서를 적용하고 LM Studio·MariaDB·Prometheus를 외부에 공개하지 않습니다. Grafana는 기본적으로 Gateway의 localhost:3000에서만 접근합니다.' },
+            { title: '백업과 복구 시험', text: 'MariaDB뿐 아니라 API_KEY_PEPPER와 GATEWAY_ENCRYPTION_KEY를 별도로 암호화해 보관하고 격리 환경에서 복원합니다.' },
+            { title: '실제 Runtime 승인', text: '비스트리밍·SSE·관측 기록을 확인하고, 두 물리 Runtime이 준비된 경우 Primary 장애와 복귀까지 검증합니다.' }
+          ] },
+          { type: 'checklist', items: ['최종 도메인의 신뢰된 TLS 인증서', 'LM Studio Token 인증', 'GPU 호스트 방화벽과 최소 사설망 권한', '실제 Discord·Telegram 장애·복구 알림', '프롬프트 보관 정책과 관리자 열람 권한 승인'] },
+          { type: 'callout', tone: 'warning', title: '두 번째 GPU가 없으면 자동 Failover를 승인하지 마세요', text: 'Mock 검증과 실제 물리 장비 검증은 다릅니다. 두 번째 Runtime이 준비되기 전에는 단일 Runtime 운영 제한을 명시하세요.' }
         ]
       }
     ]

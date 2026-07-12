@@ -326,6 +326,40 @@ paths:
         - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
         - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
       responses: { '200': { description: Filtered request page } }
+  /api/admin/organizations/{organizationId}/audit-logs:
+    get:
+      tags: [Control plane]
+      summary: Search immutable audit events for one organization
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrganizationId' }
+        - { name: action, in: query, schema: { type: string, maxLength: 120 } }
+        - { name: resourceType, in: query, schema: { type: string, maxLength: 80 } }
+        - { name: actorUserId, in: query, schema: { type: string, format: uuid } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        '200': { description: Organization-scoped audit event page }
+        '403': { $ref: '#/components/responses/ApiError' }
+  /api/admin/audit-logs:
+    get:
+      tags: [Control plane]
+      summary: Search audit events across the platform
+      description: Platform-administrator or break-glass access only.
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters:
+        - { name: action, in: query, schema: { type: string, maxLength: 120 } }
+        - { name: resourceType, in: query, schema: { type: string, maxLength: 80 } }
+        - { name: actorUserId, in: query, schema: { type: string, format: uuid } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        '200': { description: Platform-wide audit event page }
+        '403': { $ref: '#/components/responses/ApiError' }
   /api/portal/organizations/{organizationId}/usage-overview:
     get:
       summary: Get usage derived from the authenticated user's role
