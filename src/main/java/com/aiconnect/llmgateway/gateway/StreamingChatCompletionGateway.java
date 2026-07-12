@@ -8,10 +8,12 @@ import com.aiconnect.llmgateway.repository.LlmRequestRepository;
 import com.aiconnect.llmgateway.repository.LlmServiceRepository;
 import com.aiconnect.llmgateway.repository.ProjectServiceAccessRepository;
 import com.aiconnect.llmgateway.repository.RuntimeEndpointRepository;
+import com.aiconnect.llmgateway.repository.ExternalProviderRepository;
 import com.aiconnect.llmgateway.routing.ResolvedTarget;
 import com.aiconnect.llmgateway.routing.RoutingService;
 import com.aiconnect.llmgateway.runtime.RuntimeUnavailableException;
 import com.aiconnect.llmgateway.runtime.StreamingLmStudioRuntimeClient;
+import com.aiconnect.llmgateway.runtime.StreamingOpenAiRuntimeClient;
 import com.aiconnect.llmgateway.runtime.StreamingRuntimeResult;
 import com.aiconnect.llmgateway.service.ApiKeyCredentials;
 import com.aiconnect.llmgateway.service.ApiKeyService;
@@ -37,18 +39,23 @@ public class StreamingChatCompletionGateway {
     private final ProjectServiceAccessRepository access;
     private final RoutingService routing;
     private final StreamingLmStudioRuntimeClient runtimeClient;
+    private final StreamingOpenAiRuntimeClient openAiClient;
     private final LlmRequestRepository requests;
     private final LlmRequestAttemptRepository attempts;
     private final RuntimeEndpointRepository endpoints;
+    private final ExternalProviderRepository providers;
     private final ObjectMapper objectMapper;
     private final FailoverRetryDecider retryDecider;
 
     public StreamingChatCompletionGateway(ApiKeyService apiKeyService, LlmServiceRepository services, ProjectServiceAccessRepository access,
-                                          RoutingService routing, StreamingLmStudioRuntimeClient runtimeClient, LlmRequestRepository requests,
-                                          LlmRequestAttemptRepository attempts, RuntimeEndpointRepository endpoints, ObjectMapper objectMapper,
+                                          RoutingService routing, StreamingLmStudioRuntimeClient runtimeClient,
+                                          StreamingOpenAiRuntimeClient openAiClient, LlmRequestRepository requests,
+                                          LlmRequestAttemptRepository attempts, RuntimeEndpointRepository endpoints,
+                                          ExternalProviderRepository providers, ObjectMapper objectMapper,
                                           FailoverRetryDecider retryDecider) {
         this.apiKeyService = apiKeyService; this.services = services; this.access = access; this.routing = routing;
-        this.runtimeClient = runtimeClient; this.requests = requests; this.attempts = attempts; this.endpoints = endpoints;
+        this.runtimeClient = runtimeClient; this.openAiClient = openAiClient; this.requests = requests;
+        this.attempts = attempts; this.endpoints = endpoints; this.providers = providers;
         this.objectMapper = objectMapper; this.retryDecider = retryDecider;
     }
 
@@ -65,7 +72,7 @@ public class StreamingChatCompletionGateway {
         LlmRequest audit = requests.save(new LlmRequest(requestId, credentials.project().getId(), credentials.apiKey().getId(),
                 credentials.apiKey().getIssuedByUserId(), service, true));
         int failures = 0;
-        for (ResolvedTarget candidate : routing.candidates(service, RequestCapabilityDetector.detect(request))) {
+        for (ResolvedTarget candidate : routing.candidates(service, RequestCapabilityDetector.detect(request), credentials.project().getId())) {
             if (!routing.acquire(candidate)) continue;
             Instant started = Instant.now();
             LlmRequestAttempt attempt = attempts.save(new LlmRequestAttempt(audit.getId(), candidate.deployment().getId(), failures + 1));
@@ -73,7 +80,9 @@ public class StreamingChatCompletionGateway {
                 ObjectNode proxied = request.deepCopy();
                 proxied.put("model", candidate.deployment().getProviderModelId());
                 proxied.withObject("stream_options").put("include_usage", true);
-                StreamingRuntimeResult result = runtimeClient.chatCompletion(candidate.endpoint(), proxied);
+                StreamingRuntimeResult result = candidate.external()
+                        ? openAiClient.chatCompletion(candidate.externalProvider(), proxied)
+                        : runtimeClient.chatCompletion(candidate.endpoint(), proxied);
                 if (result.statusCode() >= 200 && result.statusCode() < 300) {
                     try {
                         InputStream prefetched = StreamingResponsePrefetcher.requireFirstByte(result.body());
@@ -119,7 +128,8 @@ public class StreamingChatCompletionGateway {
     private void recordStartFailure(ResolvedTarget candidate, LlmRequestAttempt attempt, Instant started,
                                     RuntimeUnavailableException exception) {
         attempt.fail("RUNTIME_UNAVAILABLE", exception.getMessage(), elapsed(started), null); attempts.save(attempt);
-        candidate.endpoint().recordHealth(false); endpoints.save(candidate.endpoint()); routing.release(candidate);
+        recordUnhealthy(candidate);
+        routing.release(candidate);
     }
 
     private final class AuditedStream extends InputStream {
@@ -159,7 +169,13 @@ public class StreamingChatCompletionGateway {
             if (finalized) return;
             finalized = true;
             attempt.succeed(elapsed(started), statusCode); attempts.save(attempt);
-            audit.succeed(target.deployment().getId(), usage.inputTokens, usage.outputTokens, elapsed(audit.getStartedAt()), statusCode, failures); requests.save(audit);
+            int failoverCount = "AUTO_FAILOVER".equals(target.routingReason()) && failures == 0 ? 1 : failures;
+            audit.succeed(target.deployment().getId(), usage.inputTokens, usage.outputTokens,
+                    elapsed(audit.getStartedAt()), statusCode, failoverCount, target.providerType(), target.routingReason(),
+                    target.external() ? target.deployment().getProviderInputPricePerMillion() : null,
+                    target.external() ? target.deployment().getProviderOutputPricePerMillion() : null);
+            requests.save(audit);
+            if (target.external()) { target.externalProvider().recordHealth(true); providers.save(target.externalProvider()); }
             routing.release(target);
         }
         private void finalizeFailure(IOException exception) {
@@ -167,7 +183,8 @@ public class StreamingChatCompletionGateway {
             finalized = true;
             attempt.fail("STREAM_INTERRUPTED", exception.getMessage(), elapsed(started), null); attempts.save(attempt);
             audit.fail("STREAM_INTERRUPTED", 502, elapsed(audit.getStartedAt()), failures); requests.save(audit);
-            target.endpoint().recordHealth(false); endpoints.save(target.endpoint()); routing.release(target);
+            recordUnhealthy(target);
+            routing.release(target);
         }
     }
 
@@ -189,6 +206,16 @@ public class StreamingChatCompletionGateway {
                     outputTokens = Math.max(outputTokens, usage.path("completion_tokens").asInt(usage.path("output_tokens").asInt(0)));
                 } catch (Exception ignored) { }
             }
+        }
+    }
+
+    private void recordUnhealthy(ResolvedTarget candidate) {
+        if (candidate.external()) {
+            candidate.externalProvider().recordHealth(false);
+            providers.save(candidate.externalProvider());
+        } else {
+            candidate.endpoint().recordHealth(false);
+            endpoints.save(candidate.endpoint());
         }
     }
 

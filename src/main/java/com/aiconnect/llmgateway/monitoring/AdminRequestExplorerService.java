@@ -31,7 +31,7 @@ public class AdminRequestExplorerService {
         List<AttemptView> attemptViews = attempts.findAttempts(request.getId()).stream().map(AttemptView::from).toList();
         return new RequestView(request.getRequestId(), request.getProjectId(), request.getApiKeyId(), request.getServiceId(), request.getFinalDeploymentId(),
                 request.getStatus().name(), request.getInputTokens(), request.getOutputTokens(), request.getEstimatedCost(), request.getLatencyMs(),
-                request.getFailoverCount(), request.getHttpStatus(), request.getErrorCode(), request.getStartedAt(), request.getCompletedAt(), attemptViews);
+                request.getFailoverCount(), request.getFinalProviderType(), request.getRoutingReason(), request.getHttpStatus(), request.getErrorCode(), request.getStartedAt(), request.getCompletedAt(), attemptViews);
     }
     private RequestStatus parseStatus(String status) {
         if (status == null || status.isBlank()) return null;
@@ -41,7 +41,7 @@ public class AdminRequestExplorerService {
     public record PageResult(List<RequestView> items, int page, int size, long totalElements, int totalPages) { }
     public record RequestView(String requestId, UUID projectId, UUID apiKeyId, UUID serviceId, UUID finalDeploymentId, String status,
                               Integer inputTokens, Integer outputTokens, java.math.BigDecimal estimatedCost, Long latencyMs, int failoverCount,
-                              Integer httpStatus, String errorCode, Instant startedAt, Instant completedAt, List<AttemptView> attempts) { }
+                              String providerType, String routingReason, Integer httpStatus, String errorCode, Instant startedAt, Instant completedAt, List<AttemptView> attempts) { }
     public record AttemptView(UUID deploymentId, int attemptNumber, String status, Instant startedAt, Instant completedAt, Long latencyMs,
                               Integer httpStatus, String errorType, String errorMessage, boolean responseStarted) {
         static AttemptView from(RequestAttemptQueryRepository.AttemptProjection item) { return new AttemptView(item.getDeploymentId(), item.getAttemptNumber(), item.getStatus(), item.getStartedAt(), item.getCompletedAt(), item.getLatencyMs(), item.getHttpStatus(), item.getErrorType(), item.getErrorMessage(), item.isResponseStarted()); }

@@ -25,6 +25,8 @@ public class LlmRequest {
     @Column(columnDefinition = "char(36)") private UUID apiKeyIssuerUserId;
     @Column(nullable = false, columnDefinition = "char(36)") private UUID serviceId;
     @Column(columnDefinition = "char(36)") private UUID finalDeploymentId;
+    @Column(length = 40) private String finalProviderType;
+    @Column(length = 60) private String routingReason;
     @Column(nullable = false, length = 120) private String endpoint;
     @Column(nullable = false, length = 60) private String requestType;
     @Column(nullable = false) private boolean stream;
@@ -62,7 +64,17 @@ public class LlmRequest {
     }
 
     public void succeed(UUID deploymentId, int inputTokens, int outputTokens, long latencyMs, int httpStatus, int failoverCount) {
+        succeed(deploymentId, inputTokens, outputTokens, latencyMs, httpStatus, failoverCount, "LOCAL", "LOCAL", null, null);
+    }
+
+    public void succeed(UUID deploymentId, int inputTokens, int outputTokens, long latencyMs, int httpStatus,
+                        int failoverCount, String providerType, String routingReason,
+                        BigDecimal providerInputPrice, BigDecimal providerOutputPrice) {
         this.finalDeploymentId = deploymentId;
+        this.finalProviderType = providerType;
+        this.routingReason = routingReason;
+        if (providerInputPrice != null) this.inputUnitPrice = providerInputPrice;
+        if (providerOutputPrice != null) this.outputUnitPrice = providerOutputPrice;
         this.inputTokens = inputTokens;
         this.outputTokens = outputTokens;
         this.latencyMs = latencyMs;
@@ -70,7 +82,8 @@ public class LlmRequest {
         this.failoverCount = failoverCount;
         this.status = RequestStatus.SUCCEEDED;
         this.completedAt = Instant.now();
-        this.estimatedCost = inputUnitPrice.multiply(BigDecimal.valueOf(inputTokens)).add(outputUnitPrice.multiply(BigDecimal.valueOf(outputTokens))).movePointLeft(6);
+        this.estimatedCost = inputUnitPrice.multiply(BigDecimal.valueOf(inputTokens))
+                .add(outputUnitPrice.multiply(BigDecimal.valueOf(outputTokens))).movePointLeft(6);
     }
 
     public void fail(String errorCode, int httpStatus, long latencyMs, int failoverCount) {
@@ -89,6 +102,8 @@ public class LlmRequest {
     public UUID getApiKeyIssuerUserId() { return apiKeyIssuerUserId; }
     public UUID getServiceId() { return serviceId; }
     public UUID getFinalDeploymentId() { return finalDeploymentId; }
+    public String getFinalProviderType() { return finalProviderType; }
+    public String getRoutingReason() { return routingReason; }
     public boolean isStream() { return stream; }
     public RequestStatus getStatus() { return status; }
     public Integer getInputTokens() { return inputTokens; }

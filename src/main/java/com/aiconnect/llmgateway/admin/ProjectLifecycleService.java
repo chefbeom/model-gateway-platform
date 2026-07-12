@@ -103,6 +103,7 @@ public class ProjectLifecycleService {
         executeDelete("delete from project_alert_policy where project_id = :projectId", projectId);
         executeDelete("delete from project_content_policy where project_id = :projectId", projectId);
         executeDelete("delete from project_quota where project_id = :projectId", projectId);
+        executeDelete("delete from project_external_access where project_id = :projectId", projectId);
         executeDelete("delete from project_service_access where project_id = :projectId", projectId);
         executeDelete("delete from api_key where project_id = :projectId", projectId);
         executeDelete("delete from project where id = :projectId", projectId);
