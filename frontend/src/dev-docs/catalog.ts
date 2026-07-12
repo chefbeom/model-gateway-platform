@@ -465,12 +465,15 @@ export const devDocs: DocPage[] = [
         ]
       },
       {
-        id: 'timeouts', title: 'Gateway Runtime Timeout',
+        id: 'timeouts', title: 'Gateway Timeout과 Health Check',
         blocks: [
           { type: 'table', columns: ['환경 변수', '기본값', '의미'], rows: [
             ['RUNTIME_CONNECT_TIMEOUT_MS', '3,000ms', 'LM Studio 연결 시작 대기'],
-            ['RUNTIME_RESPONSE_TIMEOUT_MS', '360,000ms', '연결 후 추론 완료 대기']
+            ['RUNTIME_RESPONSE_TIMEOUT_MS', '360,000ms', '연결 후 추론 완료 대기'],
+            ['HEALTH_CHECK_INITIAL_DELAY_MS', '30,000ms', 'Gateway 시작 후 첫 상태 검사까지 대기'],
+            ['HEALTH_CHECK_DELAY_MS', '30,000ms', '상태 검사 완료 후 다음 검사까지 간격']
           ] },
+          { type: 'callout', tone: 'info', title: '첫 Health Check는 30초 후 실행됩니다', text: 'Gateway와 LM Studio가 시작되는 동안 오판하지 않도록 최초 검사를 30초 지연합니다. 이후에는 HEALTH_CHECK_DELAY_MS 간격으로 반복합니다.' },
           { type: 'callout', tone: 'info', title: '현재는 Gateway 공통 설정입니다', text: 'docker-compose/.env의 환경 변수로 모든 Runtime에 공통 적용됩니다. Endpoint별 Timeout UI는 아직 제공하지 않습니다.' },
           { type: 'callout', tone: 'warning', title: '가장 짧은 제한이 실제 제한입니다', text: 'Gateway가 360초를 기다려도 호출 앱이나 프록시가 120초에 연결을 끊으면 결과를 받을 수 없습니다. 클라이언트·Nginx·Gateway 제한을 함께 확인하세요.' }
         ]

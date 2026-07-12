@@ -18,5 +18,6 @@ gateway:
   api-key-pepper: integration-pepper
   encryption-key: integration-encryption-key
   health-check-delay-ms: 3600000
+  health-check-initial-delay-ms: 3600000
   connect-timeout-ms: 1000
   response-timeout-ms: 1000

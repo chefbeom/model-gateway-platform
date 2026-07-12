@@ -36,6 +36,7 @@ gateway:
   admin-token: ${ADMIN_API_TOKEN:change-me-before-production}
   api-key-pepper: ${API_KEY_PEPPER:change-me-before-production}
   health-check-delay-ms: ${HEALTH_CHECK_DELAY_MS:30000}
+  health-check-initial-delay-ms: ${HEALTH_CHECK_INITIAL_DELAY_MS:30000}
   connect-timeout-ms: ${RUNTIME_CONNECT_TIMEOUT_MS:3000}
   # Keep this longer than a caller's own response timeout. Local GPU inference
   # can take several minutes for long, non-streaming completions.

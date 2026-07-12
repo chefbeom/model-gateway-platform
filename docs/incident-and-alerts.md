@@ -61,11 +61,12 @@ Compose passes the following optional settings to the API container:
 
 ```text
 HEALTH_CHECK_DELAY_MS=30000
+HEALTH_CHECK_INITIAL_DELAY_MS=30000
 RUNTIME_CONNECT_TIMEOUT_MS=3000
 RUNTIME_RESPONSE_TIMEOUT_MS=360000
 ```
 
-The defaults are appropriate for normal operation. Lower values can be supplied for an isolated rehearsal, but overly aggressive production checks may create noise during model loading or temporary network congestion.
+The first health check waits `HEALTH_CHECK_INITIAL_DELAY_MS` (30 seconds by default), then repeats at `HEALTH_CHECK_DELAY_MS`. This startup grace prevents a Runtime from being marked unhealthy while the Gateway and model server are still becoming ready. Lower values can be supplied for an isolated rehearsal, but overly aggressive production checks may create noise during model loading or temporary network congestion.
 
 ## Executed Compose rehearsal
 
