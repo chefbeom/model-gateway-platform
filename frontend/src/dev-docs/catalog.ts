@@ -55,6 +55,7 @@ export const devDocs: DocPage[] = [
         id: 'what-is-aiconnect', title: 'AICONNECT가 하는 일',
         blocks: [
           { type: 'paragraph', text: 'AICONNECT는 GPU나 모델을 직접 실행하는 프로그램이 아닙니다. 이미 준비된 LM Studio Runtime을 등록하고, 인증·권한·논리 모델·라우팅·사용량·장애 대응을 중앙에서 관리하는 Control Plane 겸 API Gateway입니다.' },
+          { type: 'callout', tone: 'success', title: '현재 문서 기준: 2026. 07. 13.', text: 'Standalone 자동 설치, 역할별 사용량 범위, 외부 OpenAI Provider 승인·수동 사용·선택형 자동 Failover까지 현재 main 브랜치 구현을 기준으로 정리했습니다.' },
           { type: 'cards', items: [
             { label: 'CONTROL', title: '관리', text: '조직, 팀, 사용자, 프로젝트, API 키, Runtime과 논리 서비스를 구성합니다.' },
             { label: 'GATEWAY', title: '중계', text: '사용자 요청과 모델 응답을 중계하고 실제 모델 ID를 외부에서 숨깁니다.' },
@@ -195,6 +196,17 @@ export const devDocs: DocPage[] = [
           ] },
           { type: 'callout', tone: 'warning', title: '먼저 폐기하고 교체하세요', text: '키 삭제는 보안 사고의 첫 조치가 아닙니다. 활성 키를 즉시 폐기하고 새 키로 교체한 뒤, 필요할 때 폐기 기록을 정리합니다.' }
         ]
+      },
+      {
+        id: 'usage-scope', title: '역할에 따라 보이는 사용량 범위',
+        blocks: [
+          { type: 'table', columns: ['역할', '기본 조회 범위', 'API 키 원문 필요'], rows: [
+            ['일반 개발자', '본인이 발급한 API 키의 요청·토큰·비용', '불필요'],
+            ['프로젝트 소유자 / 팀 관리자', '담당 프로젝트의 전체 API 키 사용량', '불필요'],
+            ['조직 / 플랫폼 관리자', '허용된 조직 전체와 프로젝트·서비스·배포별 통계', '불필요']
+          ] },
+          { type: 'callout', tone: 'info', title: '사용량 화면에 API 키를 입력하지 않습니다', text: '로그인 세션과 역할을 기준으로 서버가 조회 범위를 결정합니다. API 키는 외부 애플리케이션의 /v1 호출에만 사용합니다.' }
+        ]
       }
     ]
   },
@@ -220,6 +232,18 @@ export const devDocs: DocPage[] = [
           { type: 'code', language: 'bash', title: 'GET /v1/models', code: `curl "https://ai.company.example/v1/models" \\
   -H "Authorization: Bearer $AICONNECT_API_KEY"` },
           { type: 'paragraph', text: '응답의 data[].id 값만 chat/completions의 model로 사용합니다. 여기에는 실제 LM Studio 모델 ID가 아니라 프로젝트에 허용된 논리 서비스 키가 표시됩니다.' }
+        ]
+      },
+      {
+        id: 'supported-endpoints', title: '현재 지원하는 OpenAI 호환 범위',
+        blocks: [
+          { type: 'table', columns: ['Endpoint', '지원', '설명'], rows: [
+            ['GET /v1/models', '지원', '프로젝트에 허용된 논리 서비스 목록'],
+            ['POST /v1/chat/completions', '지원', 'JSON 응답과 stream: true SSE 중계'],
+            ['POST /v1/responses', '미지원', '현재 Gateway 공개 API에 없음'],
+            ['POST /v1/embeddings', '미지원', '현재 Gateway 공개 API에 없음']
+          ] },
+          { type: 'callout', tone: 'info', title: '응답의 X-Request-Id를 보관하세요', text: 'Chat Completions 응답 헤더의 X-Request-Id는 관측성 화면에서 실제 Deployment, Attempt, Failover와 오류를 찾는 기준입니다.' }
         ]
       },
       {
@@ -510,6 +534,12 @@ export const devDocs: DocPage[] = [
       ] },
       { id: 'standalone', title: 'Linux VM Standalone 빠른 설치', blocks: [
         { type: 'paragraph', text: '전용 Linux VM에 Docker와 Tailscale을 먼저 설치하고 GPU 서버와 같은 Tailnet에 연결합니다. Linux 실행 파일은 .bat가 아니라 quickstart_standalone.sh입니다.' },
+        { type: 'table', columns: ['항목', '권장 기준', '이유'], rows: [
+          ['운영체제', 'Ubuntu 22.04 LTS 이상', 'Docker 공식 저장소와 자동 설치 검증 기준'],
+          ['CPU / 메모리', '4 vCPU / 8 GB 이상', 'Gateway·MariaDB·관측 스택 동시 실행'],
+          ['디스크', '40 GB 이상', '이미지 빌드, DB, Prometheus와 로그 여유 공간']
+        ] },
+        { type: 'callout', tone: 'info', title: '빈 Ubuntu 자동 설치를 실제 검증했습니다', text: 'fullsetting 스크립트는 Docker Engine·Compose·Tailscale을 설치하고 AICONNECT를 기동합니다. apt/dpkg 잠금은 최대 600초 대기하고 실패 시 10초 간격으로 세 번 재시도합니다.' },
         { type: 'code', language: 'bash', title: 'GitHub에서 다운로드', code: 'wget -O aiconnect.tar.gz \\\n  https://github.com/chefbeom/model-gateway-platform/archive/refs/heads/main.tar.gz\ntar -xzf aiconnect.tar.gz\ncd model-gateway-platform-main\nchmod +x quickstart_standalone.sh' },
         { type: 'code', language: 'bash', title: 'Docker와 Tailscale도 없는 빈 VM', code: 'chmod +x deploy/fullsetting_quickstart_standingalone.sh\n./deploy/fullsetting_quickstart_standingalone.sh\nsudo tailscale up\n./quickstart_standalone.sh' },
         { type: 'callout', tone: 'info', title: 'Tailscale 인증은 자동화하지 않습니다', text: '전체 설정 파일은 Docker 공식 저장소, Compose v2, Tailscale stable 패키지와 AICONNECT 로컬 배포까지 진행합니다. 사용자가 sudo tailscale up으로 인증한 뒤 일반 Quickstart를 다시 실행하면 Tailnet HTTPS와 Base URL이 완성됩니다.' },
@@ -523,6 +553,8 @@ export const devDocs: DocPage[] = [
         ] },
         { type: 'code', language: 'bash', title: 'LM Studio 경로까지 검사', code: 'AICONNECT_LM_STUDIO_URL=http://100.92.170.22:1234 \\\n  ./quickstart_standalone.sh' },
         { type: 'code', language: 'bash', title: '신뢰된 사내 LAN에서 직접 접속', code: 'AICONNECT_LAN_IP=192.168.35.101 \\\n  ./quickstart_standalone.sh --lan\n# 관리 화면: http://192.168.35.101\n# OpenAI Base URL: http://192.168.35.101/v1' },
+        { type: 'code', language: 'bash', title: '설치 직후 상태 점검', code: 'docker compose ps\ncurl -fsS http://127.0.0.1/actuator/health/readiness\ncurl -i http://127.0.0.1/v1/models\ntailscale status' },
+        { type: 'callout', tone: 'success', title: 'LAN 모드는 실제 접속 주소로 최초 관리자를 생성합니다', text: '--lan 실행 시 127.0.0.1이 아니라 AICONNECT_LAN_IP로 지정한 URL을 사용해 Bootstrap합니다. 내부 PC에서는 출력된 관리 화면과 /v1 Base URL을 그대로 사용합니다.' },
         { type: 'callout', tone: 'warning', title: 'LAN HTTP 모드는 인터넷에 공개하면 안 됩니다', text: '--lan은 HTTP 로그인을 위해 AUTH_COOKIE_SECURE=false를 설정하고 Nginx를 지정한 내부 IP에 바인딩합니다. 신뢰된 사내 대역만 방화벽으로 허용하고 외부 공개 시에는 HTTPS와 Secure Cookie로 복귀하세요.' },
         { type: 'callout', tone: 'warning', title: '일반 HTTP Tailscale IP로 로그인하지 마세요', text: 'Refresh Cookie는 Secure입니다. 스크립트가 출력하는 https://<host>.<tailnet>.ts.net 주소를 사용해야 로그인 갱신이 정상 동작합니다.' },
         { type: 'callout', tone: 'warning', title: '.env를 잃어버리면 새로 만들지 마세요', text: '기존 MariaDB와 다른 API_KEY_PEPPER 또는 GATEWAY_ENCRYPTION_KEY를 사용하면 API 키 인증과 저장된 Token 복호화가 깨집니다. VM 밖의 암호화 저장소에서 원래 파일을 복원하세요.' },

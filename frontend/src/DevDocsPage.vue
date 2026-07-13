@@ -49,39 +49,51 @@ function scrollToSection(id: string) {
 
 <template>
   <section ref="articleTop" class="docs-site">
-    <header class="docs-toolbar surface-card">
-      <div class="docs-brand"><span>?</span><div><strong>AICONNECT Dev-Docs</strong><small>사용자와 관리자를 위한 제품 문서</small></div></div>
+    <header class="docs-page-hero">
+      <div>
+        <p class="docs-eyebrow">KNOWLEDGE BASE</p>
+        <h1>Dev-Docs</h1>
+        <p>AICONNECT를 처음 연결하는 개발자부터 인프라를 운영하는 관리자까지, 현재 제품 흐름을 한곳에서 확인합니다.</p>
+      </div>
+      <div class="docs-page-meta">
+        <span><small>문서 기준</small><strong>2026. 07. 13.</strong></span>
+        <span><small>현재 문서</small><strong>{{ documents.length }}개</strong></span>
+        <a href="https://lmstudio.ai/docs/developer" target="_blank" rel="noreferrer">LM Studio 개발자 문서 ↗</a>
+      </div>
+    </header>
+
+    <section class="docs-controls surface-card" aria-label="문서 검색과 대상 필터">
       <div class="docs-search">
         <span>⌕</span>
-        <input v-model="query" aria-label="문서 검색" placeholder="API 키, Runtime, Timeout 검색" />
+        <input v-model="query" aria-label="문서 검색" placeholder="API 키, Runtime, 외부 AI, 배포 명령어 검색" />
         <kbd>DOCS</kbd>
         <div v-if="query.trim()" class="search-results">
-          <button v-for="item in results" :key="item.id" @click="selectDoc(item.id)"><span>{{ item.icon }}</span><div><strong>{{ item.title }}</strong><small>{{ item.description }}</small></div><b>↵</b></button>
+          <button v-for="item in results" :key="item.id" @click="selectDoc(item.id)"><span>{{ item.icon }}</span><div><strong>{{ item.title }}</strong><small>{{ item.description }}</small></div><b>→</b></button>
           <p v-if="!results.length">일치하는 문서가 없습니다.</p>
         </div>
       </div>
-      <a href="https://lmstudio.ai/docs/developer" target="_blank" rel="noreferrer">LM Studio Docs ↗</a>
-    </header>
-
-    <div class="audience-bar">
-      <span>문서 대상</span>
-      <button v-for="item in (['전체', '사용자', '관리자'] as const)" :key="item" :class="{ active: audience === item }" @click="audience = item">{{ item }}</button>
-      <i></i>
-      <small>총 {{ documents.length }}개 문서 · 현재 구현 기준</small>
-    </div>
+      <div class="audience-bar">
+        <span>문서 대상</span>
+        <button v-for="item in (['전체', '사용자', '관리자'] as const)" :key="item" :class="{ active: audience === item }" @click="audience = item">{{ item }}</button>
+        <i></i>
+        <small>기능 설명 · 설정 예시 · 운영 점검을 현재 구현 기준으로 제공합니다.</small>
+      </div>
+    </section>
 
     <div class="docs-layout">
-      <aside class="docs-sidebar">
+      <aside class="docs-sidebar surface-card">
+        <div class="docs-rail-title"><span>&lt;/&gt;</span><div><strong>문서 탐색</strong><small>{{ audience }} 대상</small></div></div>
         <nav aria-label="Dev-Docs 문서 목록">
           <section v-for="group in docGroups" :key="group">
             <p>{{ group }}</p>
             <button v-for="doc in docsForGroup(group)" :key="doc.id" :class="{ active: activePage.id === doc.id }" @click="selectDoc(doc.id)">
               <span>{{ doc.icon }}</span>
               <div><strong>{{ doc.shortTitle }}</strong><small>{{ doc.audience }} · {{ doc.minutes }}분</small></div>
+              <i></i>
             </button>
           </section>
         </nav>
-        <div class="sidebar-help"><span>i</span><p><strong>문서 유지 원칙</strong><small>새 기능은 관련 문서를 수정하고, 누적 공지 형태로 추가하지 않습니다.</small></p></div>
+        <div class="sidebar-help"><span>i</span><p><strong>문서 유지 원칙</strong><small>새 기능, 설정 변경, 운영 절차는 관련 문서에 반영하고 현재 동작만 남깁니다.</small></p></div>
       </aside>
 
       <main class="docs-main">
@@ -93,7 +105,7 @@ function scrollToSection(id: string) {
         </footer>
       </main>
 
-      <aside class="page-toc">
+      <aside class="page-toc surface-card">
         <p>이 페이지에서</p>
         <button v-for="(section, index) in activePage.sections" :key="section.id" @click="scrollToSection(section.id)"><span>{{ String(index + 1).padStart(2, '0') }}</span>{{ section.title }}</button>
         <div><strong>문서를 찾지 못했나요?</strong><small>오류 코드, 화면 이름 또는 설정 필드명으로 검색해 보세요.</small></div>
@@ -103,5 +115,77 @@ function scrollToSection(id: string) {
 </template>
 
 <style scoped>
-.docs-site{display:grid;gap:15px;max-width:1780px;margin:0 auto}.docs-toolbar{position:sticky;z-index:12;top:0;display:grid;grid-template-columns:auto minmax(260px,620px) auto;gap:18px;align-items:center;padding:12px 15px;border-radius:16px}.docs-brand{display:flex;gap:10px;align-items:center;min-width:220px}.docs-brand>span{width:34px;height:34px;display:grid;place-items:center;border:1px solid var(--accent-border);border-radius:10px;background:var(--accent-dim);color:var(--accent-strong);font-weight:900}.docs-brand strong,.docs-brand small{display:block}.docs-brand strong{font-size:12px}.docs-brand small{margin-top:2px;color:var(--muted);font-size:8px}.docs-search{position:relative;display:grid;grid-template-columns:18px 1fr auto;gap:7px;align-items:center;padding:0 11px;border:1px solid var(--border);border-radius:11px;background:var(--surface-2)}.docs-search>span{color:var(--muted)}.docs-search input{height:37px;border:0;outline:0;background:transparent;color:var(--text);font-size:10px}.docs-search kbd{padding:3px 5px;border:1px solid var(--border);border-radius:5px;color:var(--faint);font-size:7px}.search-results{position:absolute;z-index:20;top:44px;right:0;left:0;overflow:hidden;padding:6px;border:1px solid var(--border);border-radius:13px;background:var(--surface);box-shadow:0 18px 50px rgba(0,0,0,.16)}.search-results button{width:100%;display:grid;grid-template-columns:28px 1fr auto;gap:9px;align-items:center;padding:10px;border:0;border-radius:9px;background:transparent;color:var(--text);text-align:left}.search-results button:hover{background:var(--accent-dim)}.search-results button>span{color:var(--accent-strong);font-weight:900}.search-results strong,.search-results small{display:block}.search-results strong{font-size:10px}.search-results small{margin-top:3px;overflow:hidden;color:var(--muted);font-size:8px;text-overflow:ellipsis;white-space:nowrap}.search-results b{color:var(--faint);font-size:9px}.search-results p{margin:0;padding:15px;color:var(--muted);font-size:10px;text-align:center}.docs-toolbar>a{color:var(--accent-strong);font-size:9px;font-weight:800;text-decoration:none}.audience-bar{display:flex;align-items:center;gap:7px;padding:0 5px}.audience-bar>span{margin-right:4px;color:var(--muted);font-size:9px;font-weight:800}.audience-bar button{padding:6px 10px;border:1px solid var(--border);border-radius:999px;background:var(--surface);color:var(--muted);font-size:9px;font-weight:800}.audience-bar button.active{border-color:var(--accent-border);background:var(--accent-dim);color:var(--accent-strong)}.audience-bar i{flex:1}.audience-bar small{color:var(--faint);font-size:8px}.docs-layout{display:grid;grid-template-columns:215px minmax(0,1fr) 190px;gap:25px;align-items:start}.docs-sidebar,.page-toc{position:sticky;top:77px;max-height:calc(100vh - 95px);overflow:auto}.docs-sidebar nav{display:grid;gap:17px}.docs-sidebar nav section>p,.page-toc>p{margin:0 0 7px;padding:0 9px;color:var(--faint);font-size:8px;font-weight:900;letter-spacing:.12em;text-transform:uppercase}.docs-sidebar nav button{width:100%;display:grid;grid-template-columns:27px 1fr;gap:9px;align-items:center;padding:8px;border:0;border-radius:10px;background:transparent;color:var(--muted);text-align:left}.docs-sidebar nav button:hover,.docs-sidebar nav button.active{background:var(--accent-dim);color:var(--text)}.docs-sidebar nav button>span{width:27px;height:27px;display:grid;place-items:center;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--accent-strong);font-size:9px;font-weight:900}.docs-sidebar strong,.docs-sidebar small{display:block}.docs-sidebar strong{font-size:10px}.docs-sidebar small{margin-top:3px;color:var(--faint);font-size:8px}.sidebar-help{display:grid;grid-template-columns:25px 1fr;gap:9px;margin-top:20px;padding:11px;border:1px solid var(--accent-border);border-radius:11px;background:var(--accent-dim)}.sidebar-help>span{width:23px;height:23px;display:grid;place-items:center;border-radius:7px;background:var(--surface);color:var(--accent-strong);font-size:9px;font-weight:900}.sidebar-help p{margin:0}.sidebar-help strong,.sidebar-help small{display:block}.sidebar-help strong{font-size:9px}.sidebar-help small{margin-top:4px;color:var(--muted);font-size:8px;line-height:1.55}.docs-main{min-width:0}.page-toc{display:grid;gap:3px}.page-toc button{display:grid;grid-template-columns:25px 1fr;gap:5px;padding:7px 9px;border:0;border-left:1px solid var(--border);background:transparent;color:var(--muted);font-size:9px;line-height:1.35;text-align:left}.page-toc button:hover{border-left-color:var(--accent);color:var(--text)}.page-toc button span{color:var(--faint);font-size:8px}.page-toc>div{margin-top:17px;padding:12px;border:1px solid var(--border);border-radius:11px;background:var(--surface-2)}.page-toc strong,.page-toc small{display:block}.page-toc strong{font-size:9px}.page-toc small{margin-top:5px;color:var(--muted);font-size:8px;line-height:1.55}.article-pagination{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:12px;padding-top:18px;border-top:1px solid var(--border)}.article-pagination button{display:grid;gap:4px;padding:14px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--text);text-align:left}.article-pagination button:hover{border-color:var(--accent-border);background:var(--accent-dim)}.article-pagination button.next{text-align:right}.article-pagination span{color:var(--muted);font-size:8px}.article-pagination strong{font-size:11px}@media(max-width:1180px){.docs-layout{grid-template-columns:200px minmax(0,1fr)}.page-toc{display:none}.docs-toolbar{grid-template-columns:auto 1fr}.docs-toolbar>a{display:none}}@media(max-width:780px){.docs-toolbar{position:static;grid-template-columns:1fr}.docs-brand{min-width:0}.docs-layout{grid-template-columns:1fr}.docs-sidebar{position:static;max-height:none;overflow:visible}.docs-sidebar nav{grid-template-columns:repeat(2,minmax(0,1fr))}.docs-sidebar nav section{min-width:0}.docs-main{grid-row:2}.audience-bar small{display:none}}@media(max-width:520px){.docs-sidebar nav{grid-template-columns:1fr}.audience-bar>span{display:none}}
+.docs-site { width: 100%; display: grid; gap: 22px; animation: docs-in .28s ease both; }
+@keyframes docs-in { from { opacity: 0; transform: translateY(5px); } }
+.docs-page-hero { min-height: 116px; display: flex; justify-content: space-between; align-items: flex-start; gap: 34px; }
+.docs-eyebrow { margin: 0 0 10px; color: var(--accent-strong); font-size: 9px; font-weight: 900; letter-spacing: .18em; }
+.docs-page-hero h1 { margin: 0 0 10px; font-size: clamp(32px, 3.4vw, 46px); letter-spacing: -.05em; }
+.docs-page-hero > div:first-child > p:last-child { max-width: 760px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.docs-page-meta { display: flex; align-items: stretch; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.docs-page-meta > span, .docs-page-meta > a { min-height: 52px; padding: 10px 13px; display: grid; align-content: center; gap: 4px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); text-decoration: none; }
+.docs-page-meta small { color: var(--faint); font-size: 8px; font-weight: 800; letter-spacing: .08em; }
+.docs-page-meta strong, .docs-page-meta a { color: var(--text); font-size: 10px; }
+.docs-page-meta a { color: var(--accent-strong); font-weight: 800; }
+.docs-controls { padding: 14px; display: grid; grid-template-columns: minmax(320px, 1.3fr) minmax(460px, 1fr); gap: 14px; align-items: center; box-shadow: none; }
+.docs-search { position: relative; display: grid; grid-template-columns: 18px 1fr auto; gap: 9px; align-items: center; padding: 0 12px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-2); }
+.docs-search > span { color: var(--accent-strong); }
+.docs-search input { height: 42px; min-height: 42px; padding: 0; border: 0; outline: 0; background: transparent; box-shadow: none; color: var(--text); font-size: 11px; }
+.docs-search kbd { padding: 3px 5px; border: 1px solid var(--border); border-radius: 5px; color: var(--faint); font-size: 7px; }
+.search-results { position: absolute; z-index: 20; top: 49px; right: 0; left: 0; overflow: hidden; padding: 6px; border: 1px solid var(--border); border-radius: 13px; background: var(--surface); box-shadow: var(--shadow); }
+.search-results button { width: 100%; display: grid; grid-template-columns: 30px 1fr auto; gap: 9px; align-items: center; padding: 10px; border: 0; border-radius: 9px; background: transparent; color: var(--text); text-align: left; }
+.search-results button:hover { background: var(--accent-dim); }
+.search-results button > span { color: var(--accent-strong); font-weight: 900; }
+.search-results strong, .search-results small { display: block; }
+.search-results strong { font-size: 10px; }
+.search-results small { margin-top: 3px; overflow: hidden; color: var(--muted); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.search-results b { color: var(--faint); font-size: 10px; }
+.search-results p { margin: 0; padding: 15px; color: var(--muted); font-size: 10px; text-align: center; }
+.audience-bar { min-width: 0; display: flex; align-items: center; gap: 7px; }
+.audience-bar > span { margin-right: 3px; color: var(--muted); font-size: 9px; font-weight: 800; }
+.audience-bar button { padding: 7px 11px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: 9px; font-weight: 800; }
+.audience-bar button.active { border-color: var(--accent-border); background: var(--accent-dim); color: var(--accent-strong); }
+.audience-bar i { flex: 1; }
+.audience-bar small { max-width: 235px; color: var(--faint); font-size: 8px; line-height: 1.5; }
+.docs-layout { display: grid; grid-template-columns: 230px minmax(0, 1fr) 210px; gap: 22px; align-items: start; }
+.docs-sidebar, .page-toc { position: sticky; top: 92px; max-height: calc(100vh - 116px); overflow: auto; box-shadow: none; }
+.docs-sidebar { padding: 13px; }
+.docs-rail-title { min-height: 54px; margin-bottom: 12px; padding: 7px 8px 13px; display: grid; grid-template-columns: 31px 1fr; gap: 9px; align-items: center; border-bottom: 1px solid var(--border); }
+.docs-rail-title > span { width: 31px; height: 31px; display: grid; place-items: center; border: 1px solid var(--accent-border); border-radius: 9px; background: var(--accent-dim); color: var(--accent-strong); font-size: 9px; font-weight: 900; }
+.docs-rail-title strong, .docs-rail-title small { display: block; }
+.docs-rail-title strong { font-size: 11px; }
+.docs-rail-title small { margin-top: 3px; color: var(--faint); font-size: 8px; }
+.docs-sidebar nav { display: grid; gap: 17px; }
+.docs-sidebar nav section > p, .page-toc > p { margin: 0 0 7px; padding: 0 8px; color: var(--faint); font-size: 8px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; }
+.docs-sidebar nav button { position: relative; width: 100%; min-height: 48px; display: grid; grid-template-columns: 29px 1fr 3px; gap: 9px; align-items: center; padding: 8px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); text-align: left; }
+.docs-sidebar nav button:hover, .docs-sidebar nav button.active { background: var(--accent-dim); color: var(--text); }
+.docs-sidebar nav button > span { width: 29px; height: 29px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--accent-strong); font-size: 9px; font-weight: 900; }
+.docs-sidebar nav button > i { height: 0; border-radius: 3px; background: var(--accent-strong); transition: height .18s; }
+.docs-sidebar nav button.active > i { height: 21px; box-shadow: 0 0 12px var(--accent-strong); }
+.docs-sidebar strong, .docs-sidebar small { display: block; }
+.docs-sidebar strong { font-size: 10px; }
+.docs-sidebar small { margin-top: 3px; color: var(--faint); font-size: 8px; }
+.sidebar-help { display: grid; grid-template-columns: 25px 1fr; gap: 9px; margin-top: 18px; padding: 11px; border: 1px solid var(--accent-border); border-radius: 11px; background: var(--accent-dim); }
+.sidebar-help > span { width: 23px; height: 23px; display: grid; place-items: center; border-radius: 7px; background: var(--surface); color: var(--accent-strong); font-size: 9px; font-weight: 900; }
+.sidebar-help p { margin: 0; }
+.sidebar-help strong, .sidebar-help small { display: block; }
+.sidebar-help strong { font-size: 9px; }
+.sidebar-help small { margin-top: 4px; color: var(--muted); font-size: 8px; line-height: 1.55; }
+.docs-main { min-width: 0; }
+.page-toc { display: grid; gap: 3px; padding: 16px 13px; }
+.page-toc button { display: grid; grid-template-columns: 25px 1fr; gap: 5px; padding: 8px 9px; border: 0; border-left: 1px solid var(--border); background: transparent; color: var(--muted); font-size: 9px; line-height: 1.4; text-align: left; }
+.page-toc button:hover { border-left-color: var(--accent); color: var(--text); }
+.page-toc button span { color: var(--faint); font-size: 8px; }
+.page-toc > div { margin-top: 15px; padding: 12px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-2); }
+.page-toc strong, .page-toc small { display: block; }
+.page-toc strong { font-size: 9px; }
+.page-toc small { margin-top: 5px; color: var(--muted); font-size: 8px; line-height: 1.55; }
+.article-pagination { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 12px; padding-top: 18px; border-top: 1px solid var(--border); }
+.article-pagination button { display: grid; gap: 4px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); text-align: left; }
+.article-pagination button:hover { border-color: var(--accent-border); background: var(--accent-dim); }
+.article-pagination button.next { text-align: right; }
+.article-pagination span { color: var(--muted); font-size: 8px; }
+.article-pagination strong { font-size: 11px; }
+@media (max-width: 1260px) { .docs-layout { grid-template-columns: 220px minmax(0, 1fr); } .page-toc { display: none; } .docs-controls { grid-template-columns: 1fr; } }
+@media (max-width: 860px) { .docs-page-hero { display: grid; } .docs-page-meta { justify-content: flex-start; } .docs-layout { grid-template-columns: 1fr; } .docs-sidebar { position: static; max-height: none; overflow: visible; } .docs-sidebar nav { grid-template-columns: repeat(2, minmax(0, 1fr)); } .docs-main { grid-row: 2; } .audience-bar small { display: none; } }
+@media (max-width: 560px) { .docs-sidebar nav { grid-template-columns: 1fr; } .audience-bar > span { display: none; } .docs-page-meta > span { flex: 1; } .docs-page-meta > a { width: 100%; } }
 </style>

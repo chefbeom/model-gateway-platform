@@ -46,7 +46,7 @@ const developerNavItems: NavItem[] = [
   { id: 'portal', label: '내 API', description: '프로젝트·사용 모델·API 키', keywords: 'my api project model key', icon: '⌘', group: '내 작업' },
   { id: 'usage', label: 'API 사용량', description: '내 API 키의 토큰·비용·요청', keywords: 'usage token cost request', icon: '◴', group: '내 작업' }
 ]
-const docsItem = { id: 'docs' as const, label: 'Dev-Docs', description: '처음부터 따라 하는 사용 설명서', keywords: 'docs manual guide api lm studio' }
+const docsItem = { id: 'docs' as const, label: 'Dev-Docs', description: '제품 가이드 · API 참조', keywords: 'docs manual guide api lm studio' }
 const fontScaleOptions: Array<{ value: FontScale; label: string; description: string }> = [
   { value: '100', label: '기본', description: '100%' }, { value: '115', label: '권장', description: '115%' },
   { value: '125', label: '크게', description: '125%' }, { value: '135', label: '매우 크게', description: '135%' }
@@ -187,7 +187,14 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
       <div class="sidebar-brand"><span class="brand-mark"><i></i><i></i><i></i></span><span><strong>AICONNECT</strong><small>LLM CONTROL PLANE</small></span></div>
       <div class="scope-card"><span>WORKSPACE</span><select :value="organizationId" @change="selectOrganization(($event.target as HTMLSelectElement).value)"><option value="">조직 선택</option><option v-for="organization in organizations" :key="organization.id" :value="organization.id">{{ organization.name }} · {{ organization.status }}</option></select><small>{{ currentOrganization?.name ?? '배정된 조직을 선택하세요.' }}</small></div>
       <nav class="side-nav" aria-label="주요 기능"><section v-for="group in groups" :key="group" class="nav-group"><p>{{ group }}</p><button v-for="item in navItems.filter(nav => nav.group === group)" :key="item.id" :class="{ active: page === item.id }" @click="navigate(item.id)"><span class="nav-icon">{{ item.icon }}</span><span><strong>{{ item.label }}</strong><small>{{ item.description }}</small></span><i></i></button></section></nav>
-      <button class="sidebar-doc-link" :class="{ active: page === 'docs' }" @click="navigate('docs')"><span>?</span><span><strong>Dev-Docs</strong><small>처음부터 따라 하는 사용 설명서</small></span><b>›</b></button>
+      <div class="sidebar-support">
+        <p>도움말</p>
+        <button class="sidebar-doc-link" :class="{ active: page === 'docs' }" @click="navigate('docs')">
+          <span class="nav-icon docs-nav-icon">&lt;/&gt;</span>
+          <span><strong>Dev-Docs</strong><small>제품 가이드 · API 참조</small></span>
+          <i></i>
+        </button>
+      </div>
       <div class="sidebar-foot"><span class="live-dot"></span><div><strong>Gateway online</strong><small>Tailscale private mesh</small></div></div>
     </aside>
 
