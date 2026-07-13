@@ -49,7 +49,7 @@ async function loadModels() {
   models.value = selectedId.value ? await adminFetch<ProviderModel[]>(`/api/admin/external-providers/${selectedId.value}/models`, props.auth) : []
 }
 async function createProvider() {
-  if (!providerForm.value.displayName || !providerForm.value.apiKey) return
+  if (!props.organizationId || !providerForm.value.displayName || !providerForm.value.apiKey) return
   busy.value = true
   try {
     const created = await adminFetch<Provider>('/api/admin/external-providers', props.auth, { method: 'POST', body: JSON.stringify({ organizationId: props.organizationId, ...providerForm.value }) })
@@ -137,8 +137,9 @@ onMounted(() => { void load() })
 
 <template>
   <section class="page-stack external-page">
-    <div class="page-hero"><div><p class="eyebrow">EXTERNAL AI PROVIDERS</p><h1>외부 AI</h1><p>OpenAI API Key를 암호화해 등록하고, 프로젝트의 요청을 승인한 경우에만 수동 사용 또는 자동 Failover를 허용합니다.</p></div><div class="hero-actions"><button class="secondary-button" :disabled="busy" @click="load">새로고침</button><button class="primary-button" @click="providerOpen = true">+ OpenAI 연결</button></div></div>
+    <div class="page-hero"><div><p class="eyebrow">EXTERNAL AI PROVIDERS</p><h1>외부 AI</h1><p>OpenAI API Key를 암호화해 등록하고, 프로젝트의 요청을 승인한 경우에만 수동 사용 또는 자동 Failover를 허용합니다.</p></div><div class="hero-actions"><button class="secondary-button" :disabled="busy" @click="load">새로고침</button><button class="primary-button" :disabled="!organizationId" @click="providerOpen = true">+ OpenAI 연결</button></div></div>
     <p v-if="message" class="inline-alert">{{ message }}</p>
+    <div v-if="!organizationId" class="workspace-required"><span>WORKSPACE REQUIRED</span><div><strong>워크스페이스를 먼저 선택하세요</strong><p>외부 API Key, 사용 비용과 프로젝트 권한은 선택한 워크스페이스에 귀속됩니다.</p></div></div>
 
     <div class="external-layout">
       <article class="surface-card provider-list"><header class="card-header"><div><span class="card-kicker">PROVIDERS</span><h2>연결된 외부 API</h2></div><span class="count-badge">{{ providers.length }}</span></header><div v-if="providers.length" class="provider-items"><button v-for="item in providers" :key="item.id" :class="{ active: selectedId === item.id }" @click="selectedId = item.id"><span class="live-dot" :class="item.healthStatus.toLowerCase()"></span><span><b>{{ item.displayName }}</b><small>{{ item.providerType }} · {{ item.healthStatus }}</small></span><i>{{ item.enabled ? 'ON' : 'OFF' }}</i></button></div><div v-else class="empty-state compact"><span>◇</span><p>등록된 외부 Provider가 없습니다.</p></div></article>

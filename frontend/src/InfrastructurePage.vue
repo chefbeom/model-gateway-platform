@@ -170,6 +170,7 @@ onMounted(load)
   <section class="page-stack">
     <div class="page-hero"><div><p class="eyebrow">COMPUTE FABRIC</p><h1>인프라와 모델 운영</h1><p>GPU 종류와 관계없이 Tailscale에서 접근 가능한 LM Studio Runtime을 연결하고, Endpoint·모델·라우팅 준비 상태를 관리합니다.</p></div><div class="hero-actions"><button class="secondary-button" :disabled="busy" @click="load()">새로고침</button><button class="primary-button" :disabled="!organizationId" @click="createOpen = true">+ Runtime 연결</button></div></div>
     <p v-if="message" class="inline-alert">{{ message }}</p>
+    <div v-if="!organizationId" class="workspace-required"><span>WORKSPACE REQUIRED</span><div><strong>워크스페이스를 먼저 선택하세요</strong><p>GPU 노드, Runtime Endpoint와 발견된 모델은 선택한 워크스페이스의 인프라로 관리됩니다.</p></div></div>
     <div class="split-layout infrastructure-layout">
       <article class="surface-card list-panel">
         <header class="card-header"><div><span class="card-kicker">RUNTIME ENDPOINTS</span><h2>연결된 Runtime</h2></div><span class="count-badge">{{ endpoints.length }}</span></header>

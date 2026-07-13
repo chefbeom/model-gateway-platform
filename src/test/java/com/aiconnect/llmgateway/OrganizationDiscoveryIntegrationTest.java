@@ -47,7 +47,7 @@ class OrganizationDiscoveryIntegrationTest {
                 "{\"email\":\"scoped-admin@example.com\",\"password\":\"correct-horse-battery-staple\"}");
 
         mvc.perform(get("/api/admin/organizations").header("Authorization", "Bearer " + platformToken))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(2));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(3));
         mvc.perform(get("/api/admin/organizations").header("Authorization", "Bearer " + scopedToken))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
                 .andExpect(jsonPath("$[0].id").value(firstOrganization));

@@ -1,5 +1,6 @@
 package com.aiconnect.llmgateway.identity;
 
+import com.aiconnect.llmgateway.domain.Organization;
 import com.aiconnect.llmgateway.repository.OrganizationRepository;
 import com.aiconnect.llmgateway.web.ApiException;
 import org.springframework.http.HttpStatus;
@@ -18,6 +19,7 @@ import java.util.UUID;
 @Service
 public class IdentityService {
     private static final SecureRandom RANDOM = new SecureRandom();
+    static final String DEFAULT_WORKSPACE_NAME = "Default Workspace";
     private final AppUserRepository users;
     private final OrganizationRepository organizations;
     private final OrganizationMemberRepository members;
@@ -34,7 +36,11 @@ public class IdentityService {
     @Transactional
     public AppUser bootstrap(String email, String password) {
         if (users.count() != 0) throw new ApiException(HttpStatus.CONFLICT, "BOOTSTRAP_ALREADY_COMPLETED", "The first platform administrator already exists.");
-        return users.save(new AppUser(email, passwordEncoder.encode(password), true));
+        AppUser administrator = users.save(new AppUser(email, passwordEncoder.encode(password), true));
+        Organization workspace = organizations.findByName(DEFAULT_WORKSPACE_NAME)
+                .orElseGet(() -> organizations.save(new Organization(DEFAULT_WORKSPACE_NAME)));
+        members.save(new OrganizationMember(workspace.getId(), administrator.getId(), OrganizationRole.ORGANIZATION_ADMIN));
+        return administrator;
     }
     @Transactional
     public AppUser createUser(String email, String password, boolean platformAdmin) {

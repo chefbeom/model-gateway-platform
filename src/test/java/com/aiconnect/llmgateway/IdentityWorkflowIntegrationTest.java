@@ -14,6 +14,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.cookie;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest
@@ -34,6 +35,16 @@ class IdentityWorkflowIntegrationTest {
 
         mvc.perform(get("/api/admin/overview").header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk());
+
+        mvc.perform(get("/api/admin/organizations").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].name").value("Default Workspace"));
+        mvc.perform(get("/api/portal/session").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.platformAdmin").value(true))
+                .andExpect(jsonPath("$.memberships.length()").value(1))
+                .andExpect(jsonPath("$.memberships[0].role").value("ORGANIZATION_ADMIN"));
 
         mvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isOk()).andExpect(cookie().httpOnly("aiconnect_refresh", true));

@@ -285,7 +285,8 @@ export const devDocs: DocPage[] = [
         id: 'build-order', title: '권장 구축 순서',
         blocks: [
           { type: 'steps', items: [
-            { title: '조직과 팀·부서 생성', text: '회사를 조직으로, 비용과 책임을 나눌 부서를 팀으로 만듭니다.', action: { label: '팀과 부서 열기', destination: 'teams' } },
+            { title: '기본 워크스페이스 확인', text: '최초 관리자 부트스트랩에서 Default Workspace가 자동 생성·선택됩니다. 여러 조직을 운영할 때만 추가 조직을 만들고 전환합니다.' },
+            { title: '팀·부서 생성', text: '비용과 책임을 나눌 부서를 팀으로 만들고 기본 워크스페이스에 배치합니다.', action: { label: '팀과 부서 열기', destination: 'teams' } },
             { title: '사용자와 역할 배정', text: '조직 관리자, 팀 관리자, 프로젝트 소유자, 개발자를 최소 권한으로 배정합니다.' },
             { title: 'LM Studio Runtime 등록', text: 'Tailscale에서 접근 가능한 Endpoint를 등록하고 모델을 동기화합니다.', action: { label: '인프라 열기', destination: 'infrastructure' } },
             { title: '논리 서비스와 Target 구성', text: '외부에 공개할 model 키와 실제 배포의 우선순위를 연결합니다.', action: { label: 'LLM 서비스 열기', destination: 'services' } },
@@ -333,6 +334,7 @@ export const devDocs: DocPage[] = [
       {
         id: 'register', title: 'Endpoint 등록과 동기화',
         blocks: [
+          { type: 'callout', tone: 'info', title: '워크스페이스가 소유 단위입니다', text: 'GPU 노드와 Runtime Endpoint는 선택한 워크스페이스에 귀속됩니다. 선택된 워크스페이스가 없으면 등록 버튼이 비활성화됩니다.' },
           { type: 'steps', items: [
             { title: 'Runtime 연결', text: '노드 이름, LM Studio Base URL과 선택적 API Token을 입력합니다.', action: { label: '인프라 열기', destination: 'infrastructure' } },
             { title: '연결 확인', text: 'Gateway가 LM Studio native /api/v1/models에 접근할 수 있는지 검사합니다.' },
@@ -601,6 +603,7 @@ export const devDocs: DocPage[] = [
       {
         id: 'external-setup', title: '관리자 설정 순서',
         blocks: [
+          { type: 'callout', tone: 'info', title: '외부 AI도 워크스페이스 자원입니다', text: '외부 API Key, 비용과 프로젝트 권한은 선택한 워크스페이스에 귀속됩니다. GPU Runtime과 동일하게 워크스페이스 선택 후 등록합니다.' },
           { type: 'steps', items: [
             { title: 'Provider 등록', text: '외부 AI에서 표시 이름, OpenAI 호환 Base URL, API 키를 등록합니다.', action: { label: '외부 AI 열기', destination: 'external' } },
             { title: '연결 확인', text: '저장된 자격 증명으로 Provider 인증과 네트워크 상태를 검사합니다.' },
