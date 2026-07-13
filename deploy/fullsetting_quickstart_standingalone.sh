@@ -5,6 +5,21 @@ log() { printf '\n[AICONNECT-FULL] %s\n' "$*"; }
 warn() { printf '\n[AICONNECT-FULL][WARN] %s\n' "$*" >&2; }
 die() { printf '\n[AICONNECT-FULL][ERROR] %s\n' "$*" >&2; exit 1; }
 
+APT_LOCK_TIMEOUT_SECONDS="${AICONNECT_APT_LOCK_TIMEOUT_SECONDS:-600}"
+apt_get() {
+  local attempt
+  for attempt in 1 2 3; do
+    if apt-get -o "DPkg::Lock::Timeout=${APT_LOCK_TIMEOUT_SECONDS}" "$@"; then
+      return 0
+    fi
+    if ((attempt < 3)); then
+      warn "apt failed due to a package lock or transient network error. Retrying in 10 seconds. (${attempt}/3)"
+      sleep 10
+    fi
+  done
+  return 1
+}
+
 if ((EUID != 0)); then
   exec sudo -E bash "$0" "$@"
 fi
@@ -30,8 +45,8 @@ architecture="$(dpkg --print-architecture)"
 
 export DEBIAN_FRONTEND=noninteractive
 log "기본 패키지를 설치합니다."
-apt-get update
-apt-get install -y ca-certificates curl wget git openssl gnupg tar
+apt_get update
+apt_get install -y ca-certificates curl wget git openssl gnupg tar
 
 install_docker() {
   log "Docker 공식 APT 저장소에서 Engine, Buildx, Compose v2를 설치합니다."
@@ -43,7 +58,7 @@ install_docker() {
     fi
   done
   if ((${#conflicts[@]} > 0)); then
-    apt-get remove -y "${conflicts[@]}"
+    apt_get remove -y "${conflicts[@]}"
   fi
 
   install -m 0755 -d /etc/apt/keyrings
@@ -58,8 +73,8 @@ install_docker() {
     'Signed-By: /etc/apt/keyrings/docker.asc' \
     >/etc/apt/sources.list.d/docker.sources
 
-  apt-get update
-  apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  apt_get update
+  apt_get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 }
 
 if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
@@ -81,8 +96,8 @@ install_tailscale() {
     -o /usr/share/keyrings/tailscale-archive-keyring.gpg
   curl -fsSL "https://pkgs.tailscale.com/stable/ubuntu/${ubuntu_codename}.tailscale-keyring.list" \
     -o /etc/apt/sources.list.d/tailscale.list
-  apt-get update
-  apt-get install -y tailscale
+  apt_get update
+  apt_get install -y tailscale
 }
 
 if ! command -v tailscale >/dev/null 2>&1; then

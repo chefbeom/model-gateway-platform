@@ -253,7 +253,11 @@ curl -fsS "$serve_url" >/dev/null
 
 if ((bootstrap_requested == 1)); then
   payload="$(printf '{\"email\":\"%s\",\"password\":\"%s\"}' "$(json_escape "$admin_email")" "$(json_escape "$admin_password")")"
-  if ! bootstrap_code="$(curl -sS -o "$bootstrap_response_file" -w '%{http_code}' -H 'Content-Type: application/json' --data-binary "$payload" http://127.0.0.1/api/auth/bootstrap)"; then
+  bootstrap_url="http://127.0.0.1/api/auth/bootstrap"
+  if ((LAN_MODE == 1)); then
+    bootstrap_url="${serve_url}/api/auth/bootstrap"
+  fi
+  if ! bootstrap_code="$(curl -sS -o "$bootstrap_response_file" -w '%{http_code}' -H 'Content-Type: application/json' --data-binary "$payload" "$bootstrap_url")"; then
     die "최초 관리자 생성 요청을 전송하지 못했습니다."
   fi
   case "$bootstrap_code" in
