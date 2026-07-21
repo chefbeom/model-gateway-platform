@@ -1,6 +1,7 @@
 package com.aiconnect.llmgateway.node;
 
 import com.aiconnect.llmgateway.domain.AcceleratorDevice;
+import com.aiconnect.llmgateway.domain.InferenceNode;
 import com.aiconnect.llmgateway.identity.AuditService;
 import com.aiconnect.llmgateway.identity.CurrentActor;
 import com.aiconnect.llmgateway.repository.AcceleratorDeviceRepository;
