@@ -21,13 +21,14 @@ const endpointDeleteOpen = ref(false)
 const acceleratorOpen = ref(false)
 const deploymentOpen = ref(false)
 const editing = ref<Deployment | null>(null)
+const editingAccelerator = ref<Accelerator | null>(null)
 const endpointDetail = ref<EndpointDetail | null>(null)
-const runtime = ref({ nodeName: '', description: '', baseUrl: 'http://gpu-node-01:1234', apiToken: '' })
-const endpointForm = ref({ baseUrl: '', enabled: true, apiToken: '', clearApiToken: false })
+const runtime = ref({ nodeName: '', runtimeName: '', description: '', baseUrl: 'http://gpu-node-01:1234', apiToken: '' })
+const endpointForm = ref({ displayName: '', baseUrl: '', enabled: true, apiToken: '', clearApiToken: false })
 const accelerator = ref({ vendor: '', productName: '', deviceIndex: 0, deviceUuid: '', memoryTotalMb: null as number | null, driverVersion: '' })
 
 function healthClass(value?: string) { return (value ?? 'unknown').toLowerCase() }
-function endpointLabel(endpoint: Endpoint) { return endpoint.baseUrl.replace(/^https?:\/\//, '') }
+function endpointLabel(endpoint: Endpoint) { return endpoint.displayName || endpoint.baseUrl.replace(/^https?:\/\//, '') }
 
 async function selectEndpoint(endpoint: Endpoint) {
   selected.value = endpoint
@@ -43,7 +44,7 @@ async function load(preferredId?: string) {
   busy.value = true
   message.value = ''
   try {
-    endpoints.value = await adminFetch<Endpoint[]>('/api/admin/runtime-endpoints', props.auth)
+    endpoints.value = await adminFetch<Endpoint[]>(`/api/admin/organizations/${props.organizationId}/runtime-endpoints`, props.auth)
     const next = endpoints.value.find(item => item.id === (preferredId ?? selected.value?.id)) ?? endpoints.value[0] ?? null
     selected.value = next
     if (next) await selectEndpoint(next)
@@ -58,8 +59,8 @@ async function createRuntime() {
   message.value = ''
   try {
     const node = await adminFetch<{ id: string }>('/api/admin/nodes', props.auth, { method: 'POST', body: JSON.stringify({ organizationId: props.organizationId, name: runtime.value.nodeName, description: runtime.value.description || null, connectionMode: 'DIRECT', labelsJson: '{"source":"console"}' }) })
-    const endpoint = await adminFetch<Endpoint>('/api/admin/runtime-endpoints', props.auth, { method: 'POST', body: JSON.stringify({ nodeId: node.id, runtimeType: 'LM_STUDIO', baseUrl: runtime.value.baseUrl, apiToken: runtime.value.apiToken || null }) })
-    runtime.value = { nodeName: '', description: '', baseUrl: 'http://gpu-node-01:1234', apiToken: '' }
+    const endpoint = await adminFetch<Endpoint>('/api/admin/runtime-endpoints', props.auth, { method: 'POST', body: JSON.stringify({ nodeId: node.id, displayName: runtime.value.runtimeName || runtime.value.nodeName, runtimeType: 'LM_STUDIO', baseUrl: runtime.value.baseUrl, apiToken: runtime.value.apiToken || null }) })
+    runtime.value = { nodeName: '', runtimeName: '', description: '', baseUrl: 'http://gpu-node-01:1234', apiToken: '' }
     createOpen.value = false
     message.value = 'LM Studio Runtime을 등록했습니다. 연결 확인 후 모델을 동기화하세요.'
     await load(endpoint.id)
@@ -97,7 +98,7 @@ async function openEndpointSettings(endpoint = selected.value) {
   message.value = ''
   try {
     endpointDetail.value = await adminFetch<EndpointDetail>(`/api/admin/runtime-endpoints/${endpoint.id}`, props.auth)
-    endpointForm.value = { baseUrl: endpointDetail.value.baseUrl, enabled: endpointDetail.value.enabled, apiToken: '', clearApiToken: false }
+    endpointForm.value = { displayName: endpointDetail.value.displayName, baseUrl: endpointDetail.value.baseUrl, enabled: endpointDetail.value.enabled, apiToken: '', clearApiToken: false }
     endpointSettingsOpen.value = true
   } catch (error) { message.value = error instanceof Error ? error.message : 'Endpoint 정보를 불러오지 못했습니다.' }
   finally { busy.value = false }
@@ -132,20 +133,36 @@ async function archiveEndpoint() {
   finally { busy.value = false }
 }
 
-async function registerAccelerator() {
+async function saveAccelerator() {
   if (!selected.value) return
   busy.value = true
   try {
-    await adminFetch(`/api/admin/nodes/${selected.value.nodeId}/accelerators`, props.auth, { method: 'POST', body: JSON.stringify({ vendor: accelerator.value.vendor || null, productName: accelerator.value.productName || null, deviceIndex: accelerator.value.deviceIndex, deviceUuid: accelerator.value.deviceUuid || null, memoryTotalMb: accelerator.value.memoryTotalMb || null, driverVersion: accelerator.value.driverVersion || null, metadataJson: '{}' }) })
+    const path = `/api/admin/nodes/${selected.value.nodeId}/accelerators${editingAccelerator.value ? `/${editingAccelerator.value.id}` : ''}`
+    await adminFetch(path, props.auth, { method: editingAccelerator.value ? 'PATCH' : 'POST', body: JSON.stringify({ vendor: accelerator.value.vendor || null, productName: accelerator.value.productName || null, deviceIndex: accelerator.value.deviceIndex, deviceUuid: accelerator.value.deviceUuid || null, memoryTotalMb: accelerator.value.memoryTotalMb || null, driverVersion: accelerator.value.driverVersion || null, metadataJson: '{}' }) })
     acceleratorOpen.value = false
-    message.value = 'Accelerator 정보를 등록했습니다.'
+    message.value = editingAccelerator.value ? 'GPU 인벤토리 정보를 수정했습니다.' : 'GPU 인벤토리 정보를 추가했습니다.'
+    editingAccelerator.value = null
     await selectEndpoint(selected.value)
   } catch (error) { message.value = error instanceof Error ? error.message : 'Accelerator 등록에 실패했습니다.' }
   finally { busy.value = false }
 }
 
-function openAccelerator() {
-  accelerator.value = { vendor: '', productName: '', deviceIndex: accelerators.value.length, deviceUuid: '', memoryTotalMb: null, driverVersion: '' }
+async function deleteAccelerator(device: Accelerator) {
+  if (!selected.value || !window.confirm(`${device.productName || '이 GPU'} 인벤토리를 삭제할까요?`)) return
+  busy.value = true
+  try {
+    await adminFetch(`/api/admin/nodes/${selected.value.nodeId}/accelerators/${device.id}`, props.auth, { method: 'DELETE' })
+    message.value = 'GPU 인벤토리를 삭제했습니다.'
+    await selectEndpoint(selected.value)
+  } catch (error) { message.value = error instanceof Error ? error.message : 'GPU 인벤토리 삭제에 실패했습니다.' }
+  finally { busy.value = false }
+}
+async function registerAccelerator() { await saveAccelerator() }
+
+function openAccelerator(device?: Accelerator | Event) {
+  const selectedDevice = device instanceof Event ? undefined : device
+  editingAccelerator.value = selectedDevice ?? null
+  accelerator.value = selectedDevice ? { vendor: selectedDevice.vendor ?? '', productName: selectedDevice.productName ?? '', deviceIndex: selectedDevice.deviceIndex, deviceUuid: selectedDevice.deviceUuid ?? '', memoryTotalMb: selectedDevice.memoryTotalMb ?? null, driverVersion: selectedDevice.driverVersion ?? '' } : { vendor: '', productName: '', deviceIndex: accelerators.value.length, deviceUuid: '', memoryTotalMb: null, driverVersion: '' }
   acceleratorOpen.value = true
 }
 
@@ -182,6 +199,7 @@ onMounted(load)
           <header class="detail-header"><div><span class="status-chip" :class="healthClass(selected.healthStatus)"><i></i>{{ selected.healthStatus }}</span><h2>{{ selected.baseUrl }}</h2><p>{{ selected.runtimeType }} · 마지막 확인 {{ selected.lastCheckedAt ? new Date(selected.lastCheckedAt).toLocaleString() : '기록 없음' }}</p></div><div class="action-menu"><button class="secondary-button" :disabled="busy" @click="openEndpointSettings()">Endpoint 설정</button><button class="secondary-button" :disabled="busy" @click="action('probe')">연결 확인</button><button class="secondary-button" :disabled="busy" @click="action('sync-models')">모델 동기화</button><button class="ghost-button" :disabled="busy" @click="action(selected.healthStatus === 'DRAINING' ? 'resume' : 'drain')">{{ selected.healthStatus === 'DRAINING' ? '복구 재투입' : 'Drain' }}</button></div></header>
           <div class="section-divider"><span>ACCELERATOR INVENTORY</span><button class="text-button" @click="openAccelerator">+ 장치 등록</button></div>
           <div v-if="accelerators.length" class="hardware-strip"><article v-for="device in accelerators" :key="device.id" class="accelerator-card"><span class="accelerator-index">{{ device.deviceIndex }}</span><div><span class="card-kicker">{{ device.vendor || 'UNKNOWN VENDOR' }}</span><h3>{{ device.productName || '이름 없는 Accelerator' }}</h3><p>{{ device.memoryTotalMb ? `${device.memoryTotalMb.toLocaleString()} MB` : '메모리 정보 없음' }} · {{ device.driverVersion || '드라이버 정보 없음' }}</p></div><small class="mono">{{ device.deviceUuid || device.id }}</small></article></div>
+          <div v-if="accelerators.length" class="hardware-actions"><span>Hardware inventory is optional metadata. It does not change routing capacity automatically.</span><div><button v-for="device in accelerators" :key="`${device.id}-actions`" class="text-button" :disabled="busy" @click="openAccelerator(device)">Edit {{ device.deviceIndex }}</button><button v-for="device in accelerators" :key="`${device.id}-delete`" class="danger-text-button" :disabled="busy" @click="deleteAccelerator(device)">Delete {{ device.deviceIndex }}</button></div></div>
           <div v-else class="hardware-empty"><span>GPU 정보는 선택 항목입니다.</span><p>Endpoint와 모델 운영은 GPU 메타데이터 없이도 정상 동작합니다.</p><button class="text-button" @click="openAccelerator">인벤토리 추가</button></div>
           <div class="section-divider"><span>DISCOVERED MODEL DEPLOYMENTS</span><b>{{ deployments.length }}</b></div>
           <div v-if="deployments.length" class="deployment-grid"><button v-for="deployment in deployments" :key="deployment.id" class="deployment-card" @click="openDeployment(deployment)"><div class="deployment-top"><span class="model-cube">◈</span><span class="status-chip tiny" :class="healthClass(deployment.healthStatus)">{{ deployment.loaded ? 'LOADED' : deployment.healthStatus }}</span></div><strong>{{ deployment.displayName }}</strong><small class="mono">{{ deployment.providerModelId }}</small><dl><div><dt>Context</dt><dd>{{ deployment.contextLength?.toLocaleString() ?? '-' }}</dd></div><div><dt>동시 요청</dt><dd>{{ deployment.maxConcurrency }}</dd></div><div><dt>양자화</dt><dd>{{ deployment.quantization ?? '-' }}</dd></div></dl><span class="capability-line">{{ deployment.capabilitiesJson }}</span></button></div>

@@ -20,6 +20,7 @@ import java.util.UUID;
 public class RuntimeEndpoint {
     @Id @GeneratedValue(strategy = GenerationType.UUID) @Column(columnDefinition = "char(36)") private UUID id;
     @Column(nullable = false, columnDefinition = "char(36)") private UUID nodeId;
+    @Column(nullable = false, length = 160) private String displayName;
     @Enumerated(EnumType.STRING) @Column(nullable = false, length = 40) private RuntimeType runtimeType;
     @Column(nullable = false, length = 500) private String baseUrl;
     @Column(columnDefinition = "text") private String encryptedApiToken;
@@ -36,16 +37,21 @@ public class RuntimeEndpoint {
 
     protected RuntimeEndpoint() { }
 
-    public RuntimeEndpoint(UUID nodeId, RuntimeType runtimeType, String baseUrl, String apiToken) {
+    public RuntimeEndpoint(UUID nodeId, String displayName, RuntimeType runtimeType, String baseUrl, String apiToken) {
         this.nodeId = nodeId;
+        this.displayName = displayName == null || displayName.isBlank() ? "LM Studio Runtime" : displayName.trim();
         this.runtimeType = runtimeType;
         this.baseUrl = stripTrailingSlash(baseUrl);
         this.encryptedApiToken = apiToken;
     }
+    public RuntimeEndpoint(UUID nodeId, RuntimeType runtimeType, String baseUrl, String apiToken) {
+        this(nodeId, "LM Studio Runtime", runtimeType, baseUrl, apiToken);
+    }
 
     private static String stripTrailingSlash(String value) { return value.replaceAll("/+$", ""); }
 
-    public void configure(String baseUrl, String encryptedApiToken, boolean replaceApiToken, boolean clearApiToken, Boolean enabled) {
+    public void configure(String displayName, String baseUrl, String encryptedApiToken, boolean replaceApiToken, boolean clearApiToken, Boolean enabled) {
+        if (displayName != null && !displayName.isBlank()) this.displayName = displayName.trim();
         if (baseUrl != null && !baseUrl.isBlank()) this.baseUrl = stripTrailingSlash(baseUrl);
         if (clearApiToken) this.encryptedApiToken = null;
         else if (replaceApiToken) this.encryptedApiToken = encryptedApiToken;
@@ -94,6 +100,7 @@ public class RuntimeEndpoint {
     @PreUpdate void updateTimestamp() { updatedAt = Instant.now(); }
     public UUID getId() { return id; }
     public UUID getNodeId() { return nodeId; }
+    public String getDisplayName() { return displayName; }
     public RuntimeType getRuntimeType() { return runtimeType; }
     public String getBaseUrl() { return baseUrl; }
     public String getApiToken() { return encryptedApiToken; }

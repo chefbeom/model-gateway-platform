@@ -27,6 +27,16 @@ public class AcceleratorDevice {
     @PreUpdate void updateTimestamp() { updatedAt = Instant.now(); }
     public UUID getId() { return id; }
     public UUID getNodeId() { return nodeId; }
+    public void configure(String vendor, String productName, int deviceIndex, String deviceUuid, Integer memoryTotalMb, String driverVersion, String metadataJson) {
+        this.vendor = vendor;
+        this.productName = productName;
+        this.deviceIndex = deviceIndex;
+        this.deviceUuid = deviceUuid;
+        this.memoryTotalMb = memoryTotalMb;
+        this.driverVersion = driverVersion;
+        this.metadataJson = metadataJson;
+        this.lastSeenAt = Instant.now();
+    }
     public String getVendor() { return vendor; }
     public String getProductName() { return productName; }
     public int getDeviceIndex() { return deviceIndex; }

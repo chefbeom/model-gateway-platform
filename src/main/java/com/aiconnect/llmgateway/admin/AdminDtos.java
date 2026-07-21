@@ -22,7 +22,7 @@ public final class AdminDtos {
     public record CreateProject(@NotNull UUID organizationId, UUID teamId, @NotBlank @Size(max = 120) String name) { }
     public record CreateNode(@NotNull UUID organizationId, @NotBlank @Size(max = 120) String name,
                              @Size(max = 500) String description, String connectionMode, String labelsJson) { }
-    public record CreateEndpoint(@NotNull UUID nodeId, @NotNull RuntimeType runtimeType,
+    public record CreateEndpoint(@NotNull UUID nodeId, @Size(max = 160) String displayName, @NotNull RuntimeType runtimeType,
                                  @NotBlank @Size(max = 500) String baseUrl, String apiToken) { }
     public record CreateDeployment(@NotNull UUID runtimeEndpointId, @NotBlank @Size(max = 500) String providerModelId,
                                    @Size(max = 500) String compatibilityKey, @NotBlank @Size(max = 200) String displayName,

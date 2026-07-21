@@ -7,4 +7,5 @@ import java.util.UUID;
 
 public interface AcceleratorDeviceRepository extends JpaRepository<AcceleratorDevice, UUID> {
     List<AcceleratorDevice> findByNodeIdOrderByDeviceIndexAsc(UUID nodeId);
+    void deleteByNodeId(UUID nodeId);
 }

@@ -441,6 +441,21 @@ export const devDocs: DocPage[] = [
         ]
       },
       {
+        id: 'platform-metrics', title: '외부 Prometheus·Grafana 연결',
+        blocks: [
+          { type: 'paragraph', text: '이미 운영 중인 모니터링 서버가 있다면 내장 Prometheus·Grafana를 중복 실행하지 않아도 됩니다. Gateway는 별도의 관리 포트로 메트릭만 노출하고, 외부 Prometheus가 수집한 값을 기존 Grafana에서 시각화합니다.' },
+          { type: 'steps', items: [
+            { title: '관리 포트 분리', text: 'Standalone은 docker-compose.external-monitoring.yml로 18081을, 단일 호스트 HA는 deploy/ha/docker-compose.external-monitoring.yml로 두 Gateway를 18081·18082에 각각 바인딩합니다.' },
+            { title: 'Prometheus Target 등록', text: '외부 Prometheus에 job_name=aiconnect-gateway와 Gateway-IP:관리포트를 등록하고 /actuator/prometheus를 15초 간격으로 수집합니다.' },
+            { title: 'Grafana 대시보드 배치', text: 'infra/grafana/dashboards/aiconnect-gateway-overview.json을 파일 프로비저닝 경로에 추가하고 Prometheus 데이터소스 UID를 확인합니다.' },
+            { title: '수집 검증', text: 'up{job="aiconnect-gateway"}=1과 llm_gateway_requests_total 증가를 확인합니다.' },
+            { title: 'HA Alert 적용', text: 'infra/prometheus/aiconnect-alerts.yml로 인스턴스 한 개 중단은 warning, 전체 Gateway 중단은 critical로 구분합니다.' }
+          ] },
+          { type: 'callout', tone: 'warning', title: '관리 포트를 인터넷에 공개하지 마세요', text: '방화벽 또는 Tailscale ACL에서 지정 Prometheus 서버만 접근하도록 제한합니다. 정확한 토큰·비용 원장은 MariaDB이며 Prometheus는 시스템 추세 감시용입니다.' },
+          { type: 'callout', tone: 'info', title: '상세 운영 문서', text: '배포 명령, Prometheus scrape 설정과 검증 쿼리는 docs/external-monitoring.md에서 확인합니다.' }
+        ]
+      },
+      {
         id: 'audit', title: '관리자 감사 로그',
         blocks: [
           { type: 'paragraph', text: '감사 로그는 누가 언제 어떤 관리 작업을 수행했는지 확인하는 변경 불가 운영 증적입니다. 조직 관리자는 자신의 조직 기록만, 플랫폼 관리자는 전체 플랫폼 또는 선택 조직 기록을 조회합니다.' },
@@ -569,6 +584,11 @@ export const devDocs: DocPage[] = [
           { label: '2', title: 'Gateway 2개 이상', text: '같은 Secret·DB와 서로 다른 instance ID를 사용합니다.' },
           { label: '3', title: 'Redis', text: 'RPM, 활성 요청과 예약 작업 락을 공유합니다.' }
         ] },
+        { type: 'code', language: 'bash', title: 'Tailnet과 OCI Private IP만 허용', code: 'docker compose -p aiconnect-ha --env-file deploy/ha/.env -f deploy/ha/docker-compose.yml -f deploy/ha/docker-compose.external-monitoring.yml -f deploy/ha/docker-compose.private-only.yml up -d mariadb redis api-1 api-2 frontend load-balancer\nsudo env AICONNECT_PRIVATE_CIDR=10.0.0.0/16 bash deploy/ha/private-only-firewall.sh --install' },
+        { type: 'callout', tone: 'success', title: '공개 IP의 웹 포트를 차단합니다', text: 'Private-only override는 LB를 Loopback, Tailscale IP와 OCI Private IP에만 연결합니다. OCI Public IP NAT를 통한 우회는 영구 DOCKER-USER 필터가 차단합니다. Tailnet은 Tailscale IP를, 같은 OCI VCN은 인스턴스 Private IP /v1을 사용합니다.' },
+        { type: 'callout', tone: 'warning', title: 'HTTPS Serve는 Tailnet에서 먼저 활성화해야 합니다', text: 'Serve가 꺼져 있으면 Tailnet IP HTTP를 사용하되 인터넷에는 공개하지 않습니다. Tailnet 관리자가 Serve를 활성화한 뒤 ts.net HTTPS와 Secure Cookie로 전환할 수 있습니다. 자세한 절차는 docs/private-only-deployment.md를 확인하세요.' },
+        { type: 'code', language: 'bash', title: '외부 모니터링을 사용하는 단일 호스트 HA', code: 'docker compose --env-file deploy/ha/.env \\\n+  -f deploy/ha/docker-compose.yml \\\n+  -f deploy/ha/docker-compose.external-monitoring.yml \\\n+  up -d --build mariadb redis api-1 api-2 frontend load-balancer\n# Prometheus Target: Gateway-IP:18081, Gateway-IP:18082' },
+        { type: 'callout', tone: 'info', title: 'Gateway 두 개를 각각 감시합니다', text: 'AICONNECT_METRICS_PORT_1=18081, AICONNECT_METRICS_PORT_2=18082로 구분합니다. 외부 Prometheus를 쓰면 내장 Prometheus·Grafana는 기동하지 않습니다.' },
         { type: 'callout', tone: 'warning', title: '한 호스트 Compose는 호스트 HA가 아닙니다', text: '물리 장애 대응은 서로 다른 호스트, Redis HA와 DB 복제가 필요합니다.' }
       ] },
       { id: 'kubernetes', title: 'Kubernetes와 프로필 전환', blocks: [
@@ -705,6 +725,78 @@ export const devDocs: DocPage[] = [
         blocks: [
           { type: 'checklist', items: ['발생 시각과 시간대', 'Request ID와 error.code', '논리 모델명', 'Endpoint와 실제 Deployment 상태', '스트리밍·첫 토큰 여부', 'Attempt 목록', '비밀값을 제거한 클라이언트 설정'] },
           { type: 'callout', tone: 'danger', title: '비밀값 첨부 금지', text: 'API 키 원문, 비밀번호, LM Studio Token, Tailscale Auth Key를 스크린샷이나 로그에 포함하지 마세요.' }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'resource-ownership-and-onboarding',
+    group: '운영과 참고' as DocPage['group'],
+    title: '조직별 리소스와 첫 설정 흐름',
+    shortTitle: '리소스 소유 범위',
+    description: 'Runtime, GPU 인벤토리, 외부 AI Provider, 논리 서비스와 프로젝트 권한을 같은 조직 범위에서 안전하게 연결하는 방법입니다.',
+    audience: '관리자' as DocPage['audience'],
+    minutes: 10,
+    icon: '◎',
+    keywords: ['organization', 'workspace', 'runtime name', 'gpu inventory', 'external ai', 'onboarding'],
+    sections: [
+      {
+        id: 'ownership-boundary', title: '1. 조직이 리소스의 소유 경계입니다.',
+        blocks: [
+          { type: 'paragraph', text: 'Runtime Endpoint, GPU 인벤토리, 외부 AI Provider, 논리 서비스, 프로젝트와 API 키는 모두 하나의 조직에 귀속됩니다. 다른 조직의 Runtime 또는 Provider는 목록과 Target 선택 후보에 노출되지 않으며, 공유가 필요하면 별도의 공유 정책을 설계해야 합니다.' },
+          { type: 'flow', items: [
+            { label: '1', title: '조직 선택', text: '관리 콘솔의 Workspace에서 작업할 조직을 먼저 선택합니다.' },
+            { label: '2', title: '리소스 등록', text: '선택 조직 안에 LM Studio Runtime 또는 외부 AI Provider를 등록합니다.' },
+            { label: '3', title: '서비스 구성', text: '같은 조직에 속한 Deployment만 논리 서비스 Target으로 연결합니다.' },
+            { label: '4', title: '프로젝트 권한', text: '프로젝트에 논리 서비스를 허용하고, 그 프로젝트 API 키로만 호출합니다.' }
+          ] },
+          { type: 'callout', tone: 'info', title: '왜 조직 범위를 강제하나요?', text: '다른 부서나 고객의 GPU 주소, 외부 API 비용, 모델 목록이 섞이지 않게 하며 권한 실수를 차단하기 위해서입니다.' }
+        ]
+      },
+      {
+        id: 'runtime-and-inventory', title: '2. Runtime과 GPU 인벤토리는 다른 역할입니다.',
+        blocks: [
+          { type: 'table', columns: ['항목', '역할', '라우팅 영향', '예시'], rows: [
+            ['Runtime Endpoint', 'Gateway가 실제 추론 서버에 연결하는 주소와 인증 정보', '직접 영향', '업무용 Gemma 서버 / http://100.x.x.x:1234'],
+            ['Runtime 이름', '주소 대신 사람이 구분하는 운영 별칭', '영향 없음', '서울-4090-주서버'],
+            ['GPU 인벤토리', '하드웨어 참고 메타데이터', '자동 영향 없음', 'NVIDIA / RTX 4090 / 24576 MB']
+          ] },
+          { type: 'steps', items: [
+            { title: 'Runtime 등록', text: '노드 이름과 Endpoint URL을 입력합니다. 새 Runtime의 표시 이름은 기본적으로 노드 이름을 사용합니다.' },
+            { title: '연결 확인 및 모델 동기화', text: 'LM Studio API 연결과 실제 로드 모델을 확인합니다.' },
+            { title: 'GPU 인벤토리 추가', text: 'GPU가 무엇인지 참고용으로 기록합니다. 라우팅 용량은 Deployment의 동시 요청 수와 상태로 관리합니다.' },
+            { title: '수정 또는 삭제', text: '인벤토리 카드의 Edit/Delete로 잘못 등록한 하드웨어 정보를 즉시 고칠 수 있습니다.' }
+          ] }
+        ]
+      },
+      {
+        id: 'external-ai-same-gateway', title: '3. 외부 AI도 AICONNECT를 경유합니다.',
+        blocks: [
+          { type: 'paragraph', text: 'OpenAI 같은 외부 AI Provider의 API 키는 관리자만 등록하며, 일반 사용자에게 원문을 보여주지 않습니다. 외부 모델도 Deployment가 되어 논리 서비스 Target으로 연결되고, 사용자는 AICONNECT의 Base URL과 프로젝트 API 키만 사용합니다.' },
+          { type: 'flow', items: [
+            { label: '1', title: 'Provider 등록', text: '관리자가 외부 API Base URL, 비밀 키, 사용할 모델과 단가를 저장합니다.' },
+            { label: '2', title: '모델과 Target 연결', text: '외부 모델을 논리 서비스의 수동 후보 또는 자동 Failover 후보로 추가합니다.' },
+            { label: '3', title: '프로젝트 승인', text: '프로젝트별 외부 AI 사용을 명시적으로 승인합니다.' },
+            { label: '4', title: '동일한 관측', text: '입·출력 토큰, 비용, 실패 코드, 실제 Provider와 Failover 이력이 한 요청 기록에 남습니다.' }
+          ] },
+          { type: 'callout', tone: 'warning', title: '외부 키를 사용자에게 전달하지 마세요.', text: '사용자는 외부 Provider 주소나 키가 아니라 Gateway의 /v1 엔드포인트와 자신이 발급한 프로젝트 API 키만 사용해야 사용량·권한·비용을 통합 제어할 수 있습니다.' }
+        ]
+      },
+      {
+        id: 'recommended-first-setup', title: '4. 처음 설치한 관리자의 권장 순서',
+        blocks: [
+          { type: 'checklist', items: [
+            '조직 생성 또는 선택',
+            'LM Studio Runtime 또는 외부 AI Provider 하나 등록',
+            '연결 확인 후 모델 동기화 또는 외부 모델 등록',
+            '논리 서비스 생성 후 Target 하나 연결',
+            '팀과 프로젝트 생성',
+            '프로젝트에 서비스 권한 부여',
+            '프로젝트 API 키 발급',
+            'GET /v1/models와 POST /v1/chat/completions로 실제 호출 확인',
+            '사용량과 관측성 화면에서 요청 기록 확인'
+          ] },
+          { type: 'callout', tone: 'success', title: '가장 작은 성공 기준', text: '한 조직, Runtime 또는 외부 Provider 하나, 모델 하나, 논리 서비스 하나, 프로젝트 하나, API 키 하나로 첫 호출과 사용량 기록까지 확인한 뒤 복수 Target과 Failover를 추가하세요.' }
         ]
       }
     ]

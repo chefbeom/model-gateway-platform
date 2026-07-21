@@ -58,12 +58,12 @@ public class EndpointAdministrationService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "RUNTIME_TOKEN_UPDATE_INVALID", "Set a new token or clear the existing token, not both.");
         }
         boolean replaceToken = command.apiToken() != null && !command.apiToken().isBlank();
-        endpoint.configure(baseUrl, replaceToken ? cipher.encrypt(command.apiToken()) : null, replaceToken,
+        endpoint.configure(command.displayName(), baseUrl, replaceToken ? cipher.encrypt(command.apiToken()) : null, replaceToken,
                 command.clearApiToken(), command.enabled());
         RuntimeEndpoint saved = endpoints.save(endpoint);
         InferenceNode node = node(saved.getNodeId());
         audit.record(node.getOrganizationId(), CurrentActor.userIdOrNull(), "RUNTIME_ENDPOINT_UPDATED", "RUNTIME_ENDPOINT", saved.getId(),
-                Map.of("baseUrl", saved.getBaseUrl(), "enabled", saved.isEnabled(), "apiTokenChanged", replaceToken || command.clearApiToken()));
+                Map.of("displayName", saved.getDisplayName(), "baseUrl", saved.getBaseUrl(), "enabled", saved.isEnabled(), "apiTokenChanged", replaceToken || command.clearApiToken()));
         return saved;
     }
 
@@ -109,13 +109,13 @@ public class EndpointAdministrationService {
         }
     }
 
-    public record UpdateCommand(String baseUrl, String apiToken, boolean clearApiToken, Boolean enabled) { }
+    public record UpdateCommand(String displayName, String baseUrl, String apiToken, boolean clearApiToken, Boolean enabled) { }
 
-    public record EndpointDetail(UUID id, UUID nodeId, String nodeName, String nodeDescription, String runtimeType,
+    public record EndpointDetail(UUID id, UUID nodeId, String displayName, String nodeName, String nodeDescription, String runtimeType,
                                  String baseUrl, boolean enabled, String healthStatus, String lastCheckedAt,
                                  boolean apiTokenConfigured) {
         static EndpointDetail from(RuntimeEndpoint endpoint, InferenceNode node) {
-            return new EndpointDetail(endpoint.getId(), endpoint.getNodeId(), node.getName(), node.getDescription(),
+            return new EndpointDetail(endpoint.getId(), endpoint.getNodeId(), endpoint.getDisplayName(), node.getName(), node.getDescription(),
                     endpoint.getRuntimeType().name(), endpoint.getBaseUrl(), endpoint.isEnabled(), endpoint.getHealthStatus().name(),
                     endpoint.getLastCheckedAt() == null ? null : endpoint.getLastCheckedAt().toString(), endpoint.getApiToken() != null);
         }

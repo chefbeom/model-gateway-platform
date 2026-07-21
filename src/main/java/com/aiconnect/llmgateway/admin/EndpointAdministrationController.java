@@ -31,7 +31,7 @@ public class EndpointAdministrationController {
     @PatchMapping
     public AdminController.EndpointView update(@PathVariable UUID endpointId, @Valid @RequestBody UpdateEndpoint request) {
         return AdminController.EndpointView.from(service.update(endpointId,
-                new EndpointAdministrationService.UpdateCommand(request.baseUrl(), request.apiToken(), request.clearApiToken(), request.enabled())));
+                new EndpointAdministrationService.UpdateCommand(request.displayName(), request.baseUrl(), request.apiToken(), request.clearApiToken(), request.enabled())));
     }
 
     @DeleteMapping
@@ -40,6 +40,6 @@ public class EndpointAdministrationController {
         service.archive(endpointId);
     }
 
-    public record UpdateEndpoint(@Size(max = 500) String baseUrl, @Size(max = 2000) String apiToken,
+    public record UpdateEndpoint(@Size(max = 160) String displayName, @Size(max = 500) String baseUrl, @Size(max = 2000) String apiToken,
                                  boolean clearApiToken, Boolean enabled) { }
 }

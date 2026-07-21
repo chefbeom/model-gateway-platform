@@ -83,7 +83,7 @@ public class ControlPlaneService {
             throw new ApiException(HttpStatus.CONFLICT, "RUNTIME_ENDPOINT_ALREADY_EXISTS", "The runtime Base URL is already registered.");
         }
         try {
-            return endpoints.saveAndFlush(new RuntimeEndpoint(request.nodeId(), request.runtimeType(), baseUrl,
+            return endpoints.saveAndFlush(new RuntimeEndpoint(request.nodeId(), request.displayName(), request.runtimeType(), baseUrl,
                     secretCipher.encrypt(request.apiToken())));
         } catch (DataIntegrityViolationException exception) {
             throw new ApiException(HttpStatus.CONFLICT, "RUNTIME_ENDPOINT_ALREADY_EXISTS", "The runtime Base URL is already registered.");

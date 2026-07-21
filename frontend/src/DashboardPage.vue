@@ -16,7 +16,7 @@ async function load() {
     const tasks: Promise<unknown>[] = [adminFetch<Overview>(path, props.auth)]
     if (props.organizationId) tasks.push(adminFetch<Incident[]>(`/api/admin/organizations/${props.organizationId}/incidents?status=OPEN`, props.auth))
     const [summary, incidentItems] = await Promise.all(tasks)
-    overview.value = summary as Overview; incidents.value = (incidentItems ?? []) as Incident[]; endpoints.value = await adminFetch<Endpoint[]>('/api/admin/runtime-endpoints', props.auth); deploymentProfile.value = await adminFetch<DeploymentProfile>('/api/admin/deployment-profile', props.auth)
+    overview.value = summary as Overview; incidents.value = (incidentItems ?? []) as Incident[]; endpoints.value = props.organizationId ? await adminFetch<Endpoint[]>(`/api/admin/organizations/${props.organizationId}/runtime-endpoints`, props.auth) : []; deploymentProfile.value = await adminFetch<DeploymentProfile>('/api/admin/deployment-profile', props.auth)
   } catch (reason) { error.value = reason instanceof Error ? reason.message : '대시보드 정보를 불러오지 못했습니다.' }
   finally { busy.value = false }
 }
