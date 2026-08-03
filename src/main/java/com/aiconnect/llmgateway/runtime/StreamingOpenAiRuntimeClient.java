@@ -6,6 +6,7 @@ import com.aiconnect.llmgateway.service.SecretCipher;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
+
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -36,7 +37,8 @@ public class StreamingOpenAiRuntimeClient {
             HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(provider.getBaseUrl() + "/chat/completions"))
                     .timeout(Duration.ofMillis(properties.responseTimeoutMs()))
                     .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(requestBody)));
+                    .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(
+                            OpenAiRequestNormalizer.forExternalProvider(requestBody))));
             if (key != null && !key.isBlank()) request.header("Authorization", "Bearer " + key);
             HttpResponse<java.io.InputStream> response = client.send(request.build(), HttpResponse.BodyHandlers.ofInputStream());
             return new StreamingRuntimeResult(response.statusCode(), response.body());

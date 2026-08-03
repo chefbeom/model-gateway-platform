@@ -107,6 +107,7 @@ services:
     volumes:
       - grafana-data:/var/lib/grafana
       - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
     # Grafana is an operator surface, not a public application endpoint.
     # Use an SSH tunnel or an authenticated internal proxy for remote access.
     ports: ["127.0.0.1:3000:3000"]

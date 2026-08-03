@@ -1,0 +1,9 @@
+services:
+  load-balancer:
+    ports: !override
+      # Tailscale Serve terminates HTTPS and proxies to this loopback listener.
+      - "127.0.0.1:${AICONNECT_LOOPBACK_HTTP_PORT:-80}:80"
+      # Direct Tailnet HTTP remains private to authenticated Tailnet devices.
+      - "${AICONNECT_TAILNET_BIND_ADDRESS:?set AICONNECT_TAILNET_BIND_ADDRESS}:${AICONNECT_TAILNET_HTTP_PORT:-80}:80"
+      # Applications in the same OCI VCN can call the instance private IP directly.
+      - "${AICONNECT_PRIVATE_BIND_ADDRESS:?set AICONNECT_PRIVATE_BIND_ADDRESS}:${AICONNECT_PRIVATE_HTTP_PORT:-80}:80"

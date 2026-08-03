@@ -13,6 +13,7 @@ import java.util.UUID;
 
 public interface LlmRequestRepository extends JpaRepository<LlmRequest, UUID> {
     long countByProjectId(UUID projectId);
+    long countByFinalDeploymentIdIn(Collection<UUID> deploymentIds);
     List<LlmRequest> findTop50ByProjectIdOrderByStartedAtDesc(UUID projectId);
     List<LlmRequest> findByStartedAtAfter(Instant startedAt);
     List<LlmRequest> findByProjectIdInAndStartedAtAfter(Collection<UUID> projectIds, Instant startedAt);

@@ -10,4 +10,5 @@ public interface ProjectExternalAccessRepository extends JpaRepository<ProjectEx
     Optional<ProjectExternalAccess> findByProjectIdAndProviderId(UUID projectId, UUID providerId);
     List<ProjectExternalAccess> findByProjectIdOrderByCreatedAtDesc(UUID projectId);
     List<ProjectExternalAccess> findByProjectIdInOrderByCreatedAtDesc(List<UUID> projectIds);
+    long countByProviderId(UUID providerId);
 }

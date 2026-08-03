@@ -1,0 +1,23 @@
+services:
+  api-1:
+    environment:
+      MANAGEMENT_SERVER_PORT: 9091
+    ports:
+      - "${AICONNECT_METRICS_BIND_ADDRESS:-127.0.0.1}:${AICONNECT_METRICS_PORT_1:-18081}:9091"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9091/actuator/health/readiness"]
+
+  api-2:
+    environment:
+      MANAGEMENT_SERVER_PORT: 9091
+    ports:
+      - "${AICONNECT_METRICS_BIND_ADDRESS:-127.0.0.1}:${AICONNECT_METRICS_PORT_2:-18082}:9091"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9091/actuator/health/readiness"]
+
+  # Keep the bundled stack available only when explicitly requested.
+  prometheus:
+    profiles: ["bundled-monitoring"]
+
+  grafana:
+    profiles: ["bundled-monitoring"]

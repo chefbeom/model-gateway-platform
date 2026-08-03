@@ -10,6 +10,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
+
 import java.io.IOException;
 
 @Component
@@ -40,7 +41,7 @@ public class OpenAiRuntimeClient {
             return client.post().uri(provider.getBaseUrl() + "/chat/completions")
                     .contentType(MediaType.APPLICATION_JSON)
                     .headers(headers -> applyAuthorization(headers, provider))
-                    .body(request)
+                    .body(OpenAiRequestNormalizer.forExternalProvider(request))
                     .exchange((clientRequest, response) -> toResult(response.getStatusCode().value(), response.getBody()));
         } catch (RestClientException exception) {
             throw new RuntimeUnavailableException("The external OpenAI provider is unreachable.", exception);

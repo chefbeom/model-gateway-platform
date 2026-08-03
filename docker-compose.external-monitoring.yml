@@ -1,0 +1,16 @@
+services:
+  api:
+    environment:
+      MANAGEMENT_SERVER_PORT: 9091
+    ports:
+      - "${AICONNECT_METRICS_BIND_ADDRESS:-127.0.0.1}:${AICONNECT_METRICS_PORT:-18081}:9091"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9091/actuator/health/readiness"]
+
+  # The bundled monitoring stack remains available through an explicit profile.
+  # Omit --profile bundled-monitoring when an external Prometheus/Grafana is used.
+  prometheus:
+    profiles: ["bundled-monitoring"]
+
+  grafana:
+    profiles: ["bundled-monitoring"]

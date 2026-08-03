@@ -1,0 +1,29 @@
+groups:
+  - name: aiconnect-gateway-alerts
+    rules:
+      - alert: AIConnectGatewayInstanceDown
+        expr: up{job="aiconnect-gateway"} == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "AIConnect Gateway instance is down"
+          description: "{{ $labels.name }} ({{ $labels.instance_id }}) has not been scraped for one minute."
+
+      - alert: AIConnectGatewayClusterDown
+        expr: sum by (environment) (up{job="aiconnect-gateway"}) == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "All AIConnect Gateway instances are down in an environment"
+          description: "Prometheus cannot scrape any AIConnect Gateway instance in {{ $labels.environment }}."
+
+      - alert: AIConnectGatewayHighErrorRate
+        expr: (sum by (environment) (rate(llm_gateway_requests_total{job="aiconnect-gateway",outcome!="success"}[5m])) / clamp_min(sum by (environment) (rate(llm_gateway_requests_total{job="aiconnect-gateway"}[5m])), 0.001)) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "AIConnect Gateway error rate is high"
+          description: "The five-minute Gateway error ratio in {{ $labels.environment }} has remained above 10%."
