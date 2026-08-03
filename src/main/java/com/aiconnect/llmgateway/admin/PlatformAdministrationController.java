@@ -57,6 +57,13 @@ public class PlatformAdministrationController {
         service.suspendOrganization(organizationId);
     }
 
+    @PostMapping("/organizations/{organizationId}/restore")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void restoreOrganization(HttpServletRequest request, @PathVariable UUID organizationId) {
+        requirePlatformAdmin(request);
+        service.restoreOrganization(organizationId);
+    }
+
     @DeleteMapping("/organizations/{organizationId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteOrganization(HttpServletRequest request, @PathVariable UUID organizationId,
@@ -85,6 +92,24 @@ public class PlatformAdministrationController {
     public void deleteUser(HttpServletRequest request, @PathVariable UUID userId, @RequestParam String confirmation) {
         requirePlatformAdmin(request);
         service.deleteUser(userId, confirmation);
+    }
+
+    @GetMapping("/teams")
+    public List<PlatformAdministrationService.PlatformTeamView> teams(HttpServletRequest request) {
+        requirePlatformAdmin(request);
+        return service.teams();
+    }
+
+    @DeleteMapping("/teams/{teamId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteTeam(HttpServletRequest request, @PathVariable UUID teamId, @RequestParam String confirmation) {
+        requirePlatformAdmin(request);
+        service.deleteTeam(teamId, confirmation);
+    }
+    @GetMapping("/api-keys")
+    public List<PlatformAdministrationService.PlatformApiKeyView> apiKeys(HttpServletRequest request) {
+        requirePlatformAdmin(request);
+        return service.apiKeys();
     }
 
     @DeleteMapping("/api-keys/{apiKeyId}")

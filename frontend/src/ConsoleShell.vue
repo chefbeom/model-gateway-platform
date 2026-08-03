@@ -13,11 +13,12 @@ import TeamsPage from './TeamsPage.vue'
 import ObservabilityPage from './ObservabilityPage.vue'
 import NotificationsPage from './NotificationsPage.vue'
 import UsagePage from './UsagePage.vue'
+import PlatformAdminPage from './PlatformAdminPage.vue'
 import { adminFetch, type AdminAuth, type User } from './api'
 
 type Theme = 'dark' | 'light'
 type FontScale = '100' | '115' | '125' | '135'
-type PageKey = 'dashboard' | 'infrastructure' | 'external' | 'services' | 'teams' | 'projects' | 'observability' | 'usage' | 'notifications' | 'audit' | 'portal' | 'docs'
+type PageKey = 'dashboard' | 'infrastructure' | 'external' | 'services' | 'teams' | 'projects' | 'observability' | 'usage' | 'notifications' | 'audit' | 'platform' | 'portal' | 'docs'
 type OrganizationRole = 'ORGANIZATION_ADMIN' | 'DEVELOPER'
 type TeamRole = 'TEAM_ADMIN' | 'PROJECT_OWNER' | 'DEVELOPER' | 'AUDITOR'
 type Organization = { id: string; name: string; status: string }
@@ -42,6 +43,7 @@ const adminNavItems: NavItem[] = [
   { id: 'notifications', label: '알림 채널', description: 'Discord와 Telegram 연동', keywords: 'notification discord telegram alert', icon: '◇', group: '시스템' },
   { id: 'audit', label: '감사 로그', description: '관리자 변경·열람 증적', keywords: 'audit log admin change security', icon: '◎', group: '시스템' }
 ]
+const platformNavItem: NavItem = { id: 'platform', label: 'Platform Admin', description: '조직·사용자·키·데이터 정리', keywords: 'platform admin organization user api key cleanup purge', icon: '⚡', group: '시스템' }
 const developerNavItems: NavItem[] = [
   { id: 'portal', label: '내 API', description: '프로젝트·사용 모델·API 키', keywords: 'my api project model key', icon: '⌘', group: '내 작업' },
   { id: 'usage', label: 'API 사용량', description: '내 API 키의 토큰·비용·요청', keywords: 'usage token cost request', icon: '◴', group: '내 작업' }
@@ -75,7 +77,7 @@ const accountForm = ref({ email: '', password: '', organizationRole: 'DEVELOPER'
 const selectedMembership = computed(() => memberships.value.find(member => member.organizationId === organizationId.value) ?? null)
 const platformAdmin = computed(() => Boolean(props.user?.platformAdmin || props.platformTokenSession || contextPlatformAdmin.value))
 const isAdminConsole = computed(() => platformAdmin.value || selectedMembership.value?.role === 'ORGANIZATION_ADMIN')
-const navItems = computed(() => isAdminConsole.value ? adminNavItems : developerNavItems)
+const navItems = computed(() => isAdminConsole.value ? (platformAdmin.value ? [...adminNavItems, platformNavItem] : adminNavItems) : developerNavItems)
 const groups = computed(() => [...new Set(navItems.value.map(item => item.group))])
 const allNavigation = computed(() => [...navItems.value, docsItem])
 const currentNav = computed(() => allNavigation.value.find(item => item.id === page.value) ?? navItems.value[0] ?? docsItem)
@@ -88,7 +90,7 @@ const searchResults = computed(() => {
 })
 
 function knownPage(value: string): value is PageKey {
-  return ['dashboard', 'infrastructure', 'external', 'services', 'teams', 'projects', 'observability', 'usage', 'notifications', 'audit', 'portal', 'docs'].includes(value)
+  return ['dashboard', 'infrastructure', 'external', 'services', 'teams', 'projects', 'observability', 'usage', 'notifications', 'audit', 'platform', 'portal', 'docs'].includes(value)
 }
 function isAllowedPage(target: PageKey) { return isAdminConsole.value || target === 'portal' || target === 'usage' || target === 'docs' }
 function fallbackPage(): PageKey { return isAdminConsole.value ? 'dashboard' : 'portal' }
@@ -219,6 +221,7 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
         <ObservabilityPage v-else-if="isAdminConsole && page === 'observability'" :organization-id="organizationId" :auth="auth" />
         <NotificationsPage v-else-if="isAdminConsole && page === 'notifications'" :organization-id="organizationId" :auth="auth" />
         <AuditLogPage v-else-if="isAdminConsole && page === 'audit'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" />
+        <PlatformAdminPage v-else-if="platformAdmin && page === 'platform'" :auth="auth" />
         <UsagePage v-else-if="page === 'usage'" :organization-id="organizationId" :auth="auth" />
         <DevDocsPage v-else-if="page === 'docs'" @navigate="navigate" />
         <DeveloperPortalPage v-else :organization-id="organizationId" :auth="auth" />

@@ -8,6 +8,7 @@ import com.aiconnect.llmgateway.identity.AppUserRepository;
 import com.aiconnect.llmgateway.identity.AuditService;
 import com.aiconnect.llmgateway.identity.CurrentActor;
 import com.aiconnect.llmgateway.identity.OrganizationMemberRepository;
+import com.aiconnect.llmgateway.identity.OrganizationAccessService;
 import com.aiconnect.llmgateway.repository.ApiKeyRepository;
 import com.aiconnect.llmgateway.repository.ExternalProviderRepository;
 import com.aiconnect.llmgateway.repository.InferenceNodeRepository;
@@ -18,6 +19,7 @@ import com.aiconnect.llmgateway.repository.OrganizationRepository;
 import com.aiconnect.llmgateway.repository.ProjectRepository;
 import com.aiconnect.llmgateway.repository.RuntimeEndpointRepository;
 import com.aiconnect.llmgateway.team.TeamRepository;
+import com.aiconnect.llmgateway.team.Team;
 import com.aiconnect.llmgateway.web.ApiException;
 import jakarta.persistence.EntityManager;
 import org.springframework.http.HttpStatus;
@@ -42,6 +44,7 @@ public class PlatformAdministrationService {
     private final AppUserRepository users;
     private final OrganizationMemberRepository organizationMembers;
     private final TeamRepository teams;
+    private final OrganizationAccessService organizationAccess;
     private final LlmRequestRepository requests;
     private final AuditService audit;
     private final EntityManager entityManager;
@@ -50,7 +53,7 @@ public class PlatformAdministrationService {
             ExternalProviderRepository providers, InferenceNodeRepository nodes, RuntimeEndpointRepository endpoints,
             ModelDeploymentRepository deployments, LlmServiceRepository services, ApiKeyRepository apiKeys,
             AppUserRepository users, OrganizationMemberRepository organizationMembers, TeamRepository teams,
-            LlmRequestRepository requests, AuditService audit, EntityManager entityManager) {
+            OrganizationAccessService organizationAccess, LlmRequestRepository requests, AuditService audit, EntityManager entityManager) {
         this.organizations = organizations;
         this.projects = projects;
         this.providers = providers;
@@ -62,6 +65,7 @@ public class PlatformAdministrationService {
         this.users = users;
         this.organizationMembers = organizationMembers;
         this.teams = teams;
+        this.organizationAccess = organizationAccess;
         this.requests = requests;
         this.audit = audit;
         this.entityManager = entityManager;
@@ -101,6 +105,14 @@ public class PlatformAdministrationService {
         Organization org = requireOrganization(organizationId);
         execute("update organization set status = 'SUSPENDED' where id = :id", organizationId);
         audit.record(organizationId, CurrentActor.userIdOrNull(), "ORGANIZATION_SUSPENDED", "ORGANIZATION", organizationId,
+                Map.of("name", org.getName()));
+    }
+
+    @Transactional
+    public void restoreOrganization(UUID organizationId) {
+        Organization org = requireOrganization(organizationId);
+        execute("update organization set status = 'ACTIVE' where id = :id", organizationId);
+        audit.record(organizationId, CurrentActor.userIdOrNull(), "ORGANIZATION_RESTORED", "ORGANIZATION", organizationId,
                 Map.of("name", org.getName()));
     }
 
@@ -153,6 +165,39 @@ public class PlatformAdministrationService {
                 user.isEnabled(), organizationMembers.findByIdUserId(user.getId()).size(), apiKeys.findByIssuedByUserId(user.getId()).size())).toList();
     }
 
+    @Transactional(readOnly = true)
+    public List<PlatformTeamView> teams() {
+        Map<UUID, String> organizationNames = organizations.findAll().stream()
+                .collect(java.util.stream.Collectors.toMap(Organization::getId, Organization::getName));
+        return teams.findAll().stream().map(team -> new PlatformTeamView(team.getId(), team.getOrganizationId(),
+                organizationNames.getOrDefault(team.getOrganizationId(), "(deleted organization)"), team.getName(),
+                team.getStatus(), projects.findByTeamId(team.getId()).size())).toList();
+    }
+
+    @Transactional
+    public void deleteTeam(UUID teamId, String confirmation) {
+        Team team = teams.findById(teamId).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "TEAM_NOT_FOUND", "The team does not exist."));
+        if (!team.getName().equals(confirmation)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "CONFIRMATION_MISMATCH", "팀 이름을 정확히 입력해야 합니다.");
+        }
+        organizationAccess.deleteTeam(team.getOrganizationId(), teamId);
+    }
+
+    @Transactional(readOnly = true)
+    public List<PlatformApiKeyView> apiKeys() {
+        Map<UUID, com.aiconnect.llmgateway.domain.Project> projectById = projects.findAll().stream()
+                .collect(java.util.stream.Collectors.toMap(com.aiconnect.llmgateway.domain.Project::getId, project -> project));
+        Map<UUID, Organization> organizationById = organizations.findAll().stream()
+                .collect(java.util.stream.Collectors.toMap(Organization::getId, org -> org));
+        return apiKeys.findAll().stream().map(key -> {
+            var project = projectById.get(key.getProjectId());
+            var org = project == null ? null : organizationById.get(project.getOrganizationId());
+            return new PlatformApiKeyView(key.getId(), key.getProjectId(), project == null ? "(deleted project)" : project.getName(),
+                    org == null ? "(deleted organization)" : org.getName(), key.getName(), key.getKeyPrefix(),
+                    key.getStatus().name(), key.getExpiresAt(), key.getLastUsedAt(), key.getCreatedAt());
+        }).toList();
+    }
+
     @Transactional
     public void setUserEnabled(UUID userId, boolean enabled) {
         AppUser user = users.findById(userId).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", "사용자를 찾을 수 없습니다."));
@@ -188,4 +233,8 @@ public class PlatformAdministrationService {
     public record OrganizationSummary(UUID id, String name, String status, int projectCount, int providerCount, int nodeCount, int memberCount) { }
     public record OrganizationCleanupPreview(UUID organizationId, String name, String status, int projectCount, int providerCount, int nodeCount, int endpointCount, int memberCount, long requestCount, String behavior) { }
     public record PlatformUserView(UUID id, String email, boolean platformAdmin, boolean enabled, int organizationCount, int issuedApiKeyCount) { }
+    public record PlatformTeamView(UUID id, UUID organizationId, String organizationName, String name, String status, int projectCount) { }
+    public record PlatformApiKeyView(UUID id, UUID projectId, String projectName, String organizationName, String name,
+                                     String keyPrefix, String status, java.time.Instant expiresAt, java.time.Instant lastUsedAt,
+                                     java.time.Instant createdAt) { }
 }
