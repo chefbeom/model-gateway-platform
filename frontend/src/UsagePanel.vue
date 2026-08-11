@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 
-type Usage = { requestCount: number; inputTokens: number; outputTokens: number; estimatedCost: number; failedRequests: number }
-type RequestItem = { requestId: string; serviceKey?: string; serviceDisplayName?: string; deploymentDisplayName?: string; stream: boolean; status: string; inputTokens?: number; outputTokens?: number; estimatedCost?: number; latencyMs?: number; failoverCount: number; httpStatus?: number; errorCode?: string; startedAt: string }
+type Currency = 'KRW' | 'USD'
+type Usage = { requestCount: number; inputTokens: number; outputTokens: number; estimatedCost: number; estimatedCostByCurrency?: Record<string, number>; failedRequests: number }
+type RequestItem = { requestId: string; serviceKey?: string; serviceDisplayName?: string; deploymentDisplayName?: string; stream: boolean; status: string; inputTokens?: number; outputTokens?: number; estimatedCost?: number; costCurrency?: Currency; latencyMs?: number; failoverCount: number; httpStatus?: number; errorCode?: string; startedAt: string }
 
 const apiKey = ref(sessionStorage.getItem('aiconnect.consumerApiKey') ?? '')
 const usage = ref<Usage | null>(null)
@@ -25,7 +26,17 @@ async function loadUsage() {
   finally { busy.value = false }
 }
 function number(value?: number) { return new Intl.NumberFormat('ko-KR').format(value ?? 0) }
-function cost(value?: number) { return `${new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 6 }).format(value ?? 0)} 원` }
+function currencyOf(value?: string): Currency | null { return value === 'USD' || value === 'KRW' ? value : null }
+function formatCost(value: number | undefined, currency?: string) {
+  const normalized = currencyOf(currency)
+  if (!normalized) return '통화 정보 없음'
+  return new Intl.NumberFormat(normalized === 'USD' ? 'en-US' : 'ko-KR', { style: 'currency', currency: normalized, maximumFractionDigits: normalized === 'USD' ? 4 : 0 }).format(Number(value ?? 0))
+}
+function costBreakdown(values?: Record<string, number>) {
+  const entries = Object.entries(values ?? {}).filter(([currency]) => currencyOf(currency))
+  if (!entries.length) return '통화별 비용 데이터 없음'
+  return entries.map(([currency, value]) => formatCost(value, currency)).join(' · ')
+}
 </script>
 
 <template>
@@ -40,13 +51,13 @@ function cost(value?: number) { return `${new Intl.NumberFormat('ko-KR', { maxim
         <div><small>요청 수</small><strong>{{ number(usage.requestCount) }}</strong></div>
         <div><small>입력 토큰</small><strong>{{ number(usage.inputTokens) }}</strong></div>
         <div><small>출력 토큰</small><strong>{{ number(usage.outputTokens) }}</strong></div>
-        <div><small>예상 비용</small><strong>{{ cost(usage.estimatedCost) }}</strong></div>
+        <div><small>예상 비용</small><strong>{{ costBreakdown(usage.estimatedCostByCurrency) }}</strong></div>
         <div><small>실패 요청</small><strong>{{ number(usage.failedRequests) }}</strong></div>
       </div>
       <div v-if="requests.length" class="request-table">
         <table>
           <thead><tr><th>시간</th><th>논리 모델</th><th>실제 배포</th><th>방식</th><th>상태</th><th>토큰</th><th>비용</th><th>지연</th><th>Failover</th><th>요청 ID</th></tr></thead>
-          <tbody><tr v-for="item in requests" :key="item.requestId"><td>{{ new Date(item.startedAt).toLocaleString() }}</td><td><strong>{{ item.serviceKey ?? '-' }}</strong><small>{{ item.serviceDisplayName }}</small></td><td>{{ item.deploymentDisplayName ?? '-' }}</td><td>{{ item.stream ? 'SSE' : 'JSON' }}</td><td><span class="status" :class="item.status === 'SUCCEEDED' ? 'healthy' : 'unhealthy'">{{ item.status }}</span></td><td>{{ number((item.inputTokens ?? 0) + (item.outputTokens ?? 0)) }}</td><td>{{ cost(item.estimatedCost) }}</td><td>{{ number(item.latencyMs) }} ms</td><td>{{ item.failoverCount }}</td><td class="mono">{{ item.requestId }}</td></tr></tbody>
+          <tbody><tr v-for="item in requests" :key="item.requestId"><td>{{ new Date(item.startedAt).toLocaleString() }}</td><td><strong>{{ item.serviceKey ?? '-' }}</strong><small>{{ item.serviceDisplayName }}</small></td><td>{{ item.deploymentDisplayName ?? '-' }}</td><td>{{ item.stream ? 'SSE' : 'JSON' }}</td><td><span class="status" :class="item.status === 'SUCCEEDED' ? 'healthy' : 'unhealthy'">{{ item.status }}</span></td><td>{{ number((item.inputTokens ?? 0) + (item.outputTokens ?? 0)) }}</td><td>{{ formatCost(item.estimatedCost, item.costCurrency) }}</td><td>{{ number(item.latencyMs) }} ms</td><td>{{ item.failoverCount }}</td><td class="mono">{{ item.requestId }}</td></tr></tbody>
         </table>
       </div>
     </section>
