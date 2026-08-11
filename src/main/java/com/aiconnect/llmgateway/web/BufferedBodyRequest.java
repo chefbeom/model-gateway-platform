@@ -6,9 +6,9 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletRequestWrapper;
 import java.io.*;
 
-final class BufferedBodyRequest extends HttpServletRequestWrapper {
+public final class BufferedBodyRequest extends HttpServletRequestWrapper {
     private final byte[] body;
-    BufferedBodyRequest(HttpServletRequest request, byte[] body) { super(request); this.body = body; }
+    public BufferedBodyRequest(HttpServletRequest request, byte[] body) { super(request); this.body = body; }
     @Override public ServletInputStream getInputStream() {
         ByteArrayInputStream input = new ByteArrayInputStream(body);
         return new ServletInputStream() {

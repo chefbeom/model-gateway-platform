@@ -1,6 +1,7 @@
 package com.aiconnect.llmgateway.usage;
 
 import com.aiconnect.llmgateway.domain.ApiKey;
+import com.aiconnect.llmgateway.domain.Currency;
 import com.aiconnect.llmgateway.domain.ExternalProvider;
 import com.aiconnect.llmgateway.domain.InferenceNode;
 import com.aiconnect.llmgateway.domain.LlmRequest;
@@ -199,7 +200,7 @@ public class AdminUsageService {
                         service == null ? "삭제된 논리 서비스" : service.getServiceKey(),
                         infrastructure.title(), apiKey == null ? "삭제된 API 키" : apiKey.getKeyPrefix(),
                         row.getStatus().name(), tokens(row.getInputTokens()), tokens(row.getOutputTokens()),
-                        cost(row.getEstimatedCost()), row.getLatencyMs(), row.getFailoverCount(),
+                        cost(row.getEstimatedCost()), row.getCostCurrency() == null ? Currency.KRW.name() : row.getCostCurrency().name(),                         row.getLatencyMs(), row.getFailoverCount(),
                         row.getErrorCode(), row.getStartedAt()));
             }
         }
@@ -294,6 +295,7 @@ public class AdminUsageService {
         private long latencyTotal;
         private long latencyCount;
         private BigDecimal estimatedCost = BigDecimal.ZERO;
+        private final Map<String, BigDecimal> estimatedCostByCurrency = new LinkedHashMap<>();
 
         private Aggregate(String label, String detail) {
             this.label = label;
@@ -313,12 +315,14 @@ public class AdminUsageService {
             }
             if (request.getEstimatedCost() != null) {
                 estimatedCost = estimatedCost.add(request.getEstimatedCost());
+                String currency = request.getCostCurrency() == null ? Currency.KRW.name() : request.getCostCurrency().name();
+                estimatedCostByCurrency.merge(currency, request.getEstimatedCost(), BigDecimal::add);
             }
         }
 
         private UsageMetric view() {
             return new UsageMetric(label, detail, requestCount, succeeded, failed, inputTokens, outputTokens,
-                    estimatedCost, failovers,
+                    estimatedCost, new LinkedHashMap<>(estimatedCostByCurrency), failovers,
                     latencyCount == 0 ? 0 : Math.round((double) latencyTotal / latencyCount));
         }
     }
@@ -336,11 +340,13 @@ public class AdminUsageService {
 
     public record UsageMetric(String label, String detail, long requestCount, long succeeded, long failed,
                               long inputTokens, long outputTokens, BigDecimal estimatedCost,
+                              Map<String, BigDecimal> estimatedCostByCurrency,
                               long failovers, long averageLatencyMs) { }
 
     public record RecentRequest(String requestId, String projectName, String serviceKey,
                                 String infrastructure, String apiKeyLabel, String status,
                                 long inputTokens, long outputTokens, BigDecimal estimatedCost,
-                                Long latencyMs, int failoverCount, String errorCode, Instant startedAt) { }
+                                String costCurrency, Long latencyMs, int failoverCount,
+                                String errorCode, Instant startedAt) { }
 }
 

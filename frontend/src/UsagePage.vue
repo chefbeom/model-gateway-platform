@@ -2,8 +2,8 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { adminFetch, type AdminAuth } from './api'
 
-type UsageMetric = { label: string; detail: string; requestCount: number; succeeded: number; failed: number; inputTokens: number; outputTokens: number; estimatedCost: number; failovers: number; averageLatencyMs: number }
-type UsageRequest = { requestId: string; projectName: string; serviceKey: string; infrastructure: string; apiKeyLabel: string; status: string; inputTokens: number; outputTokens: number; estimatedCost: number; latencyMs?: number | null; failoverCount: number; errorCode?: string | null; startedAt: string }
+type UsageMetric = { label: string; detail: string; requestCount: number; succeeded: number; failed: number; inputTokens: number; outputTokens: number; estimatedCost: number; estimatedCostByCurrency?: Record<string, number>; failovers: number; averageLatencyMs: number }
+type UsageRequest = { requestId: string; projectName: string; serviceKey: string; infrastructure: string; apiKeyLabel: string; status: string; inputTokens: number; outputTokens: number; estimatedCost: number; costCurrency?: string; latencyMs?: number | null; failoverCount: number; errorCode?: string | null; startedAt: string }
 type ProjectScope = { id: string; name: string; access: 'ORGANIZATION_ALL' | 'PROJECT_ALL' | 'OWN_KEYS'; accessLabel: string }
 type UsageOverview = {
   total: UsageMetric
@@ -80,6 +80,12 @@ async function loadUsage() {
 function changeProject() { void loadUsage() }
 function integer(value = 0) { return new Intl.NumberFormat('ko-KR').format(value) }
 function cost(value = 0) { return `${new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 6 }).format(value)} 원` }
+function costBreakdown(item: { estimatedCost?: number; estimatedCostByCurrency?: Record<string, number>; costCurrency?: string }) {
+  const map = item.estimatedCostByCurrency
+  if (map && Object.keys(map).length) return Object.entries(map).map(([currency, value]) => new Intl.NumberFormat(currency === 'USD' ? 'en-US' : 'ko-KR', { style: 'currency', currency, maximumFractionDigits: currency === 'USD' ? 4 : 0 }).format(Number(value ?? 0))).join(' · ')
+  const currency = item.costCurrency === 'USD' ? 'USD' : 'KRW'
+  return new Intl.NumberFormat(currency === 'USD' ? 'en-US' : 'ko-KR', { style: 'currency', currency, maximumFractionDigits: currency === 'USD' ? 4 : 0 }).format(Number(item.estimatedCost ?? 0))
+}
 function successRate(metric?: UsageMetric | null) {
   return !metric?.requestCount ? '0%' : `${((metric.succeeded / metric.requestCount) * 100).toFixed(1)}%`
 }
@@ -126,20 +132,20 @@ onMounted(() => { void loadUsage() })
         <article class="metric-card"><span>성공률</span><strong>{{ successRate(overview.total) }}</strong><small>성공 {{ integer(overview.total.succeeded) }} · 실패 {{ integer(overview.total.failed) }}</small></article>
         <article class="metric-card"><span>입력 토큰</span><strong>{{ integer(overview.total.inputTokens) }}</strong></article>
         <article class="metric-card"><span>출력 토큰</span><strong>{{ integer(overview.total.outputTokens) }}</strong></article>
-        <article class="metric-card"><span>예상 비용</span><strong>{{ cost(overview.total.estimatedCost) }}</strong></article>
+        <article class="metric-card"><span>예상 비용</span><strong>{{ costBreakdown(overview.total) }}</strong></article>
         <article class="metric-card" :class="{ warning: overview.total.failed > 0 }"><span>Failover</span><strong>{{ integer(overview.total.failovers) }}</strong><small>평균 {{ integer(overview.total.averageLatencyMs) }} ms</small></article>
       </div>
 
       <div class="usage-grid">
         <article class="surface-card">
           <header class="card-header"><div><span class="card-kicker">PROJECTS</span><h2>프로젝트별 사용량</h2></div><span class="count-badge">{{ overview.byProject.length }}</span></header>
-          <div v-if="overview.byProject.length" class="data-table-wrap compact-table"><table class="data-table"><thead><tr><th>프로젝트</th><th>요청</th><th>토큰</th><th>비용</th><th>실패</th></tr></thead><tbody><tr v-for="item in overview.byProject" :key="item.label"><td><strong>{{ item.label }}</strong></td><td>{{ integer(item.requestCount) }}</td><td>{{ integer(item.inputTokens + item.outputTokens) }}</td><td>{{ cost(item.estimatedCost) }}</td><td :class="{ 'danger-text': item.failed }">{{ integer(item.failed) }}</td></tr></tbody></table></div>
+          <div v-if="overview.byProject.length" class="data-table-wrap compact-table"><table class="data-table"><thead><tr><th>프로젝트</th><th>요청</th><th>토큰</th><th>비용</th><th>실패</th></tr></thead><tbody><tr v-for="item in overview.byProject" :key="item.label"><td><strong>{{ item.label }}</strong></td><td>{{ integer(item.requestCount) }}</td><td>{{ integer(item.inputTokens + item.outputTokens) }}</td><td>{{ costBreakdown(item) }}</td><td :class="{ 'danger-text': item.failed }">{{ integer(item.failed) }}</td></tr></tbody></table></div>
           <div v-else class="empty-state compact"><span>⌘</span><p>선택 범위에 프로젝트 사용량이 없습니다.</p></div>
         </article>
 
         <article class="surface-card">
           <header class="card-header"><div><span class="card-kicker">API KEYS</span><h2>API 키별 사용량</h2></div><span class="count-badge">{{ overview.byApiKey.length }}</span></header>
-          <div v-if="overview.byApiKey.length" class="data-table-wrap compact-table"><table class="data-table"><thead><tr><th>API 키</th><th>요청</th><th>토큰</th><th>비용</th><th>실패</th></tr></thead><tbody><tr v-for="item in overview.byApiKey" :key="`${item.label}-${item.detail}`"><td><strong>{{ item.label }}</strong><small>{{ item.detail }}</small></td><td>{{ integer(item.requestCount) }}</td><td>{{ integer(item.inputTokens + item.outputTokens) }}</td><td>{{ cost(item.estimatedCost) }}</td><td :class="{ 'danger-text': item.failed }">{{ integer(item.failed) }}</td></tr></tbody></table></div>
+          <div v-if="overview.byApiKey.length" class="data-table-wrap compact-table"><table class="data-table"><thead><tr><th>API 키</th><th>요청</th><th>토큰</th><th>비용</th><th>실패</th></tr></thead><tbody><tr v-for="item in overview.byApiKey" :key="`${item.label}-${item.detail}`"><td><strong>{{ item.label }}</strong><small>{{ item.detail }}</small></td><td>{{ integer(item.requestCount) }}</td><td>{{ integer(item.inputTokens + item.outputTokens) }}</td><td>{{ costBreakdown(item) }}</td><td :class="{ 'danger-text': item.failed }">{{ integer(item.failed) }}</td></tr></tbody></table></div>
           <div v-else class="empty-state compact"><span>◇</span><p>선택 범위에 API 키 사용량이 없습니다.</p></div>
         </article>
       </div>
@@ -147,7 +153,7 @@ onMounted(() => { void loadUsage() })
       <div class="usage-grid">
         <article class="surface-card">
           <header class="card-header"><div><span class="card-kicker">LOGICAL SERVICES</span><h2>논리 서비스별 사용량</h2></div><span class="count-badge">{{ overview.byService.length }}</span></header>
-          <div v-if="overview.byService.length" class="data-table-wrap compact-table"><table class="data-table"><thead><tr><th>model 값</th><th>요청</th><th>성공률</th><th>토큰</th><th>비용</th></tr></thead><tbody><tr v-for="item in overview.byService" :key="item.label"><td><strong>{{ item.label }}</strong><small>{{ item.detail }}</small></td><td>{{ integer(item.requestCount) }}</td><td>{{ successRate(item) }}</td><td>{{ integer(item.inputTokens + item.outputTokens) }}</td><td>{{ cost(item.estimatedCost) }}</td></tr></tbody></table></div>
+          <div v-if="overview.byService.length" class="data-table-wrap compact-table"><table class="data-table"><thead><tr><th>model 값</th><th>요청</th><th>성공률</th><th>토큰</th><th>비용</th></tr></thead><tbody><tr v-for="item in overview.byService" :key="item.label"><td><strong>{{ item.label }}</strong><small>{{ item.detail }}</small></td><td>{{ integer(item.requestCount) }}</td><td>{{ successRate(item) }}</td><td>{{ integer(item.inputTokens + item.outputTokens) }}</td><td>{{ costBreakdown(item) }}</td></tr></tbody></table></div>
           <div v-else class="empty-state compact"><span>▣</span><p>선택 범위에 서비스 사용량이 없습니다.</p></div>
         </article>
 
@@ -160,7 +166,7 @@ onMounted(() => { void loadUsage() })
 
       <article class="surface-card">
         <header class="card-header"><div><span class="card-kicker">REQUEST HISTORY</span><h2>최근 요청</h2></div><span class="count-badge">{{ overview.recentRequests.length }}</span></header>
-        <div v-if="overview.recentRequests.length" class="data-table-wrap"><table class="data-table"><thead><tr><th>시간</th><th>프로젝트</th><th>논리 모델·키</th><th>실제 배포</th><th>상태</th><th>토큰</th><th>비용</th><th>지연</th><th>Failover</th></tr></thead><tbody><tr v-for="item in overview.recentRequests" :key="item.requestId"><td>{{ new Date(item.startedAt).toLocaleString() }}</td><td>{{ item.projectName }}</td><td><strong>{{ item.serviceKey }}</strong><small>{{ item.apiKeyLabel }}</small></td><td>{{ item.infrastructure }}</td><td><span class="status-chip tiny" :class="item.status === 'SUCCEEDED' ? 'healthy' : 'unhealthy'">{{ item.status }}</span><small v-if="item.errorCode" class="danger-text">{{ item.errorCode }}</small></td><td>{{ integer(item.inputTokens + item.outputTokens) }}</td><td>{{ cost(item.estimatedCost) }}</td><td>{{ integer(item.latencyMs ?? 0) }} ms</td><td>{{ item.failoverCount }}</td></tr></tbody></table></div>
+        <div v-if="overview.recentRequests.length" class="data-table-wrap"><table class="data-table"><thead><tr><th>시간</th><th>프로젝트</th><th>논리 모델·키</th><th>실제 배포</th><th>상태</th><th>토큰</th><th>비용</th><th>지연</th><th>Failover</th></tr></thead><tbody><tr v-for="item in overview.recentRequests" :key="item.requestId"><td>{{ new Date(item.startedAt).toLocaleString() }}</td><td>{{ item.projectName }}</td><td><strong>{{ item.serviceKey }}</strong><small>{{ item.apiKeyLabel }}</small></td><td>{{ item.infrastructure }}</td><td><span class="status-chip tiny" :class="item.status === 'SUCCEEDED' ? 'healthy' : 'unhealthy'">{{ item.status }}</span><small v-if="item.errorCode" class="danger-text">{{ item.errorCode }}</small></td><td>{{ integer(item.inputTokens + item.outputTokens) }}</td><td>{{ costBreakdown(item) }}</td><td>{{ integer(item.latencyMs ?? 0) }} ms</td><td>{{ item.failoverCount }}</td></tr></tbody></table></div>
         <div v-else class="empty-state"><span>◴</span><p>표시할 요청이 없습니다.</p></div>
       </article>
     </template>
