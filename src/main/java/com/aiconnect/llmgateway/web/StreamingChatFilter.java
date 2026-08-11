@@ -19,7 +19,7 @@ import java.io.IOException;
 import java.io.InputStream;
 
 @Component
-@Order(Ordered.HIGHEST_PRECEDENCE)
+@Order(Ordered.HIGHEST_PRECEDENCE + 1)
 public class StreamingChatFilter extends OncePerRequestFilter {
     private final ObjectMapper objectMapper;
     private final StreamingChatCompletionGateway streamingGateway;

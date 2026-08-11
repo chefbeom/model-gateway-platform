@@ -31,4 +31,11 @@ class FailoverRetryDeciderTest {
         assertThat(decider.retryFailure(RetryPolicy.AGGRESSIVE,
                 new RuntimeUnavailableException("timeout", new SocketTimeoutException("Read timed out")))).isTrue();
     }
+
+    @Test
+    void capacityResponsesFailoverEvenWithSafePolicy() {
+        assertThat(decider.isCapacityResponse(429, "Selected model is at capacity. Please try a different model.")).isTrue();
+        assertThat(decider.retryHttp(RetryPolicy.SAFE, 429, "Selected model is at capacity.")).isTrue();
+        assertThat(decider.isCapacityResponse(429, "ordinary rate limit")).isFalse();
+    }
 }

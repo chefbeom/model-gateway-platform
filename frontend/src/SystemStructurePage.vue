@@ -4,7 +4,9 @@ import { adminFetch, type AdminAuth, type Deployment, type Endpoint } from './ap
 
 type Profile = { profile: string; sharedStateProvider: string; instanceId?: string; redisConfigured?: boolean }
 type Provider = { id: string; displayName: string; providerType: string; baseUrl: string; enabled: boolean; healthStatus: string; apiKeyConfigured: boolean }
-type ProviderModel = { id: string; displayName: string; providerModelId: string; healthStatus: string; enabled: boolean }
+type ProviderModel = { id: string; externalProviderId?: string | null; displayName: string; providerModelId: string; healthStatus: string; enabled: boolean }
+type RuntimeNode = { id: string; organizationId: string; name: string; status: string }
+type Accelerator = { id: string; nodeId: string; vendor: string; productName: string; memoryTotalMb?: number | null; driverVersion?: string | null }
 type Access = { id: string; projectId: string; projectName: string; providerId: string; providerName: string; status: string; autoFailoverEnabled: boolean }
 type Service = { id: string; serviceKey: string; displayName: string; enabled: boolean; failoverPolicy?: string; retryPolicy?: string }
 type Target = { id: string; deploymentId: string; priority: number; weight: number; degraded: boolean; enabled: boolean }
@@ -20,6 +22,8 @@ const props = defineProps<{ organizationId: string; auth: AdminAuth }>()
 
 const profile = ref<Profile | null>(null)
 const endpoints = ref<Endpoint[]>([])
+const nodes = ref<RuntimeNode[]>([])
+const accelerators = ref<Record<string, Accelerator[]>>({})
 const endpointDeployments = ref<Record<string, Deployment[]>>({})
 const providers = ref<Provider[]>([])
 const providerModels = ref<Record<string, ProviderModel[]>>({})
@@ -46,6 +50,7 @@ const enabledServiceCount = computed(() => services.value.filter(item => item.en
 const activeKeyCount = computed(() => Object.values(keys.value).flat().filter(item => item.status === 'ACTIVE').length)
 const grantCount = computed(() => Object.values(grants.value).reduce((total, items) => total + items.length, 0))
 const targetCount = computed(() => Object.values(targets.value).reduce((total, items) => total + items.length, 0))
+const acceleratorCount = computed(() => Object.values(accelerators.value).reduce((total, items) => total + items.length, 0))
 
 function textError(error: unknown) { return error instanceof Error ? error.message : '요청을 처리하지 못했습니다.' }
 async function read<T>(path: string, section: string, fallback: T): Promise<T> {
@@ -53,7 +58,7 @@ async function read<T>(path: string, section: string, fallback: T): Promise<T> {
   catch (error) { errors.value.push({ section, path, message: textError(error) }); return fallback }
 }
 function reset() {
-  profile.value = null; endpoints.value = []; endpointDeployments.value = {}; providers.value = []; providerModels.value = {}
+  profile.value = null; endpoints.value = []; nodes.value = []; accelerators.value = {}; endpointDeployments.value = {}; providers.value = []; providerModels.value = {}
   accesses.value = []; services.value = []; targets.value = {}; teams.value = []; members.value = {}; users.value = []
   projects.value = []; keys.value = {}; grants.value = {}; errors.value = []; lastLoadedAt.value = ''
 }
@@ -73,6 +78,11 @@ async function load() {
     ])
     profile.value = values[0]; endpoints.value = values[1]; providers.value = values[2]; accesses.value = values[3]
     services.value = values[4]; teams.value = values[5]; users.value = values[6]; projects.value = values[7]
+    nodes.value = await read<RuntimeNode[]>('/api/admin/organizations/' + props.organizationId + '/nodes', 'Inference nodes', [])
+    const acceleratorRows = await Promise.all(nodes.value.map(async item => [
+      item.id,
+      await read<Accelerator[]>('/api/admin/nodes/' + item.id + '/accelerators', 'Accelerator �� ' + item.name, [])
+    ] as const))
 
     const [endpointRows, providerRows, serviceRows, teamRows, projectRows] = await Promise.all([
       Promise.all(endpoints.value.map(async item => [item.id, await read<Deployment[]>('/api/admin/runtime-endpoints/' + item.id + '/deployments', '모델 배포 · ' + (item.displayName || item.baseUrl), [])] as const)),
@@ -113,6 +123,8 @@ function statusLabel(value?: string | null) {
 }
 function endpointName(item: Endpoint) { return item.displayName || item.baseUrl.replace(/^https?:\/\//, '') }
 function modelsFor(item: Endpoint) { return endpointDeployments.value[item.id] || [] }
+function acceleratorsFor(item: RuntimeNode) { return accelerators.value[item.id] || [] }
+function endpointCountForNode(nodeId: string) { return endpoints.value.filter(item => item.nodeId === nodeId).length }
 function providerModelsFor(item: Provider) { return providerModels.value[item.id] || [] }
 function targetsFor(item: Service) { return targets.value[item.id] || [] }
 function membersFor(item: Team) { return members.value[item.id] || [] }
@@ -121,6 +133,22 @@ function grantsFor(item: Project) { return grants.value[item.id] || [] }
 function teamName(teamId?: string | null) { return teams.value.find(item => item.id === teamId)?.name || '조직 공용' }
 function projectsFor(teamId: string) { return projects.value.filter(item => item.teamId === teamId).length }
 function providerName(providerId: string) { return providers.value.find(item => item.id === providerId)?.displayName || providerId.slice(0, 8) }
+const deploymentIndex = computed(() => {
+  const index: Record<string, { label: string; providerId?: string | null }> = {}
+  for (const deployment of Object.values(endpointDeployments.value).flat()) {
+    index[deployment.id] = { label: deployment.displayName || deployment.providerModelId, providerId: deployment.externalProviderId }
+  }
+  for (const model of Object.values(providerModels.value).flat()) {
+    index[model.id] = { label: model.displayName || model.providerModelId, providerId: model.externalProviderId }
+  }
+  return index
+})
+function targetLabel(target: Target) {
+  const deployment = deploymentIndex.value[target.deploymentId]
+  if (!deployment) return target.deploymentId.slice(0, 8)
+  return deployment.label + (deployment.providerId ? ' �� ' + providerName(deployment.providerId) : '')
+}
+function grantLabel(grant: Grant) { return grant.displayName || grant.serviceKey }
 function show(item: 'runtime' | 'routing' | 'access') { return layer.value === 'all' || layer.value === item }
 function profileLabel(value?: string) { return (value || 'UNKNOWN').replaceAll('_', ' ') }
 
@@ -155,6 +183,7 @@ onMounted(() => { void load() })
           <section v-if="show('runtime')" class="architecture-layer">
             <div class="layer-heading"><div><span class="card-kicker">COMPUTE & PROVIDERS</span><h3>실행 가능한 AI 자원</h3></div><small>{{ endpoints.length + providers.length }}개 연결</small></div>
             <div class="resource-grid">
+              <article v-for="item in nodes" :key="'node-' + item.id" class="resource-card"><div class="resource-icon">GPU</div><div class="resource-content"><div class="resource-heading"><strong>{{ item.name }}</strong><span class="status-chip tiny" :class="statusClass(item.status)">{{ statusLabel(item.status) }}</span></div><small>INFERENCE NODE · {{ item.status }}</small><div class="resource-meta"><span>Endpoints {{ endpointCountForNode(item.id) }}</span><span>Accelerators {{ acceleratorsFor(item).length }}</span></div><div v-if="acceleratorsFor(item).length" class="resource-tags"><span v-for="accelerator in acceleratorsFor(item).slice(0, 3)" :key="accelerator.id">{{ accelerator.vendor }} {{ accelerator.productName }}</span><span v-if="acceleratorsFor(item).length > 3">+{{ acceleratorsFor(item).length - 3 }}</span></div><div v-else class="resource-empty">No accelerator inventory</div></div></article>
               <article v-for="item in endpoints" :key="item.id" class="resource-card" :class="{ muted: !item.enabled }"><div class="resource-icon">◇</div><div class="resource-content"><div class="resource-heading"><strong>{{ endpointName(item) }}</strong><span class="status-chip tiny" :class="statusClass(item.healthStatus)">{{ statusLabel(item.healthStatus) }}</span></div><small>{{ item.runtimeType }} · {{ item.baseUrl }}</small><div class="resource-meta"><span>모델 {{ modelsFor(item).length }}</span><span>노드 {{ item.nodeId.slice(0, 8) }}</span></div><div v-if="modelsFor(item).length" class="resource-tags"><span v-for="model in modelsFor(item).slice(0, 3)" :key="model.id">{{ model.displayName }}</span><span v-if="modelsFor(item).length > 3">+{{ modelsFor(item).length - 3 }}</span></div><div v-else class="resource-empty">동기화된 모델 없음</div></div></article>
               <article v-for="item in providers" :key="item.id" class="resource-card" :class="{ muted: !item.enabled }"><div class="resource-icon provider">◎</div><div class="resource-content"><div class="resource-heading"><strong>{{ item.displayName }}</strong><span class="status-chip tiny" :class="statusClass(item.healthStatus)">{{ statusLabel(item.healthStatus) }}</span></div><small>{{ item.providerType }} · {{ item.baseUrl }}</small><div class="resource-meta"><span>모델 {{ providerModelsFor(item).length }}</span><span>{{ item.apiKeyConfigured ? 'API 키 설정됨' : 'API 키 미설정' }}</span></div><div v-if="providerModelsFor(item).length" class="resource-tags"><span v-for="model in providerModelsFor(item).slice(0, 3)" :key="model.id">{{ model.displayName }}</span><span v-if="providerModelsFor(item).length > 3">+{{ providerModelsFor(item).length - 3 }}</span></div><div v-else class="resource-empty">등록된 외부 모델 없음</div></div></article>
               <div v-if="!endpoints.length && !providers.length" class="empty-state compact layer-empty"><span>◇</span><p>연결된 Runtime Endpoint 또는 외부 Provider가 없습니다.</p></div>
@@ -165,7 +194,7 @@ onMounted(() => { void load() })
           <section v-if="show('routing')" class="architecture-layer">
             <div class="layer-heading"><div><span class="card-kicker">MODEL ROUTING</span><h3>논리 LLM 서비스와 Target</h3></div><small>{{ services.length }}개 서비스 · {{ targetCount }}개 Target</small></div>
             <div class="service-grid">
-              <article v-for="item in services" :key="item.id" class="service-node" :class="{ muted: !item.enabled }"><div class="service-node-top"><span class="service-glyph">▣</span><span class="status-chip tiny" :class="item.enabled ? 'healthy' : 'unknown'">{{ item.enabled ? 'ACTIVE' : 'DISABLED' }}</span></div><strong>{{ item.displayName }}</strong><code>{{ item.serviceKey }}</code><div class="service-policy"><span>{{ item.failoverPolicy || 'STRICT' }}</span><span>{{ item.retryPolicy || 'SAFE' }}</span><b>{{ targetsFor(item).length }} targets</b></div><div v-if="targetsFor(item).length" class="target-stack"><span v-for="target in targetsFor(item).slice(0, 4)" :key="target.id" :class="{ disabled: !target.enabled, degraded: target.degraded }"><i></i>{{ target.deploymentId.slice(0, 8) }} · P{{ target.priority }} · {{ target.weight }}%</span><small v-if="targetsFor(item).length > 4">+{{ targetsFor(item).length - 4 }}개 Target</small></div><div v-else class="resource-empty">연결된 Target 없음</div></article>
+              <article v-for="item in services" :key="item.id" class="service-node" :class="{ muted: !item.enabled }"><div class="service-node-top"><span class="service-glyph">▣</span><span class="status-chip tiny" :class="item.enabled ? 'healthy' : 'unknown'">{{ item.enabled ? 'ACTIVE' : 'DISABLED' }}</span></div><strong>{{ item.displayName }}</strong><code>{{ item.serviceKey }}</code><div class="service-policy"><span>{{ item.failoverPolicy || 'STRICT' }}</span><span>{{ item.retryPolicy || 'SAFE' }}</span><b>{{ targetsFor(item).length }} targets</b></div><div v-if="targetsFor(item).length" class="target-stack"><span v-for="target in targetsFor(item).slice(0, 4)" :key="target.id" :class="{ disabled: !target.enabled, degraded: target.degraded }"><i></i>{{ targetLabel(target) }} · P{{ target.priority }} · {{ target.weight }}%</span><small v-if="targetsFor(item).length > 4">+{{ targetsFor(item).length - 4 }}개 Target</small></div><div v-else class="resource-empty">연결된 Target 없음</div></article>
               <div v-if="!services.length" class="empty-state compact layer-empty"><span>▣</span><p>등록된 논리 LLM 서비스가 없습니다.</p></div>
             </div>
           </section>
@@ -174,7 +203,8 @@ onMounted(() => { void load() })
             <div class="layer-heading"><div><span class="card-kicker">ACCESS PLANE</span><h3>팀·프로젝트·API 키</h3></div><small>{{ projects.filter(item => item.teamId).length }}개 팀 소유 프로젝트</small></div>
             <div class="access-grid">
               <article v-for="item in teams" :key="item.id" class="access-node"><div class="access-node-top"><span class="access-icon">⌘</span><span class="status-chip tiny" :class="statusClass(item.status)">{{ statusLabel(item.status) }}</span></div><strong>{{ item.name }}</strong><small>{{ membersFor(item).length }}명 · 프로젝트 {{ projectsFor(item.id) }}개</small><div class="access-tags"><span v-for="member in membersFor(item).slice(0, 3)" :key="member.userId + member.role">{{ member.role }}</span><span v-if="membersFor(item).length > 3">+{{ membersFor(item).length - 3 }}</span></div></article>
-              <article v-for="item in projects" :key="item.id" class="access-node project-node"><div class="access-node-top"><span class="access-icon project">⌘</span><span class="status-chip tiny" :class="statusClass(item.status)">{{ statusLabel(item.status) }}</span></div><strong>{{ item.name }}</strong><small>{{ teamName(item.teamId) }} · 키 {{ keysFor(item).length }}개 · 서비스 {{ grantsFor(item).length }}개</small><div class="access-tags"><span v-for="key in keysFor(item).slice(0, 3)" :key="key.id" :class="{ revoked: key.status !== 'ACTIVE' }">{{ key.keyPrefix }}••••</span><span v-if="keysFor(item).length > 3">+{{ keysFor(item).length - 3 }}</span><span v-if="!keysFor(item).length">API 키 없음</span></div></article>
+              <article v-for="item in projects" :key="item.id" class="access-node project-node"><div class="access-node-top"><span class="access-icon project">⌘</span><span class="status-chip tiny" :class="statusClass(item.status)">{{ statusLabel(item.status) }}</span></div><strong>{{ item.name }}</strong><small>{{ teamName(item.teamId) }} · 키 {{ keysFor(item).length }}개 · 서비스 {{ grantsFor(item).length }}개</small><div class="access-tags"><span v-for="key in keysFor(item).slice(0, 3)" :key="key.id" :class="{ revoked: key.status !== 'ACTIVE' }">{{ key.keyPrefix }}••••</span><span v-if="keysFor(item).length > 3">+{{ keysFor(item).length - 3 }}</span><span v-if="!keysFor(item).length">API 키 없음</span><span v-for="grant in grantsFor(item).slice(0, 3)" :key="'grant-' + grant.id">{{ grantLabel(grant) }}</span><span v-if="grantsFor(item).length > 3">+{{ grantsFor(item).length - 3 }}</span></div></article>
+              <article v-for="item in accesses" :key="'access-' + item.id" class="access-node provider-access"><div class="access-node-top"><span class="access-icon provider">↗</span><span class="status-chip tiny" :class="statusClass(item.status)">{{ statusLabel(item.status) }}</span></div><strong>{{ item.projectName }}</strong><small>→ {{ item.providerName }}</small><div class="access-tags"><span>{{ item.autoFailoverEnabled ? 'AUTO FAILOVER' : 'MANUAL ROUTE' }}</span><span>{{ item.status }}</span></div></article>
               <div v-if="!teams.length && !projects.length" class="empty-state compact layer-empty"><span>⌘</span><p>팀 또는 프로젝트가 없습니다.</p></div>
             </div>
             <div class="access-foot"><span>외부 Provider 권한 {{ accesses.length }}건</span><span>활성 API 키 {{ activeKeyCount }}개</span><span>조직 사용자 {{ users.length }}명</span><span>서비스 권한 {{ grantCount }}건</span><span v-if="accesses.length" class="access-links">{{ accesses.slice(0, 4).map(item => item.projectName + ' → ' + providerName(item.providerId)).join(' · ') }}</span></div>
