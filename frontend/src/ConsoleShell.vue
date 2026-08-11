@@ -232,7 +232,7 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
         <PlatformAdminPage v-else-if="platformAdmin && page === 'platform'" :auth="auth" />
         <UsagePage v-else-if="page === 'usage'" :organization-id="organizationId" :auth="auth" />
         <QuotaPage v-else-if="isAdminConsole && page === 'quotas'" :organization-id="organizationId" :auth="auth" />
-        <ApiPlaygroundPage v-else-if="page === 'playground'" />
+        <ApiPlaygroundPage v-else-if="page === 'playground'" :organization-id="organizationId" :auth="auth" />
         <DevDocsPage v-else-if="page === 'docs'" @navigate="navigate" />
         <DeveloperPortalPage v-else :organization-id="organizationId" :auth="auth" />
       </main>

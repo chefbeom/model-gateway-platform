@@ -9,6 +9,8 @@ import com.aiconnect.llmgateway.web.ApiException;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Max;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
@@ -89,6 +91,13 @@ public class DeveloperPortalController {
         return apiKeyService.issue(projectId, request.name(), request.expiresAt(), actor.userId());
     }
 
+    @PostMapping("/projects/{projectId}/api-keys/temporary")
+    public IssuedApiKey issueTemporaryApiKey(@PathVariable UUID projectId, @Valid @RequestBody CreateTemporaryApiKey request) {
+        AuthPrincipal actor = actor();
+        requireProjectView(actor, projectId);
+        return apiKeyService.issueTemporary(projectId, request.name(), request.durationSeconds(), actor.userId());
+    }
+
     @DeleteMapping("/projects/{projectId}/api-keys/{apiKeyId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void revokeApiKey(@PathVariable UUID projectId, @PathVariable UUID apiKeyId) {
@@ -156,6 +165,8 @@ public class DeveloperPortalController {
     public record ConnectionEndpointView(String scope, String label, String url) { }
     public record MembershipView(UUID organizationId, OrganizationRole role) { }
     public record CreateApiKey(@NotBlank @Size(max = 120) String name, Instant expiresAt) { }
+    public record CreateTemporaryApiKey(@NotBlank @Size(max = 120) String name,
+                                        @Min(60) @Max(86400) long durationSeconds) { }
     public record ProjectView(UUID id, String name, String status, boolean canIssueApiKeys, List<ServiceView> services) {
         static ProjectView from(Project project, boolean canIssueApiKeys, List<ServiceView> services) {
             return new ProjectView(project.getId(), project.getName(), project.getStatus(), canIssueApiKeys, services);

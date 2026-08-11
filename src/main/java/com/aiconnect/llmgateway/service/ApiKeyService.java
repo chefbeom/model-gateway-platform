@@ -24,6 +24,8 @@ import java.util.UUID;
 public class ApiKeyService {
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final String PREFIX = "sk_llmg_";
+    private static final long MIN_TEMPORARY_KEY_SECONDS = 60;
+    private static final long MAX_TEMPORARY_KEY_SECONDS = 24 * 60 * 60;
     private final ApiKeyRepository apiKeys;
     private final ProjectRepository projects;
     private final GatewayProperties properties;
@@ -51,6 +53,15 @@ public class ApiKeyService {
         String raw = PREFIX + publicId + "." + randomHex(32);
         ApiKey key = apiKeys.save(new ApiKey(projectId, issuedByUserId, name, PREFIX + publicId, hmac(raw), expiresAt));
         return new IssuedApiKey(key.getId(), key.getName(), key.getKeyPrefix(), raw, key.getExpiresAt());
+    }
+
+    @Transactional
+    public IssuedApiKey issueTemporary(UUID projectId, String name, long durationSeconds, UUID issuedByUserId) {
+        if (durationSeconds < MIN_TEMPORARY_KEY_SECONDS || durationSeconds > MAX_TEMPORARY_KEY_SECONDS) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "TEMPORARY_API_KEY_DURATION_INVALID",
+                    "Temporary API key duration must be between 60 seconds and 24 hours.");
+        }
+        return issue(projectId, name, Instant.now().plusSeconds(durationSeconds), issuedByUserId);
     }
 
     @Transactional
