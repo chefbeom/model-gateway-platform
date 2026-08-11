@@ -18,6 +18,7 @@ public class LlmService {
     @Column(columnDefinition = "text") private String requiredCapabilitiesJson = "[]";
     @Column(nullable = false, precision = 18, scale = 6) private BigDecimal inputPricePerMillion = BigDecimal.ZERO;
     @Column(nullable = false, precision = 18, scale = 6) private BigDecimal outputPricePerMillion = BigDecimal.ZERO;
+    @Enumerated(EnumType.STRING) @Column(nullable = false, length = 3) private Currency currency = Currency.KRW;
     @Column(nullable = false) private boolean enabled = true;
     @Column(nullable = false) private Instant createdAt = Instant.now();
     @Column(nullable = false) private Instant updatedAt = Instant.now();
@@ -28,12 +29,19 @@ public class LlmService {
                       boolean allowDegraded, String requiredCapabilitiesJson, BigDecimal inputPricePerMillion,
                       BigDecimal outputPricePerMillion) {
         this(organizationId, serviceKey, displayName, failoverPolicy, RetryPolicy.SAFE, allowDegraded,
-                requiredCapabilitiesJson, inputPricePerMillion, outputPricePerMillion);
+                requiredCapabilitiesJson, inputPricePerMillion, outputPricePerMillion, Currency.KRW);
     }
 
     public LlmService(UUID organizationId, String serviceKey, String displayName, FailoverPolicy failoverPolicy,
                       RetryPolicy retryPolicy, boolean allowDegraded, String requiredCapabilitiesJson,
                       BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion) {
+        this(organizationId, serviceKey, displayName, failoverPolicy, retryPolicy, allowDegraded,
+                requiredCapabilitiesJson, inputPricePerMillion, outputPricePerMillion, Currency.KRW);
+    }
+
+    public LlmService(UUID organizationId, String serviceKey, String displayName, FailoverPolicy failoverPolicy,
+                      RetryPolicy retryPolicy, boolean allowDegraded, String requiredCapabilitiesJson,
+                      BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Currency currency) {
         this.organizationId = organizationId;
         this.serviceKey = serviceKey;
         this.displayName = displayName;
@@ -43,11 +51,13 @@ public class LlmService {
         this.requiredCapabilitiesJson = requiredCapabilitiesJson == null ? "[]" : requiredCapabilitiesJson;
         this.inputPricePerMillion = inputPricePerMillion == null ? BigDecimal.ZERO : inputPricePerMillion;
         this.outputPricePerMillion = outputPricePerMillion == null ? BigDecimal.ZERO : outputPricePerMillion;
+        this.currency = currency == null ? Currency.KRW : currency;
     }
 
     public void configure(String displayName, FailoverPolicy failoverPolicy, RetryPolicy retryPolicy,
                           Boolean allowDegraded, String requiredCapabilitiesJson,
-                          BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Boolean enabled) {
+                          BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion,
+                          Currency currency, Boolean enabled) {
         if (displayName != null && !displayName.isBlank()) this.displayName = displayName;
         if (failoverPolicy != null) this.failoverPolicy = failoverPolicy;
         if (retryPolicy != null) this.retryPolicy = retryPolicy;
@@ -55,6 +65,7 @@ public class LlmService {
         if (requiredCapabilitiesJson != null) this.requiredCapabilitiesJson = requiredCapabilitiesJson;
         if (inputPricePerMillion != null) this.inputPricePerMillion = inputPricePerMillion;
         if (outputPricePerMillion != null) this.outputPricePerMillion = outputPricePerMillion;
+        if (currency != null) this.currency = currency;
         if (enabled != null) this.enabled = enabled;
     }
 
@@ -69,5 +80,6 @@ public class LlmService {
     public String getRequiredCapabilitiesJson() { return requiredCapabilitiesJson; }
     public BigDecimal getInputPricePerMillion() { return inputPricePerMillion; }
     public BigDecimal getOutputPricePerMillion() { return outputPricePerMillion; }
+    public Currency getCurrency() { return currency; }
     public boolean isEnabled() { return enabled; }
 }

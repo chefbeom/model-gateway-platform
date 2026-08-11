@@ -1,5 +1,6 @@
 package com.aiconnect.llmgateway.admin;
 
+import com.aiconnect.llmgateway.domain.Currency;
 import com.aiconnect.llmgateway.domain.FailoverPolicy;
 import com.aiconnect.llmgateway.domain.LlmService;
 import com.aiconnect.llmgateway.domain.RetryPolicy;
@@ -67,9 +68,16 @@ public class RoutingPolicyController {
             String requiredCapabilitiesJson,
             @DecimalMin("0") BigDecimal inputPricePerMillion,
             @DecimalMin("0") BigDecimal outputPricePerMillion,
+            Currency currency,
             Boolean enabled
-    ) { }
-
+    ) {
+        public UpdateService(String displayName, FailoverPolicy failoverPolicy, RetryPolicy retryPolicy,
+                             Boolean allowDegraded, String requiredCapabilitiesJson,
+                             BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Boolean enabled) {
+            this(displayName, failoverPolicy, retryPolicy, allowDegraded, requiredCapabilitiesJson,
+                    inputPricePerMillion, outputPricePerMillion, Currency.KRW, enabled);
+        }
+    }
     public record UpdateTarget(
             @Min(1) Integer priority,
             @Min(1) Integer weight,
@@ -81,11 +89,11 @@ public class RoutingPolicyController {
     public record ServicePolicyView(UUID id, UUID organizationId, String serviceKey, String displayName,
                                     FailoverPolicy failoverPolicy, RetryPolicy retryPolicy, boolean allowDegraded,
                                     String requiredCapabilitiesJson, BigDecimal inputPricePerMillion,
-                                    BigDecimal outputPricePerMillion, boolean enabled) {
+                                    BigDecimal outputPricePerMillion, Currency currency, boolean enabled) {
         static ServicePolicyView from(LlmService service) {
             return new ServicePolicyView(service.getId(), service.getOrganizationId(), service.getServiceKey(), service.getDisplayName(),
                     service.getFailoverPolicy(), service.getRetryPolicy(), service.isAllowDegraded(), service.getRequiredCapabilitiesJson(),
-                    service.getInputPricePerMillion(), service.getOutputPricePerMillion(), service.isEnabled());
+                    service.getInputPricePerMillion(), service.getOutputPricePerMillion(), service.getCurrency(), service.isEnabled());
         }
     }
 

@@ -15,7 +15,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import java.math.BigDecimal;
 import java.time.*;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 @RestController
@@ -44,8 +46,9 @@ public class UsageController {
         int input = all.stream().map(LlmRequest::getInputTokens).filter(Objects::nonNull).mapToInt(Integer::intValue).sum();
         int output = all.stream().map(LlmRequest::getOutputTokens).filter(Objects::nonNull).mapToInt(Integer::intValue).sum();
         BigDecimal cost = all.stream().map(LlmRequest::getEstimatedCost).filter(Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
+        Map<String, BigDecimal> costByCurrency = costByCurrency(all);
         long failed = all.stream().filter(request -> request.getStatus() == RequestStatus.FAILED).count();
-        return new UsageSummary(all.size(), input, output, cost, failed, startDate, endExclusiveDate.minusDays(1));
+        return new UsageSummary(all.size(), input, output, cost, costByCurrency, failed, startDate, endExclusiveDate.minusDays(1));
     }
     @GetMapping("/requests")
     public List<RequestView> requestHistory(@RequestHeader(HttpHeaders.AUTHORIZATION) String authorization) {
@@ -58,12 +61,24 @@ public class UsageController {
         return new RequestView(request.getRequestId(), service == null ? null : service.getServiceKey(),
                 service == null ? null : service.getDisplayName(), deployment == null ? null : deployment.getDisplayName(),
                 request.isStream(), request.getStatus().name(), request.getInputTokens(), request.getOutputTokens(),
-                request.getEstimatedCost(), request.getLatencyMs(), request.getFailoverCount(), request.getFinalProviderType(), request.getRoutingReason(), request.getHttpStatus(),
+                request.getEstimatedCost(), request.getCostCurrency().name(), request.getLatencyMs(), request.getFailoverCount(), request.getFinalProviderType(), request.getRoutingReason(), request.getHttpStatus(),
                 request.getErrorCode(), request.getStartedAt(), request.getCompletedAt());
     }
-    public record UsageSummary(int requestCount, int inputTokens, int outputTokens, BigDecimal estimatedCost, long failedRequests, LocalDate periodFrom, LocalDate periodTo) { }
+    private Map<String, BigDecimal> costByCurrency(List<LlmRequest> rows) {
+        Map<String, BigDecimal> result = new LinkedHashMap<>();
+        for (LlmRequest row : rows) {
+            if (row.getEstimatedCost() == null) continue;
+            String currency = row.getCostCurrency() == null ? "KRW" : row.getCostCurrency().name();
+            result.merge(currency, row.getEstimatedCost(), BigDecimal::add);
+        }
+        return result;
+    }
+
+    public record UsageSummary(int requestCount, int inputTokens, int outputTokens, BigDecimal estimatedCost,
+                               Map<String, BigDecimal> estimatedCostByCurrency, long failedRequests,
+                               LocalDate periodFrom, LocalDate periodTo) { }
     public record RequestView(String requestId, String serviceKey, String serviceDisplayName, String deploymentDisplayName,
                               boolean stream, String status, Integer inputTokens, Integer outputTokens,
-                              BigDecimal estimatedCost, Long latencyMs, int failoverCount, String providerType, String routingReason, Integer httpStatus,
+                              BigDecimal estimatedCost, String costCurrency, Long latencyMs, int failoverCount, String providerType, String routingReason, Integer httpStatus,
                               String errorCode, Instant startedAt, Instant completedAt) { }
 }

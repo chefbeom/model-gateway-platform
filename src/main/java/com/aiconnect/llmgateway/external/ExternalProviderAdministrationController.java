@@ -1,5 +1,7 @@
 package com.aiconnect.llmgateway.external;
 
+import com.aiconnect.llmgateway.domain.Currency;
+
 import com.aiconnect.llmgateway.identity.AuthPrincipal;
 import com.aiconnect.llmgateway.identity.CurrentActor;
 import jakarta.servlet.http.HttpServletRequest;
@@ -48,7 +50,7 @@ public class ExternalProviderAdministrationController {
 
     @PostMapping("/external-providers/{providerId}/models")
     public ExternalProviderAdministrationService.ProviderModelView addModel(@PathVariable UUID providerId, @Valid @RequestBody AddModel request) {
-        return service.addModel(providerId, request.providerModelId(), request.displayName(), request.compatibilityKey(), request.contextLength(), request.maxConcurrency(), request.capabilitiesJson(), request.inputPricePerMillion(), request.outputPricePerMillion());
+        return service.addModel(providerId, request.providerModelId(), request.displayName(), request.compatibilityKey(), request.contextLength(), request.maxConcurrency(), request.capabilitiesJson(), request.inputPricePerMillion(), request.outputPricePerMillion(), request.currency());
     }
 
     private boolean isPlatformAdmin(HttpServletRequest request) {
@@ -62,5 +64,5 @@ public class ExternalProviderAdministrationController {
     public record AddModel(@NotBlank @Size(max = 500) String providerModelId, @NotBlank @Size(max = 200) String displayName,
                            String compatibilityKey, @Positive Integer contextLength, @Positive Integer maxConcurrency,
                            String capabilitiesJson, @PositiveOrZero BigDecimal inputPricePerMillion,
-                           @PositiveOrZero BigDecimal outputPricePerMillion) { }
+                           @PositiveOrZero BigDecimal outputPricePerMillion, Currency currency) { }
 }

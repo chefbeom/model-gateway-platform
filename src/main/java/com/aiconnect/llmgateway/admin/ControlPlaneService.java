@@ -1,6 +1,7 @@
 package com.aiconnect.llmgateway.admin;
 
 import com.aiconnect.llmgateway.domain.*;
+import com.aiconnect.llmgateway.domain.Currency;
 import com.aiconnect.llmgateway.repository.*;
 import com.aiconnect.llmgateway.runtime.InferenceRuntimeClient;
 import com.aiconnect.llmgateway.runtime.RuntimeResult;
@@ -104,7 +105,8 @@ public class ControlPlaneService {
         return services.save(new LlmService(request.organizationId(), request.serviceKey(), request.displayName(),
                 request.failoverPolicy() == null ? FailoverPolicy.STRICT : request.failoverPolicy(),
                 request.retryPolicy() == null ? RetryPolicy.SAFE : request.retryPolicy(), request.allowDegraded(),
-                request.requiredCapabilitiesJson(), zeroIfNull(request.inputPricePerMillion()), zeroIfNull(request.outputPricePerMillion())));
+                request.requiredCapabilitiesJson(), zeroIfNull(request.inputPricePerMillion()), zeroIfNull(request.outputPricePerMillion()),
+                request.currency() == null ? Currency.KRW : request.currency()));
     }
 
     @Transactional

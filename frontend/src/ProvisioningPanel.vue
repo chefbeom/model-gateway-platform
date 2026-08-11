@@ -25,6 +25,7 @@ const retryPolicy = ref<'SAFE' | 'AGGRESSIVE'>('SAFE')
 const allowDegraded = ref(false)
 const inputPrice = ref(0)
 const outputPrice = ref(0)
+const currency = ref<'KRW' | 'USD'>('KRW')
 const serviceId = ref(sessionStorage.getItem('aiconnect.setup.serviceId') ?? '')
 const issuedKey = ref('')
 const busy = ref(false)
@@ -101,7 +102,7 @@ async function createService() {
   await run(async () => {
     const created = await adminFetch<{ id: string }>('/api/admin/services', auth(), {
       method: 'POST',
-      body: JSON.stringify({ organizationId: organizationId.value, serviceKey: serviceKey.value, displayName: serviceName.value, failoverPolicy: failoverPolicy.value, retryPolicy: retryPolicy.value, allowDegraded: allowDegraded.value, requiredCapabilitiesJson: '[]', inputPricePerMillion: inputPrice.value, outputPricePerMillion: outputPrice.value })
+      body: JSON.stringify({ organizationId: organizationId.value, serviceKey: serviceKey.value, displayName: serviceName.value, failoverPolicy: failoverPolicy.value, retryPolicy: retryPolicy.value, allowDegraded: allowDegraded.value, requiredCapabilitiesJson: '[]', inputPricePerMillion: inputPrice.value, outputPricePerMillion: outputPrice.value, currency: currency.value })
     })
     serviceId.value = created.id; save('serviceId', created.id)
   }, '논리 서비스를 생성했습니다.')
@@ -128,7 +129,7 @@ async function issueKey() {
         <article><span>3</span><h3>추론 노드</h3><input v-model="nodeName" placeholder="노드 이름" /><input v-model="nodeId" placeholder="Node UUID" /><button :disabled="busy || !organizationId" @click="createNode">노드 생성</button></article>
         <article><span>4</span><h3>LM Studio</h3><input v-model="baseUrl" placeholder="Tailscale URL :1234" /><input v-model="runtimeToken" type="password" placeholder="LM Studio API Token" /><input v-model="endpointId" placeholder="Endpoint UUID" /><button :disabled="busy || !nodeId || !baseUrl" @click="createEndpoint">Endpoint 등록</button></article>
         <article><span>5</span><h3>모델 발견</h3><select v-model="deploymentId"><option value="">Deployment 선택</option><option v-for="item in deployments" :key="item.id" :value="item.id">{{ item.displayName }}</option></select><input v-model="deploymentId" placeholder="Deployment UUID" /><button :disabled="busy || !endpointId" @click="synchronizeModels">Probe + 동기화</button></article>
-        <article><span>6</span><h3>논리 서비스</h3><input v-model="serviceKey" placeholder="model 값 (text-pro)" /><input v-model="serviceName" placeholder="표시 이름" /><select v-model="failoverPolicy"><option value="STRICT">STRICT · 동일 호환 그룹만</option><option value="COMPATIBLE">COMPATIBLE · 승인된 모델</option><option value="DEGRADED">DEGRADED · 저성능 대상 포함</option></select><select v-model="retryPolicy"><option value="SAFE">SAFE · 연결 전 실패만 재시도</option><option value="AGGRESSIVE">AGGRESSIVE · 5xx/타임아웃도 재시도</option></select><label><input v-model="allowDegraded" type="checkbox" /> 성능 저하 대체 대상 허용</label><div class="prices"><input v-model.number="inputPrice" type="number" min="0" placeholder="입력/백만 토큰" /><input v-model.number="outputPrice" type="number" min="0" placeholder="출력/백만 토큰" /></div><input v-model="serviceId" placeholder="Service UUID" /><button :disabled="busy || !organizationId" @click="createService">서비스 생성</button></article>
+        <article><span>6</span><h3>논리 서비스</h3><input v-model="serviceKey" placeholder="model 값 (text-pro)" /><input v-model="serviceName" placeholder="표시 이름" /><select v-model="failoverPolicy"><option value="STRICT">STRICT · 동일 호환 그룹만</option><option value="COMPATIBLE">COMPATIBLE · 승인된 모델</option><option value="DEGRADED">DEGRADED · 저성능 대상 포함</option></select><select v-model="retryPolicy"><option value="SAFE">SAFE · 연결 전 실패만 재시도</option><option value="AGGRESSIVE">AGGRESSIVE · 5xx/타임아웃도 재시도</option></select><label><input v-model="allowDegraded" type="checkbox" /> 성능 저하 대체 대상 허용</label><div class="prices"><select v-model="currency"><option value="KRW">원화 (KRW)</option><option value="USD">달러 (USD)</option></select><input v-model.number="inputPrice" type="number" min="0" step="0.000001" :placeholder="`입력 / 1M 토큰 (${currency === 'USD' ? '$' : '₩'})`" /><input v-model.number="outputPrice" type="number" min="0" step="0.000001" :placeholder="`출력 / 1M 토큰 (${currency === 'USD' ? '$' : '₩'})`" /></div><input v-model="serviceId" placeholder="Service UUID" /><button :disabled="busy || !organizationId" @click="createService">서비스 생성</button></article>
         <article><span>7</span><h3>라우팅·권한</h3><p>선택한 배포를 Priority 1로 연결하고 프로젝트에 사용 권한을 부여합니다.</p><button :disabled="busy || !serviceId || !deploymentId || !projectId" @click="connectService">Target + Access 연결</button></article>
         <article><span>8</span><h3>API 키</h3><textarea v-if="issuedKey" :value="issuedKey" readonly></textarea><p v-else>발급 원문은 한 번만 표시됩니다.</p><button :disabled="busy || !projectId" @click="issueKey">프로젝트 키 발급</button></article>
       </div>
