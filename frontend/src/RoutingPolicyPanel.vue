@@ -2,7 +2,7 @@
 import { ref } from 'vue'
 import { adminFetch, type AdminAuth } from './api'
 
-type ServicePolicy = { id: string; serviceKey: string; displayName: string; failoverPolicy: 'STRICT' | 'COMPATIBLE' | 'DEGRADED'; retryPolicy: 'SAFE' | 'AGGRESSIVE'; allowDegraded: boolean; requiredCapabilitiesJson: string; inputPricePerMillion: number; outputPricePerMillion: number; enabled: boolean }
+type ServicePolicy = { id: string; serviceKey: string; displayName: string; failoverPolicy: 'STRICT' | 'COMPATIBLE' | 'DEGRADED'; retryPolicy: 'SAFE' | 'AGGRESSIVE'; allowDegraded: boolean; requiredCapabilitiesJson: string; inputPricePerMillion: number; outputPricePerMillion: number; currency?: 'KRW' | 'USD'; enabled: boolean }
 type TargetPolicy = { id: string; deploymentId: string; priority: number; weight: number; degraded: boolean; enabled: boolean; maxConcurrencyOverride?: number | null }
 
 const organizationId = ref(sessionStorage.getItem('aiconnect.setup.organizationId') ?? '')
@@ -19,7 +19,7 @@ function auth(): AdminAuth {
 async function loadServices() {
   busy.value = true
   try {
-    services.value = await adminFetch<ServicePolicy[]>(`/api/admin/organizations/${organizationId.value}/services`, auth())
+    services.value = (await adminFetch<ServicePolicy[]>(`/api/admin/organizations/${organizationId.value}/services`, auth())).map(item => ({ ...item, currency: item.currency ?? 'KRW' }))
     selected.value = services.value[0] ?? null
     if (selected.value) await loadTargets(selected.value)
     message.value = `${services.value.length}개의 논리 서비스를 불러왔습니다.`
@@ -72,7 +72,7 @@ async function removeTarget(target: TargetPolicy) {
           <div class="filters"><select v-model="selected.failoverPolicy"><option>STRICT</option><option>COMPATIBLE</option><option>DEGRADED</option></select><select v-model="selected.retryPolicy"><option>SAFE</option><option>AGGRESSIVE</option></select></div>
           <label><input v-model="selected.allowDegraded" type="checkbox" /> 성능 저하 대상 허용</label>
           <input v-model="selected.requiredCapabilitiesJson" placeholder='["STRUCTURED_OUTPUT"]' />
-          <div class="filters"><input v-model.number="selected.inputPricePerMillion" type="number" min="0" placeholder="입력 단가" /><input v-model.number="selected.outputPricePerMillion" type="number" min="0" placeholder="출력 단가" /></div>
+          <div class="filters"><select v-model="selected.currency"><option value="KRW">원화 (KRW)</option><option value="USD">달러 (USD)</option></select><input v-model.number="selected.inputPricePerMillion" type="number" min="0" step="0.000001" :placeholder="`입력 단가 / 1M (${selected.currency === 'USD' ? '$' : '₩'})`" /><input v-model.number="selected.outputPricePerMillion" type="number" min="0" step="0.000001" :placeholder="`출력 단가 / 1M (${selected.currency === 'USD' ? '$' : '₩'})`" /></div>
           <label><input v-model="selected.enabled" type="checkbox" /> 서비스 활성화</label><button :disabled="busy" @click="saveService">서비스 정책 저장</button>
           <h3>Service Targets</h3>
           <div v-for="target in targets" :key="target.id" class="target-row">

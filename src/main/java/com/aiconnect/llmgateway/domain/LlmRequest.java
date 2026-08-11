@@ -34,6 +34,7 @@ public class LlmRequest {
     private Integer inputTokens;
     private Integer outputTokens;
     @Column(precision = 18, scale = 6) private BigDecimal estimatedCost;
+    @Enumerated(EnumType.STRING) @Column(nullable = false, length = 3) private Currency costCurrency = Currency.KRW;
     @Column(nullable = false, precision = 18, scale = 6) private BigDecimal inputUnitPrice;
     @Column(nullable = false, precision = 18, scale = 6) private BigDecimal outputUnitPrice;
     private Long latencyMs;
@@ -61,6 +62,7 @@ public class LlmRequest {
         this.stream = stream;
         this.inputUnitPrice = service.getInputPricePerMillion();
         this.outputUnitPrice = service.getOutputPricePerMillion();
+        this.costCurrency = service.getCurrency() == null ? Currency.KRW : service.getCurrency();
     }
 
     public void succeed(UUID deploymentId, int inputTokens, int outputTokens, long latencyMs, int httpStatus, int failoverCount) {
@@ -70,11 +72,19 @@ public class LlmRequest {
     public void succeed(UUID deploymentId, int inputTokens, int outputTokens, long latencyMs, int httpStatus,
                         int failoverCount, String providerType, String routingReason,
                         BigDecimal providerInputPrice, BigDecimal providerOutputPrice) {
+        succeed(deploymentId, inputTokens, outputTokens, latencyMs, httpStatus, failoverCount, providerType, routingReason,
+                providerInputPrice, providerOutputPrice, null);
+    }
+
+    public void succeed(UUID deploymentId, int inputTokens, int outputTokens, long latencyMs, int httpStatus,
+                        int failoverCount, String providerType, String routingReason,
+                        BigDecimal providerInputPrice, BigDecimal providerOutputPrice, Currency providerCurrency) {
         this.finalDeploymentId = deploymentId;
         this.finalProviderType = providerType;
         this.routingReason = routingReason;
         if (providerInputPrice != null) this.inputUnitPrice = providerInputPrice;
         if (providerOutputPrice != null) this.outputUnitPrice = providerOutputPrice;
+        if (providerCurrency != null && (providerInputPrice != null || providerOutputPrice != null)) this.costCurrency = providerCurrency;
         this.inputTokens = inputTokens;
         this.outputTokens = outputTokens;
         this.latencyMs = latencyMs;
@@ -85,7 +95,6 @@ public class LlmRequest {
         this.estimatedCost = inputUnitPrice.multiply(BigDecimal.valueOf(inputTokens))
                 .add(outputUnitPrice.multiply(BigDecimal.valueOf(outputTokens))).movePointLeft(6);
     }
-
     public void fail(String errorCode, int httpStatus, long latencyMs, int failoverCount) {
         this.errorCode = errorCode;
         this.httpStatus = httpStatus;
@@ -109,6 +118,7 @@ public class LlmRequest {
     public Integer getInputTokens() { return inputTokens; }
     public Integer getOutputTokens() { return outputTokens; }
     public BigDecimal getEstimatedCost() { return estimatedCost; }
+    public Currency getCostCurrency() { return costCurrency; }
     public Long getLatencyMs() { return latencyMs; }
     public int getFailoverCount() { return failoverCount; }
     public Integer getHttpStatus() { return httpStatus; }

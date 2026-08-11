@@ -173,7 +173,8 @@ public class StreamingChatCompletionGateway {
             audit.succeed(target.deployment().getId(), usage.inputTokens, usage.outputTokens,
                     elapsed(audit.getStartedAt()), statusCode, failoverCount, target.providerType(), target.routingReason(),
                     target.external() ? target.deployment().getProviderInputPricePerMillion() : null,
-                    target.external() ? target.deployment().getProviderOutputPricePerMillion() : null);
+                    target.external() ? target.deployment().getProviderOutputPricePerMillion() : null,
+                    target.external() ? target.deployment().getProviderPriceCurrency() : null);
             requests.save(audit);
             if (target.external()) { target.externalProvider().recordHealth(true); providers.save(target.externalProvider()); }
             routing.release(target);

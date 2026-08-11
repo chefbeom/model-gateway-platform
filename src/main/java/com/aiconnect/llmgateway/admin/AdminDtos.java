@@ -1,5 +1,6 @@
 package com.aiconnect.llmgateway.admin;
 
+import com.aiconnect.llmgateway.domain.Currency;
 import com.aiconnect.llmgateway.domain.FailoverPolicy;
 import com.aiconnect.llmgateway.domain.RetryPolicy;
 import com.aiconnect.llmgateway.domain.RuntimeType;
@@ -33,7 +34,7 @@ public final class AdminDtos {
                                 @NotBlank @Size(max = 200) String displayName, FailoverPolicy failoverPolicy,
                                 RetryPolicy retryPolicy, boolean allowDegraded, String requiredCapabilitiesJson,
                                 @DecimalMin("0") BigDecimal inputPricePerMillion,
-                                @DecimalMin("0") BigDecimal outputPricePerMillion) { }
+                                @DecimalMin("0") BigDecimal outputPricePerMillion, Currency currency) { }
     public record GrantServiceAccess(@NotNull UUID serviceId) { }
     public record CreateTarget(@NotNull UUID deploymentId, @Min(1) int priority, @Min(1) Integer weight,
                                boolean degraded, @Min(1) Integer maxConcurrencyOverride) { }

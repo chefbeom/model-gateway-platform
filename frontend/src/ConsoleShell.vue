@@ -6,6 +6,7 @@ import DashboardPage from './DashboardPage.vue'
 import DeveloperPortalPage from './DeveloperPortalPage.vue'
 import DevDocsPage from './DevDocsPage.vue'
 import InfrastructurePage from './InfrastructurePage.vue'
+import SystemStructurePage from './SystemStructurePage.vue'
 import ExternalProvidersPage from './ExternalProvidersPage.vue'
 import ServicesPage from './ServicesPage.vue'
 import ProjectsPage from './ProjectsPage.vue'
@@ -13,12 +14,14 @@ import TeamsPage from './TeamsPage.vue'
 import ObservabilityPage from './ObservabilityPage.vue'
 import NotificationsPage from './NotificationsPage.vue'
 import UsagePage from './UsagePage.vue'
+import QuotaPage from './QuotaPage.vue'
+import ApiPlaygroundPage from './ApiPlaygroundPage.vue'
 import PlatformAdminPage from './PlatformAdminPage.vue'
 import { adminFetch, type AdminAuth, type User } from './api'
 
 type Theme = 'dark' | 'light'
 type FontScale = '100' | '115' | '125' | '135'
-type PageKey = 'dashboard' | 'infrastructure' | 'external' | 'services' | 'teams' | 'projects' | 'observability' | 'usage' | 'notifications' | 'audit' | 'platform' | 'portal' | 'docs'
+type PageKey = 'dashboard' | 'infrastructure' | 'system' | 'external' | 'services' | 'teams' | 'projects' | 'observability' | 'usage' | 'quotas' | 'notifications' | 'audit' | 'platform' | 'portal' | 'playground' | 'docs'
 type OrganizationRole = 'ORGANIZATION_ADMIN' | 'DEVELOPER'
 type TeamRole = 'TEAM_ADMIN' | 'PROJECT_OWNER' | 'DEVELOPER' | 'AUDITOR'
 type Organization = { id: string; name: string; status: string }
@@ -34,6 +37,7 @@ const auth = computed<AdminAuth>(() => ({ accessToken: sessionStorage.getItem('a
 const adminNavItems: NavItem[] = [
   { id: 'dashboard', label: '대시보드', description: '요청·장애·런타임 핵심 지표', keywords: 'overview health dashboard', icon: '◔', group: '운영' },
   { id: 'infrastructure', label: '인프라스트럭처', description: '노드·Runtime·배포 모델', keywords: 'server gpu lm studio endpoint model', icon: '◇', group: '운영' },
+  { id: 'system', label: 'System Structure', description: 'Infrastructure / AI / Access map', keywords: 'architecture structure topology infrastructure provider llm team project api key', icon: '~', group: 'Operations' },
   { id: 'external', label: '외부 AI', description: 'OpenAI·승인·수동·자동 Failover', keywords: 'openai external provider cloud approval failover', icon: '◎', group: '운영' },
   { id: 'services', label: 'LLM 서비스', description: '논리 모델과 라우팅 정책', keywords: 'service model failover routing', icon: '▣', group: '운영' },
   { id: 'teams', label: '팀과 부서', description: '부서·역할·프로젝트 소유', keywords: 'team department role audit', icon: '⌘', group: '개발자 도구' },
@@ -41,12 +45,15 @@ const adminNavItems: NavItem[] = [
   { id: 'observability', label: '관측성', description: '요청·장애·Failover 추적', keywords: 'request incident failover monitor', icon: '◉', group: '관측' },
   { id: 'usage', label: '사용량', description: '토큰·비용·API 호출 이력', keywords: 'usage token cost billing', icon: '◴', group: '관측' },
   { id: 'notifications', label: '알림 채널', description: 'Discord와 Telegram 연동', keywords: 'notification discord telegram alert', icon: '◇', group: '시스템' },
-  { id: 'audit', label: '감사 로그', description: '관리자 변경·열람 증적', keywords: 'audit log admin change security', icon: '◎', group: '시스템' }
+  { id: 'audit', label: '감사 로그', description: '관리자 변경·열람 증적', keywords: 'audit log admin change security', icon: '◎', group: '시스템' },
+  { id: 'quotas', label: '요금·한도', description: '범위별 예산과 초과 차단', keywords: 'budget quota limit spend cost', icon: '₩', group: '관측' },
+  { id: 'playground', label: 'API 테스트', description: '모델 연결·Chat Completions 테스트', keywords: 'playground api test chat completion models', icon: '▷', group: '개발자 도구' }
 ]
 const platformNavItem: NavItem = { id: 'platform', label: 'Platform Admin', description: '조직·사용자·키·데이터 정리', keywords: 'platform admin organization user api key cleanup purge', icon: '⚡', group: '시스템' }
 const developerNavItems: NavItem[] = [
   { id: 'portal', label: '내 API', description: '프로젝트·사용 모델·API 키', keywords: 'my api project model key', icon: '⌘', group: '내 작업' },
-  { id: 'usage', label: 'API 사용량', description: '내 API 키의 토큰·비용·요청', keywords: 'usage token cost request', icon: '◴', group: '내 작업' }
+  { id: 'usage', label: 'API 사용량', description: '내 API 키의 토큰·비용·요청', keywords: 'usage token cost request', icon: '◴', group: '내 작업' },
+  { id: 'playground', label: 'API 테스트', description: '모델 연결·Chat Completions 테스트', keywords: 'playground api test chat completion models', icon: '▷', group: '내 작업' }
 ]
 const docsItem = { id: 'docs' as const, label: 'Dev-Docs', description: '제품 가이드 · API 참조', keywords: 'docs manual guide api lm studio' }
 const fontScaleOptions: Array<{ value: FontScale; label: string; description: string }> = [
@@ -90,9 +97,9 @@ const searchResults = computed(() => {
 })
 
 function knownPage(value: string): value is PageKey {
-  return ['dashboard', 'infrastructure', 'external', 'services', 'teams', 'projects', 'observability', 'usage', 'notifications', 'audit', 'platform', 'portal', 'docs'].includes(value)
+  return ['dashboard', 'infrastructure', 'system', 'external', 'services', 'teams', 'projects', 'observability', 'usage', 'quotas', 'notifications', 'audit', 'platform', 'portal', 'playground', 'docs'].includes(value)
 }
-function isAllowedPage(target: PageKey) { return isAdminConsole.value || target === 'portal' || target === 'usage' || target === 'docs' }
+function isAllowedPage(target: PageKey) { return isAdminConsole.value || target === 'portal' || target === 'usage' || target === 'playground' || target === 'docs' }
 function fallbackPage(): PageKey { return isAdminConsole.value ? 'dashboard' : 'portal' }
 function resolveHash(): PageKey {
   const candidate = window.location.hash.replace(/^#\/?/, '')
@@ -214,6 +221,7 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
         <p v-if="message" class="inline-alert">{{ message }}</p>
         <DashboardPage v-if="isAdminConsole && page === 'dashboard'" :organization-id="organizationId" :auth="auth" @navigate="navigate" />
         <InfrastructurePage v-else-if="isAdminConsole && page === 'infrastructure'" :organization-id="organizationId" :auth="auth" />
+        <SystemStructurePage v-else-if="isAdminConsole && page === 'system'" :organization-id="organizationId" :auth="auth" />
         <ExternalProvidersPage v-else-if="isAdminConsole && page === 'external'" :organization-id="organizationId" :auth="auth" />
         <ServicesPage v-else-if="isAdminConsole && page === 'services'" :organization-id="organizationId" :auth="auth" />
         <TeamsPage v-else-if="isAdminConsole && page === 'teams'" :organization-id="organizationId" :auth="auth" />
@@ -223,6 +231,8 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
         <AuditLogPage v-else-if="isAdminConsole && page === 'audit'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" />
         <PlatformAdminPage v-else-if="platformAdmin && page === 'platform'" :auth="auth" />
         <UsagePage v-else-if="page === 'usage'" :organization-id="organizationId" :auth="auth" />
+        <QuotaPage v-else-if="isAdminConsole && page === 'quotas'" :organization-id="organizationId" :auth="auth" />
+        <ApiPlaygroundPage v-else-if="page === 'playground'" />
         <DevDocsPage v-else-if="page === 'docs'" @navigate="navigate" />
         <DeveloperPortalPage v-else :organization-id="organizationId" :auth="auth" />
       </main>

@@ -88,7 +88,8 @@ public class ChatCompletionGateway {
                     audit.succeed(candidate.deployment().getId(), inputTokens, outputTokens, elapsed(audit.getStartedAt()),
                             runtimeResult.statusCode(), failoverCount, candidate.providerType(), candidate.routingReason(),
                             candidate.external() ? candidate.deployment().getProviderInputPricePerMillion() : null,
-                            candidate.external() ? candidate.deployment().getProviderOutputPricePerMillion() : null);
+                            candidate.external() ? candidate.deployment().getProviderOutputPricePerMillion() : null,
+                            candidate.external() ? candidate.deployment().getProviderPriceCurrency() : null);
                     requests.save(audit);
                     ObjectNode response = runtimeResult.body().isObject() ? ((ObjectNode) runtimeResult.body()).deepCopy() : objectMapper.createObjectNode();
                     response.put("model", serviceKey);

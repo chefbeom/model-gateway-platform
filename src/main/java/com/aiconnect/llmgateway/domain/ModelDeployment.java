@@ -22,6 +22,7 @@ public class ModelDeployment {
     @Column(nullable = false) private int maxConcurrency = 1;
     @Column(precision = 18, scale = 6) private java.math.BigDecimal providerInputPricePerMillion;
     @Column(precision = 18, scale = 6) private java.math.BigDecimal providerOutputPricePerMillion;
+    @Enumerated(EnumType.STRING) @Column(length = 3) private Currency providerPriceCurrency = Currency.KRW;
     @Column(columnDefinition = "text") private String capabilitiesJson = "[]";
     @Column(columnDefinition = "text") private String capabilityOverridesJson;
     @Column(columnDefinition = "text") private String metadataJson;
@@ -51,6 +52,14 @@ public class ModelDeployment {
                                            String displayName, Integer contextLength, int maxConcurrency,
                                            String capabilitiesJson, java.math.BigDecimal inputPrice,
                                            java.math.BigDecimal outputPrice) {
+        return external(providerId, providerModelId, compatibilityKey, displayName, contextLength, maxConcurrency,
+                capabilitiesJson, inputPrice, outputPrice, Currency.KRW);
+    }
+
+    public static ModelDeployment external(UUID providerId, String providerModelId, String compatibilityKey,
+                                           String displayName, Integer contextLength, int maxConcurrency,
+                                           String capabilitiesJson, java.math.BigDecimal inputPrice,
+                                           java.math.BigDecimal outputPrice, Currency priceCurrency) {
         ModelDeployment deployment = new ModelDeployment();
         deployment.externalProviderId = providerId;
         deployment.providerModelId = providerModelId;
@@ -64,6 +73,7 @@ public class ModelDeployment {
         deployment.capabilitiesJson = capabilitiesJson == null ? "[]" : capabilitiesJson;
         deployment.providerInputPricePerMillion = inputPrice;
         deployment.providerOutputPricePerMillion = outputPrice;
+        deployment.providerPriceCurrency = priceCurrency == null ? Currency.KRW : priceCurrency;
         deployment.lastSyncedAt = Instant.now();
         return deployment;
     }
@@ -93,6 +103,14 @@ public class ModelDeployment {
     public void configureProviderModel(String displayName, String compatibilityKey, Boolean enabled,
                                        Integer maxConcurrency, String capabilitiesJson,
                                        java.math.BigDecimal inputPrice, java.math.BigDecimal outputPrice) {
+        configureProviderModel(displayName, compatibilityKey, enabled, maxConcurrency, capabilitiesJson,
+                inputPrice, outputPrice, Currency.KRW);
+    }
+
+    public void configureProviderModel(String displayName, String compatibilityKey, Boolean enabled,
+                                       Integer maxConcurrency, String capabilitiesJson,
+                                       java.math.BigDecimal inputPrice, java.math.BigDecimal outputPrice,
+                                       Currency priceCurrency) {
         if (displayName != null && !displayName.isBlank()) this.displayName = displayName;
         if (compatibilityKey != null && !compatibilityKey.isBlank()) this.compatibilityKey = compatibilityKey;
         if (enabled != null) this.enabled = enabled;
@@ -100,6 +118,7 @@ public class ModelDeployment {
         if (capabilitiesJson != null) this.capabilitiesJson = capabilitiesJson;
         if (inputPrice != null) this.providerInputPricePerMillion = inputPrice;
         if (outputPrice != null) this.providerOutputPricePerMillion = outputPrice;
+        if (priceCurrency != null) this.providerPriceCurrency = priceCurrency;
         this.loaded = true;
         this.healthStatus = HealthStatus.HEALTHY;
         this.lastSyncedAt = Instant.now();
@@ -129,6 +148,7 @@ public class ModelDeployment {
     public int getMaxConcurrency() { return maxConcurrency; }
     public java.math.BigDecimal getProviderInputPricePerMillion() { return providerInputPricePerMillion; }
     public java.math.BigDecimal getProviderOutputPricePerMillion() { return providerOutputPricePerMillion; }
+    public Currency getProviderPriceCurrency() { return providerPriceCurrency == null ? Currency.KRW : providerPriceCurrency; }
     public String getCapabilitiesJson() { return capabilitiesJson; }
     public String getCapabilityOverridesJson() { return capabilityOverridesJson; }
     public String getMetadataJson() { return metadataJson; }

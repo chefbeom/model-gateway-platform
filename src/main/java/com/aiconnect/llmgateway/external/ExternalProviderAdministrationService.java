@@ -1,6 +1,7 @@
 package com.aiconnect.llmgateway.external;
 
 import com.aiconnect.llmgateway.domain.*;
+import com.aiconnect.llmgateway.domain.Currency;
 import com.aiconnect.llmgateway.identity.AuditService;
 import com.aiconnect.llmgateway.identity.CurrentActor;
 import com.aiconnect.llmgateway.repository.*;
@@ -181,7 +182,7 @@ public class ExternalProviderAdministrationService {
     @Transactional
     public ProviderModelView addModel(UUID providerId, String providerModelId, String displayName,
                                       String compatibilityKey, Integer contextLength, Integer maxConcurrency,
-                                      String capabilitiesJson, BigDecimal inputPrice, BigDecimal outputPrice) {
+                                      String capabilitiesJson, BigDecimal inputPrice, BigDecimal outputPrice, Currency priceCurrency) {
         ExternalProvider provider = requireProvider(providerId);
         if (deployments.findByExternalProviderId(providerId).stream().anyMatch(item -> item.getProviderModelId().equals(providerModelId))) {
             throw new ApiException(HttpStatus.CONFLICT, "EXTERNAL_MODEL_EXISTS", "This provider model is already registered.");
@@ -189,7 +190,7 @@ public class ExternalProviderAdministrationService {
         validateCapabilities(capabilitiesJson);
         ModelDeployment deployment = deployments.save(ModelDeployment.external(providerId, providerModelId,
                 compatibilityKey, displayName, contextLength, maxConcurrency == null ? 20 : maxConcurrency,
-                capabilitiesJson, inputPrice, outputPrice));
+                capabilitiesJson, inputPrice, outputPrice, priceCurrency == null ? Currency.KRW : priceCurrency));
         audit.record(provider.getOrganizationId(), CurrentActor.userIdOrNull(), "EXTERNAL_MODEL_REGISTERED", "MODEL_DEPLOYMENT",
                 deployment.getId(), Map.of("providerModelId", providerModelId, "providerId", providerId));
         return ProviderModelView.from(deployment);
@@ -233,7 +234,7 @@ public class ExternalProviderAdministrationService {
     public record ProviderModelView(UUID id, UUID externalProviderId, String providerModelId, String compatibilityKey,
                                     String displayName, Integer contextLength, boolean enabled, String healthStatus,
                                     int maxConcurrency, String capabilitiesJson, BigDecimal inputPricePerMillion,
-                                    BigDecimal outputPricePerMillion) {
-        static ProviderModelView from(ModelDeployment item) { return new ProviderModelView(item.getId(), item.getExternalProviderId(), item.getProviderModelId(), item.getCompatibilityKey(), item.getDisplayName(), item.getContextLength(), item.isEnabled(), item.getHealthStatus().name(), item.getMaxConcurrency(), item.getCapabilitiesJson(), item.getProviderInputPricePerMillion(), item.getProviderOutputPricePerMillion()); }
+                                    BigDecimal outputPricePerMillion, Currency currency) {
+        static ProviderModelView from(ModelDeployment item) { return new ProviderModelView(item.getId(), item.getExternalProviderId(), item.getProviderModelId(), item.getCompatibilityKey(), item.getDisplayName(), item.getContextLength(), item.isEnabled(), item.getHealthStatus().name(), item.getMaxConcurrency(), item.getCapabilitiesJson(), item.getProviderInputPricePerMillion(), item.getProviderOutputPricePerMillion(), item.getProviderPriceCurrency()); }
     }
 }

@@ -1,5 +1,6 @@
 package com.aiconnect.llmgateway.admin;
 
+import com.aiconnect.llmgateway.domain.Currency;
 import com.aiconnect.llmgateway.domain.LlmService;
 import com.aiconnect.llmgateway.domain.ServiceTarget;
 import com.aiconnect.llmgateway.repository.LlmServiceRepository;
@@ -34,7 +35,8 @@ public class RoutingPolicyService {
     public LlmService configureService(UUID serviceId, RoutingPolicyController.UpdateService request) {
         LlmService service = requireService(serviceId);
         service.configure(request.displayName(), request.failoverPolicy(), request.retryPolicy(), request.allowDegraded(),
-                request.requiredCapabilitiesJson(), request.inputPricePerMillion(), request.outputPricePerMillion(), request.enabled());
+                request.requiredCapabilitiesJson(), request.inputPricePerMillion(), request.outputPricePerMillion(),
+                request.currency() == null ? Currency.KRW : request.currency(), request.enabled());
         return services.save(service);
     }
 
