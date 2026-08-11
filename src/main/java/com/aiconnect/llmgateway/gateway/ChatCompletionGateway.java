@@ -68,6 +68,7 @@ public class ChatCompletionGateway {
         }
 
         int failures = 0;
+        boolean sawCapacity = false;
         for (ResolvedTarget candidate : candidates) {
             if (!routing.acquire(candidate)) continue;
             Instant attemptStarted = Instant.now();
@@ -95,11 +96,19 @@ public class ChatCompletionGateway {
                     response.put("model", serviceKey);
                     return new GatewayResult(runtimeResult.statusCode(), response, requestId);
                 }
-                attempt.fail("UPSTREAM_HTTP_" + runtimeResult.statusCode(), "Provider returned HTTP " + runtimeResult.statusCode(), attemptLatency, runtimeResult.statusCode()); attempts.save(attempt);
-                if (runtimeResult.statusCode() == 401 || runtimeResult.statusCode() == 408 || runtimeResult.statusCode() >= 500) recordUnhealthy(candidate);
-                if (!retryDecider.retryHttp(service.getRetryPolicy(), runtimeResult.statusCode())) {
-                    audit.fail("UPSTREAM_REJECTED", runtimeResult.statusCode(), elapsed(audit.getStartedAt()), failures); requests.save(audit);
-                    return error(runtimeResult.statusCode(), requestId, "invalid_request_error", "UPSTREAM_REJECTED", "The selected provider rejected the request; the service retry policy did not permit failover.");
+                JsonNode upstreamBody = runtimeResult.body();
+                boolean capacity = retryDecider.isCapacityResponse(runtimeResult.statusCode(), upstreamBody);
+                if (capacity) sawCapacity = true;
+                String attemptCode = capacity ? "MODEL_AT_CAPACITY" : "UPSTREAM_HTTP_" + runtimeResult.statusCode();
+                attempt.fail(attemptCode, "Provider returned HTTP " + runtimeResult.statusCode(), attemptLatency, runtimeResult.statusCode());
+                attempts.save(attempt);
+                if (capacity || runtimeResult.statusCode() == 401 || runtimeResult.statusCode() == 408
+                        || runtimeResult.statusCode() >= 500) recordUnhealthy(candidate);
+                if (!retryDecider.retryHttp(service.getRetryPolicy(), runtimeResult.statusCode(), upstreamBody)) {
+                    audit.fail("UPSTREAM_REJECTED", runtimeResult.statusCode(), elapsed(audit.getStartedAt()), failures);
+                    requests.save(audit);
+                    return error(runtimeResult.statusCode(), requestId, "invalid_request_error", "UPSTREAM_REJECTED",
+                            "The selected provider rejected the request; the service retry policy did not permit failover.");
                 }
                 failures++;
             } catch (RuntimeUnavailableException exception) {
@@ -112,8 +121,16 @@ public class ChatCompletionGateway {
                 failures++;
             } finally { routing.release(candidate); }
         }
-        audit.fail("MODEL_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), elapsed(audit.getStartedAt()), failures); requests.save(audit);
-        return error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, "model_unavailable", "MODEL_UNAVAILABLE", "All eligible deployments failed before producing a response.");
+        if (sawCapacity) {
+            audit.fail("MODEL_AT_CAPACITY", HttpStatus.TOO_MANY_REQUESTS.value(), elapsed(audit.getStartedAt()), failures);
+            requests.save(audit);
+            return error(HttpStatus.TOO_MANY_REQUESTS.value(), requestId, "rate_limit_error", "MODEL_AT_CAPACITY",
+                    "The selected model is at capacity. Please try a different model.");
+        }
+        audit.fail("MODEL_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), elapsed(audit.getStartedAt()), failures);
+        requests.save(audit);
+        return error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, "model_unavailable", "MODEL_UNAVAILABLE",
+                "All eligible deployments failed before producing a response.");
     }
 
     private void recordHealthy(ResolvedTarget candidate) {

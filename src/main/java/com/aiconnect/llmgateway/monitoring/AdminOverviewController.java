@@ -1,6 +1,7 @@
 package com.aiconnect.llmgateway.monitoring;
 
 import com.aiconnect.llmgateway.domain.Incident;
+import com.aiconnect.llmgateway.domain.Currency;
 import com.aiconnect.llmgateway.domain.LlmRequest;
 import com.aiconnect.llmgateway.domain.Project;
 import com.aiconnect.llmgateway.domain.RequestStatus;
@@ -18,7 +19,9 @@ import org.springframework.web.bind.annotation.RestController;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -77,13 +80,19 @@ public class AdminOverviewController {
         long failovers = window.stream().mapToLong(LlmRequest::getFailoverCount).sum();
         BigDecimal estimatedCost = window.stream().map(LlmRequest::getEstimatedCost).filter(Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+        Map<Currency, BigDecimal> estimatedCostByCurrency = new EnumMap<>(Currency.class);
+        window.stream()
+                .filter(request -> request.getEstimatedCost() != null)
+                .forEach(request -> estimatedCostByCurrency.merge(
+                        request.getCostCurrency() == null ? Currency.KRW : request.getCostCurrency(),
+                        request.getEstimatedCost(), BigDecimal::add));
         long unhealthyEndpoints = endpointWindow.stream()
                 .filter(endpoint -> endpoint.getHealthStatus().name().equals("UNHEALTHY")).count();
         long openIncidents = incidentWindow.stream().filter(incident -> "OPEN".equals(incident.getStatus())).count();
         double successRate = completed == 0 ? 1.0d : (double) succeeded / completed;
         double errorRate = completed == 0 ? 0.0d : (double) failed / completed;
         return new Overview(window.size(), succeeded, failed, active, successRate, errorRate,
-                inputTokens, outputTokens, estimatedCost, percentile95(window), failovers,
+                inputTokens, outputTokens, estimatedCost, estimatedCostByCurrency, percentile95(window), failovers,
                 endpointWindow.size(), unhealthyEndpoints, openIncidents);
     }
 
@@ -104,6 +113,7 @@ public class AdminOverviewController {
             int inputTokens24h,
             int outputTokens24h,
             BigDecimal estimatedCost24h,
+            Map<Currency, BigDecimal> estimatedCostByCurrency,
             long p95LatencyMs24h,
             long failovers24h,
             long endpoints,

@@ -38,15 +38,25 @@ public class SpendQuotaFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws IOException, ServletException {
         byte[] raw = request.getInputStream().readAllBytes();
+        SpendQuotaService.Reservation reservation = null;
         try {
             JsonNode body = raw.length == 0 ? mapper.createObjectNode() : mapper.readTree(raw);
-            quota.check(request.getHeader(HttpHeaders.AUTHORIZATION), body);
+            reservation = quota.reserve(request.getHeader(HttpHeaders.AUTHORIZATION), body);
+            request.setAttribute("aiconnect.spendQuotaChecked", Boolean.TRUE);
             chain.doFilter(new BufferedBodyRequest(request, raw), response);
         } catch (ApiException exception) {
             response.setStatus(exception.getStatus().value());
             response.setContentType("application/json");
             mapper.writeValue(response.getOutputStream(), OpenAiError.of(exception.getMessage(),
-                    "invalid_request_error", exception.getCode(), null));
+                    "rate_limit_error", exception.getCode(), null));
+        } finally {
+            if (reservation != null) {
+                try {
+                    quota.release(reservation);
+                } catch (RuntimeException ignored) {
+                    // Expiry is the safety backstop if cleanup cannot complete after the response.
+                }
+            }
         }
     }
 }

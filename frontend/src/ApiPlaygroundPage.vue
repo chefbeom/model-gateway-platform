@@ -235,17 +235,6 @@ async function copyCurl() {
 }
 onMounted(() => {
   // The key is intentionally not restored from storage. A playground should never retain credentials.
-function applyTarget(mode: TargetMode) {
-  targetMode.value = mode
-  models.value = []
-  result.value = null
-  rawError.value = ''
-  probeStatus.value = 'idle'
-  if (mode === 'gateway') baseUrl.value = defaultBaseUrl()
-  if (mode === 'local') baseUrl.value = 'http://127.0.0.1:1234/v1'
-  if (mode === 'external') baseUrl.value = 'https://api.openai.com/v1'
-  message.value = selectedTarget.value.label + ' ??? ???????. API ?? ???? ?? ??? ?????.'
-}
   if (typeof window !== 'undefined' && window.location.origin.startsWith('http')) baseUrl.value = defaultBaseUrl()
 })
 </script>
@@ -276,7 +265,7 @@ function applyTarget(mode: TargetMode) {
           <div class="form-actions"><button class="secondary-button" :disabled="loadingModels || !apiKey.trim()" @click="loadModels">{{ loadingModels ? '조회 중…' : '모델 목록 확인' }}</button><button class="ghost-button" :disabled="!result && !rawError" @click="clearResult">결과 지우기</button></div>
         </div>
         <p class="field-hint">현재 주소: <code>{{ normalizedBaseUrl() }}</code></p>
-        <div v-if="probeStatus !== 'idle'" class="probe-summary"><span class="status-chip tiny" :class="probeStatus === 'ok' ? 'healthy' : probeStatus === 'failed' ? 'unhealthy' : 'suspect'"><i></i>{{ probeStatus === 'ok' ? '?? ???' : probeStatus === 'failed' ? '?? ??' : '?? ?' }}</span><div><strong>GET /models</strong><small>{{ probeStatus === 'ok' ? models.length + '? ?? ??' : '?? ??? ?? ??? ?????.' }}</small></div><time v-if="probeLatencyMs">{{ probeLatencyMs }}ms ? {{ lastProbeAt }}</time></div>
+        <div v-if="probeStatus !== 'idle'" class="probe-summary"><span class="status-chip tiny" :class="probeStatus === 'ok' ? 'healthy' : probeStatus === 'failed' ? 'unhealthy' : 'suspect'"><i></i>{{ probeStatus === 'ok' ? '연결됨' : probeStatus === 'failed' ? '연결 실패' : '확인 중' }}</span><div><strong>GET /models</strong><small>{{ probeStatus === 'ok' ? models.length + '개 모델 확인' : '모델 목록을 조회하지 못했습니다.' }}</small></div><time v-if="probeLatencyMs">{{ probeLatencyMs }}ms · {{ lastProbeAt }}</time></div>
         <div v-if="models.length" class="model-list"><button v-for="item in models" :key="item.id" type="button" :class="{ selected: model === item.id }" @click="model = item.id"><strong>{{ item.id }}</strong><small>{{ item.owned_by ?? 'aiconnect' }}</small></button></div>
         <div v-else class="empty-state compact"><span>◇</span><p>키를 입력하면 프로젝트에 허용된 논리 모델이 표시됩니다.</p></div>
       </article>
@@ -290,7 +279,7 @@ function applyTarget(mode: TargetMode) {
           <div class="option-grid"><label class="field">Temperature<input v-model.number="temperature" type="number" min="0" max="2" step="0.1" /></label><label class="field">Max Completion Tokens<input v-model.number="maxTokens" type="number" min="1" max="32768" step="1" /></label><label class="field">응답 형식<select v-model="responseMode"><option value="text">일반 텍스트</option><option value="json">JSON object</option></select></label></div>
           <div class="toggle-row"><label><input v-model="stream" type="checkbox" /> SSE 스트리밍으로 테스트</label><span v-if="selectedModel">선택됨: <code>{{ selectedModel.id }}</code></span></div>
           <button class="primary-button run-button" :disabled="!canRun" @click="runTest"><span>{{ running ? '요청 처리 중…' : '테스트 요청 실행' }}</span><b>↗</b></button>
-          <details class="request-contract"><summary>?? ??? curl ??</summary><div class="contract-grid"><span><b>1</b> GET {{ normalizedBaseUrl() }}/models</span><span><b>2</b> POST {{ normalizedBaseUrl() }}/chat/completions</span><span><b>3</b> Bearer API Key ??</span><span><b>4</b> {{ stream ? 'SSE event stream' : 'JSON response' }}</span></div><pre>{{ curlExample }}</pre><button class="ghost-button" @click="copyCurl">{{ curlCopied ? '???' : 'curl ?? ??' }}</button></details>
+           <details class="request-contract"><summary>요청용 curl 보기</summary><div class="contract-grid"><span><b>1</b> GET {{ normalizedBaseUrl() }}/models</span><span><b>2</b> POST {{ normalizedBaseUrl() }}/chat/completions</span><span><b>3</b> Bearer API Key 인증</span><span><b>4</b> {{ stream ? 'SSE event stream' : 'JSON response' }}</span></div><pre>{{ curlExample }}</pre><button class="ghost-button" @click="copyCurl">{{ curlCopied ? '복사됨' : 'curl 복사' }}</button></details>
         </div>
       </article>
     </div>

@@ -72,6 +72,7 @@ public class StreamingChatCompletionGateway {
         LlmRequest audit = requests.save(new LlmRequest(requestId, credentials.project().getId(), credentials.apiKey().getId(),
                 credentials.apiKey().getIssuedByUserId(), service, true));
         int failures = 0;
+        boolean sawCapacity = false;
         for (ResolvedTarget candidate : routing.candidates(service, RequestCapabilityDetector.detect(request), credentials.project().getId())) {
             if (!routing.acquire(candidate)) continue;
             Instant started = Instant.now();
@@ -101,15 +102,22 @@ public class StreamingChatCompletionGateway {
                         continue;
                     }
                 }
+                String errorBody = readErrorBody(result.body());
                 closeQuietly(result.body());
-                attempt.fail("UPSTREAM_HTTP_" + result.statusCode(), "Runtime returned HTTP " + result.statusCode(), elapsed(started), result.statusCode());
-                attempts.save(attempt); routing.release(candidate);
-                if (result.statusCode() == 408 || result.statusCode() >= 500) {
-                    candidate.endpoint().recordHealth(false); endpoints.save(candidate.endpoint());
+                boolean capacity = retryDecider.isCapacityResponse(result.statusCode(), errorBody);
+                if (capacity) sawCapacity = true;
+                String attemptCode = capacity ? "MODEL_AT_CAPACITY" : "UPSTREAM_HTTP_" + result.statusCode();
+                attempt.fail(attemptCode, "Runtime returned HTTP " + result.statusCode(), elapsed(started), result.statusCode());
+                attempts.save(attempt);
+                routing.release(candidate);
+                if (capacity || result.statusCode() == 408 || result.statusCode() >= 500) {
+                    recordUnhealthy(candidate);
                 }
-                if (!retryDecider.retryHttp(service.getRetryPolicy(), result.statusCode())) {
-                    audit.fail("UPSTREAM_REJECTED", result.statusCode(), elapsed(audit.getStartedAt()), failures); requests.save(audit);
-                    return error(result.statusCode(), requestId, "UPSTREAM_REJECTED", "The selected runtime rejected the request; the service retry policy did not permit failover.");
+                if (!retryDecider.retryHttp(service.getRetryPolicy(), result.statusCode(), errorBody)) {
+                    audit.fail("UPSTREAM_REJECTED", result.statusCode(), elapsed(audit.getStartedAt()), failures);
+                    requests.save(audit);
+                    return error(result.statusCode(), requestId, "UPSTREAM_REJECTED",
+                            "The selected runtime rejected the request; the service retry policy did not permit failover.");
                 }
                 failures++;
             } catch (RuntimeUnavailableException exception) {
@@ -121,8 +129,16 @@ public class StreamingChatCompletionGateway {
                 failures++;
             }
         }
-        audit.fail("MODEL_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), elapsed(audit.getStartedAt()), failures); requests.save(audit);
-        return error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, "MODEL_UNAVAILABLE", "No compatible deployment could start a stream.");
+        if (sawCapacity) {
+            audit.fail("MODEL_AT_CAPACITY", HttpStatus.TOO_MANY_REQUESTS.value(), elapsed(audit.getStartedAt()), failures);
+            requests.save(audit);
+            return error(HttpStatus.TOO_MANY_REQUESTS.value(), requestId, "MODEL_AT_CAPACITY",
+                    "The selected model is at capacity. Please try a different model.");
+        }
+        audit.fail("MODEL_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), elapsed(audit.getStartedAt()), failures);
+        requests.save(audit);
+        return error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, "MODEL_UNAVAILABLE",
+                "No compatible deployment could start a stream.");
     }
 
     private void recordStartFailure(ResolvedTarget candidate, LlmRequestAttempt attempt, Instant started,
@@ -221,8 +237,16 @@ public class StreamingChatCompletionGateway {
     }
 
     private long elapsed(Instant start) { return Duration.between(start, Instant.now()).toMillis(); }
+    private String readErrorBody(InputStream stream) {
+        if (stream == null) return "";
+        try {
+            return new String(stream.readNBytes(16_384), StandardCharsets.UTF_8);
+        } catch (IOException ignored) {
+            return "";
+        }
+    }
     private void closeQuietly(InputStream stream) { try { stream.close(); } catch (IOException ignored) { } }
     private StreamingGatewayResult error(int status, String requestId, String code, String message) {
-        return new StreamingGatewayResult(status, requestId, null, objectMapper.valueToTree(OpenAiError.of(message, "model_unavailable", code, requestId)));
+        return new StreamingGatewayResult(status, requestId, null, objectMapper.valueToTree(OpenAiError.of(message, "MODEL_AT_CAPACITY".equals(code) ? "rate_limit_error" : "model_unavailable", code, requestId)));
     }
 }

@@ -13,6 +13,7 @@ type Overview = {
   inputTokens24h: number
   outputTokens24h: number
   estimatedCost24h: number
+  estimatedCostByCurrency?: Record<string, number>
   p95LatencyMs24h: number
   failovers24h: number
   endpoints: number
@@ -56,7 +57,13 @@ async function load() {
 
 function percent(value: number) { return `${(value * 100).toFixed(1)}%` }
 function integer(value: number) { return new Intl.NumberFormat().format(value) }
-function money(value: number) { return `${Number(value ?? 0).toFixed(4)}` }
+type Currency = 'KRW' | 'USD'
+function currencyOf(value: string): Currency | null { return value === 'USD' || value === 'KRW' ? value : null }
+function costBreakdown(values?: Record<string, number>) {
+  const entries = Object.entries(values ?? {}).filter(([currency]) => currencyOf(currency))
+  if (!entries.length) return '통화별 비용 데이터 없음'
+  return entries.map(([currency, value]) => new Intl.NumberFormat(currency === 'USD' ? 'en-US' : 'ko-KR', { style: 'currency', currency, maximumFractionDigits: currency === 'USD' ? 4 : 0 }).format(Number(value ?? 0))).join(' · ')
+}
 
 onMounted(() => {
   if (sessionStorage.getItem('aiconnect.accessToken') || sessionStorage.getItem('aiconnect.platformToken')) load()
@@ -76,7 +83,7 @@ onMounted(() => {
         <article><small>성공률</small><strong>{{ percent(overview.successRate24h) }}</strong><span>오류율 {{ percent(overview.errorRate24h) }}</span></article>
         <article><small>p95 지연시간</small><strong>{{ integer(overview.p95LatencyMs24h) }} ms</strong><span>활성 요청 {{ overview.activeRequests }}</span></article>
         <article><small>토큰</small><strong>{{ integer(overview.inputTokens24h + overview.outputTokens24h) }}</strong><span>입력 {{ integer(overview.inputTokens24h) }} · 출력 {{ integer(overview.outputTokens24h) }}</span></article>
-        <article><small>예상 비용</small><strong>{{ money(overview.estimatedCost24h) }}</strong><span>논리 서비스 가격 기준</span></article>
+        <article><small>예상 비용</small><strong>{{ costBreakdown(overview.estimatedCostByCurrency) }}</strong><span>통화별 비용 breakdown</span></article>
         <article><small>Failover</small><strong>{{ integer(overview.failovers24h) }}</strong><span>실제 대체 시도 수</span></article>
         <article><small>Endpoint</small><strong>{{ overview.endpoints }}</strong><span>UNHEALTHY {{ overview.unhealthyEndpoints }}</span></article>
         <article><small>열린 장애</small><strong :class="{ danger: overview.openIncidents > 0 }">{{ overview.openIncidents }}</strong><span>복구 전 Incident</span></article>
