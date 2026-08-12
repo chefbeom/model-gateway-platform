@@ -1,13 +1,22 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import DevDocsArticle from './dev-docs/DevDocsArticle.vue'
 import { devDocs, docGroups } from './dev-docs/catalog'
 import { runtimeDiagnosticsDoc } from './dev-docs/runtimeDiagnostics'
-import type { DocAudience, DocsDestination } from './dev-docs/types'
+import type { DocAudience, DocBlock, DocsDestination } from './dev-docs/types'
 
 const emit = defineEmits<{ navigate: [target: DocsDestination] }>()
 const documents = [...devDocs, runtimeDiagnosticsDoc]
+
+function docIdFromHash() {
+  const candidate = window.location.hash.replace(/^#\/?/, '')
+  if (!candidate.startsWith('docs/')) return null
+  try { return decodeURIComponent(candidate.slice('docs/'.length)) }
+  catch { return null }
+}
+
 const savedDoc = sessionStorage.getItem('aiconnect.devdocs.article')
+const initialDoc = docIdFromHash() ?? savedDoc
 const query = ref('')
 const audience = ref<'전체' | DocAudience>('전체')
 const articleTop = ref<HTMLElement | null>(null)
@@ -16,19 +25,55 @@ function findDocument(id?: string | null) {
   return documents.find(doc => doc.id === id) ?? documents[0]
 }
 
+function blockSearchText(block: DocBlock) {
+  switch (block.type) {
+    case 'paragraph':
+      return block.text
+    case 'callout':
+      return block.title + ' ' + block.text
+    case 'steps':
+      return block.items.map(item => item.title + ' ' + item.text).join(' ')
+    case 'checklist':
+      return block.items.join(' ')
+    case 'cards':
+    case 'flow':
+      return block.items.map(item => (item.label ?? '') + ' ' + item.title + ' ' + item.text).join(' ')
+    case 'table':
+      return [...block.columns, ...block.rows.flat()].join(' ')
+    case 'code':
+      return block.language + ' ' + block.title + ' ' + block.code
+    case 'links':
+      return block.items.map(item => item.label + ' ' + item.description + ' ' + item.href).join(' ')
+  }
+}
+
 function searchDocuments(value: string) {
   const normalized = value.trim().toLowerCase()
   if (!normalized) return []
-  return documents.filter(doc => [doc.title, doc.shortTitle, doc.description, ...doc.keywords]
-    .some(item => item.toLowerCase().includes(normalized)))
+  return documents.filter(doc => {
+    const searchable = [
+      doc.title,
+      doc.shortTitle,
+      doc.description,
+      ...doc.keywords,
+      ...doc.sections.flatMap(section => [
+        section.title,
+        section.description ?? '',
+        ...section.blocks.map(blockSearchText)
+      ])
+    ].join(' ').toLowerCase()
+    return searchable.includes(normalized)
+  })
 }
 
-const activeId = ref(findDocument(savedDoc).id)
+const activeId = ref(findDocument(initialDoc).id)
 const activePage = computed(() => findDocument(activeId.value))
-const activeIndex = computed(() => documents.findIndex(doc => doc.id === activePage.value.id))
-const previousPage = computed(() => activeIndex.value > 0 ? documents[activeIndex.value - 1] : null)
-const nextPage = computed(() => activeIndex.value < documents.length - 1 ? documents[activeIndex.value + 1] : null)
+const visibleDocuments = computed(() => documents.filter(doc => audience.value === '전체' || doc.audience === audience.value || doc.audience === '공통'))
+const activeIndex = computed(() => visibleDocuments.value.findIndex(doc => doc.id === activePage.value.id))
+const previousPage = computed(() => activeIndex.value > 0 ? visibleDocuments.value[activeIndex.value - 1] : null)
+const nextPage = computed(() => activeIndex.value >= 0 && activeIndex.value < visibleDocuments.value.length - 1 ? visibleDocuments.value[activeIndex.value + 1] : null)
 const results = computed(() => searchDocuments(query.value).slice(0, 8))
+const groupSummaries = computed(() => docGroups.map(group => ({ group, count: docsForGroup(group).length })))
 
 function docsForGroup(group: typeof docGroups[number]) {
   return documents.filter(doc => doc.group === group && (audience.value === '전체' || doc.audience === audience.value || doc.audience === '공통'))
@@ -38,10 +83,34 @@ async function selectDoc(id: string) {
   activeId.value = id
   query.value = ''
   sessionStorage.setItem('aiconnect.devdocs.article', id)
+  const nextHash = '#docs/' + encodeURIComponent(id)
+  if (window.location.hash !== nextHash) window.history.pushState(null, '', nextHash)
   await nextTick()
   articleTop.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
+async function selectGroup(group: typeof docGroups[number]) {
+  const target = docsForGroup(group)[0]
+  if (target) await selectDoc(target.id)
+}
+
+watch(audience, () => {
+  const firstVisible = visibleDocuments.value[0]
+  if (firstVisible && !visibleDocuments.value.some(doc => doc.id === activePage.value.id)) void selectDoc(firstVisible.id)
+})
+
+function syncFromHash() {
+  const requestedId = docIdFromHash()
+  if (!requestedId) return
+  const target = findDocument(requestedId)
+  if (target.id === activeId.value) return
+  activeId.value = target.id
+  sessionStorage.setItem('aiconnect.devdocs.article', target.id)
+  void nextTick(() => articleTop.value?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+}
+
+onMounted(() => window.addEventListener('popstate', syncFromHash))
+onBeforeUnmount(() => window.removeEventListener('popstate', syncFromHash))
 function scrollToSection(id: string) {
   document.getElementById(`doc-section-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
@@ -51,12 +120,13 @@ function scrollToSection(id: string) {
   <section ref="articleTop" class="docs-site">
     <header class="docs-page-hero">
       <div>
+        <nav class="docs-breadcrumb" aria-label="AICONNECT breadcrumb"><span>AICONNECT</span><i>/</i><strong>Dev-Docs</strong></nav>
         <p class="docs-eyebrow">KNOWLEDGE BASE</p>
         <h1>Dev-Docs</h1>
-        <p>AICONNECT를 처음 연결하는 개발자부터 인프라를 운영하는 관리자까지, 현재 제품 흐름을 한곳에서 확인합니다.</p>
+        <p>AICONNECT의 설정 위치, API 호출 절차, 비용·쿼터와 운영 점검을 현재 화면 기준으로 정리합니다.</p>
       </div>
       <div class="docs-page-meta">
-        <span><small>문서 기준</small><strong>2026. 07. 13.</strong></span>
+        <span><small>문서 기준</small><strong>2026. 08. 13.</strong></span>
         <span><small>현재 문서</small><strong>{{ documents.length }}개</strong></span>
         <a href="https://lmstudio.ai/docs/developer" target="_blank" rel="noreferrer">LM Studio 개발자 문서 ↗</a>
       </div>
@@ -80,13 +150,17 @@ function scrollToSection(id: string) {
       </div>
     </section>
 
+    <nav class="docs-map surface-card" aria-label="문서 영역">
+      <div class="docs-map-intro"><span>DOCUMENT MAP</span><strong>작업 단계별 문서</strong><small>설정 위치와 확인 방법을 실제 화면 기준으로 연결합니다.</small></div>
+      <button v-for="(item, index) in groupSummaries" :key="item.group" :class="{ active: activePage.group === item.group }" :aria-current="activePage.group === item.group ? 'page' : undefined" @click="selectGroup(item.group)"><span class="docs-map-index">{{ String(index + 1).padStart(2, '0') }}</span><span><strong>{{ item.group }}</strong><small>{{ item.count }}개 문서</small></span></button>
+    </nav>
     <div class="docs-layout">
       <aside class="docs-sidebar surface-card">
         <div class="docs-rail-title"><span>&lt;/&gt;</span><div><strong>문서 탐색</strong><small>{{ audience }} 대상</small></div></div>
         <nav aria-label="Dev-Docs 문서 목록">
           <section v-for="group in docGroups" :key="group">
             <p>{{ group }}</p>
-            <button v-for="doc in docsForGroup(group)" :key="doc.id" :class="{ active: activePage.id === doc.id }" @click="selectDoc(doc.id)">
+            <button v-for="doc in docsForGroup(group)" :key="doc.id" :class="{ active: activePage.id === doc.id }" :aria-current="activePage.id === doc.id ? 'page' : undefined" @click="selectDoc(doc.id)">
               <span>{{ doc.icon }}</span>
               <div><strong>{{ doc.shortTitle }}</strong><small>{{ doc.audience }} · {{ doc.minutes }}분</small></div>
               <i></i>
@@ -188,4 +262,22 @@ function scrollToSection(id: string) {
 @media (max-width: 1260px) { .docs-layout { grid-template-columns: 220px minmax(0, 1fr); } .page-toc { display: none; } .docs-controls { grid-template-columns: 1fr; } }
 @media (max-width: 860px) { .docs-page-hero { display: grid; } .docs-page-meta { justify-content: flex-start; } .docs-layout { grid-template-columns: 1fr; } .docs-sidebar { position: static; max-height: none; overflow: visible; } .docs-sidebar nav { grid-template-columns: repeat(2, minmax(0, 1fr)); } .docs-main { grid-row: 2; } .audience-bar small { display: none; } }
 @media (max-width: 560px) { .docs-sidebar nav { grid-template-columns: 1fr; } .audience-bar > span { display: none; } .docs-page-meta > span { flex: 1; } .docs-page-meta > a { width: 100%; } }
+.docs-breadcrumb { display:flex; align-items:center; gap:7px; margin:0 0 13px; color:var(--muted); font-size:10px; font-weight:800; letter-spacing:.08em; }
+.docs-breadcrumb i { color:var(--faint); font-style:normal; }
+.docs-breadcrumb strong { color:var(--text); }
+.docs-map { display:grid; grid-template-columns:minmax(220px,1.1fr) repeat(4,minmax(120px,1fr)); gap:8px; padding:10px; box-shadow:none; }
+.docs-map-intro { display:grid; align-content:center; gap:4px; padding:9px 11px; }
+.docs-map-intro span { color:var(--accent-strong); font-size:8px; font-weight:900; letter-spacing:.14em; }
+.docs-map-intro strong { font-size:12px; }
+.docs-map-intro small { color:var(--muted); font-size:9px; line-height:1.45; }
+.docs-map button { min-height:62px; display:grid; grid-template-columns:27px 1fr; gap:8px; align-items:center; padding:9px; border:1px solid var(--border); border-radius:10px; background:var(--surface); color:var(--muted); text-align:left; }
+.docs-map button:hover, .docs-map button.active { border-color:var(--accent-border); background:var(--accent-dim); color:var(--text); }
+.docs-map-index { color:var(--accent-strong); font-size:9px; font-weight:900; }
+.docs-map button strong, .docs-map button small { display:block; }
+.docs-map button strong { font-size:10px; }
+.docs-map button small { margin-top:3px; color:var(--faint); font-size:8px; }
+.docs-page-hero { min-height:0; padding:8px 0 18px; border-bottom:1px solid var(--border); }
+@media (max-width:1260px) { .docs-map { grid-template-columns:repeat(4,minmax(0,1fr)); } .docs-map-intro { grid-column:1/-1; } }
+@media (max-width:860px) { .docs-map { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media (max-width:560px) { .docs-map { grid-template-columns:1fr; } }
 </style>

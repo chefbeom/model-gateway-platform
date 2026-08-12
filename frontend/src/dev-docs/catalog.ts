@@ -55,7 +55,7 @@ export const devDocs: DocPage[] = [
         id: 'what-is-aiconnect', title: 'AICONNECT가 하는 일',
         blocks: [
           { type: 'paragraph', text: 'AICONNECT는 GPU나 모델을 직접 실행하는 프로그램이 아닙니다. 이미 준비된 LM Studio Runtime을 등록하고, 인증·권한·논리 모델·라우팅·사용량·장애 대응을 중앙에서 관리하는 Control Plane 겸 API Gateway입니다.' },
-          { type: 'callout', tone: 'success', title: '현재 문서 기준: 2026. 07. 13.', text: 'Standalone 자동 설치, 역할별 사용량 범위, 외부 OpenAI Provider 승인·수동 사용·선택형 자동 Failover까지 현재 main 브랜치 구현을 기준으로 정리했습니다.' },
+          { type: 'callout', tone: 'success', title: '현재 문서 기준: 2026. 08. 13.', text: 'Standalone 자동 설치, 역할별 사용량 범위, 외부 OpenAI Provider 승인·수동 사용·선택형 자동 Failover까지 현재 main 브랜치 구현을 기준으로 정리했습니다.' },
           { type: 'cards', items: [
             { label: 'CONTROL', title: '관리', text: '조직, 팀, 사용자, 프로젝트, API 키, Runtime과 논리 서비스를 구성합니다.' },
             { label: 'GATEWAY', title: '중계', text: '사용자 요청과 모델 응답을 중계하고 실제 모델 ID를 외부에서 숨깁니다.' },
@@ -411,10 +411,10 @@ export const devDocs: DocPage[] = [
           { type: 'table', columns: ['삭제 차단 원인', '해결'], rows: [
             ['프로젝트 서비스 권한', '프로젝트 & API 키 → 서비스 권한에서 관계만 해제'],
             ['Service Target', '서비스에서 Target 제거'],
-            ['요청 이력', '감사 보존 때문에 삭제 불가. 서비스 비활성화'],
+            ['요청 이력', '이력은 보존하고 프로젝트 권한·Service Target만 제거한 뒤 서비스 삭제'],
             ['연결·이력 없음', '삭제 검사 후 영구 삭제 가능']
           ] },
-          { type: 'callout', tone: 'info', title: '프로젝트를 삭제하지 마세요', text: '서비스를 정리하려면 프로젝트 자체가 아니라 프로젝트의 서비스 권한 관계를 해제합니다.' }
+          { type: 'callout', tone: 'info', title: '이력은 남기고 서비스만 정리할 수 있습니다', text: '삭제 검사에서 차단되는 것은 프로젝트 서비스 권한과 Service Target입니다. 요청·감사·사용량 이력은 보존되며, 관계를 제거한 뒤 논리 서비스만 정리합니다.' }
         ]
       }
     ]
@@ -731,7 +731,7 @@ export const devDocs: DocPage[] = [
   },
   {
     id: 'resource-ownership-and-onboarding',
-    group: '운영과 참고' as DocPage['group'],
+    group: '운영과 참조',
     title: '조직별 리소스와 첫 설정 흐름',
     shortTitle: '리소스 소유 범위',
     description: 'Runtime, GPU 인벤토리, 외부 AI Provider, 논리 서비스와 프로젝트 권한을 같은 조직 범위에서 안전하게 연결하는 방법입니다.',
@@ -800,7 +800,99 @@ export const devDocs: DocPage[] = [
         ]
       }
     ]
-  }
+  },
+  {
+    id: 'cost-and-quotas',
+    group: '관리자 가이드',
+    title: '요금·통화·총량제',
+    shortTitle: '요금·쿼터',
+    description: '원화·USD 단가부터 조직별 지출 한도와 초과 차단, 일·월별 사용량까지 한 흐름으로 확인합니다.',
+    audience: '관리자',
+    minutes: 8,
+    icon: '₩',
+    keywords: ['quota', 'budget', 'cost', 'currency', 'KRW', 'USD', 'usage', 'limit'],
+    sections: [
+      {
+        id: 'pricing',
+        title: '모델 단가와 통화',
+        blocks: [
+          { type: 'paragraph', text: '가격은 입력·출력 토큰 100만 개 기준으로 저장합니다. Runtime Endpoint와 모델 Deployment, 외부 Provider 모델, 논리 서비스의 통화(KRW 또는 USD)와 단가를 실제 설정 화면에서 확인·수정합니다.' },
+          { type: 'steps', items: [
+            { title: 'Runtime 또는 외부 Provider 선택', text: '인프라 화면에서는 Runtime Endpoint와 모델 Deployment의 가격을, 외부 AI 화면에서는 Provider 모델의 가격을 편집합니다.', action: { label: '인프라 열기', destination: 'infrastructure' } },
+            { title: '통화와 입력·출력 단가 저장', text: 'KRW(원화) 또는 USD(달러)를 선택하고 입력·출력 각각의 1M 토큰 단가를 저장합니다.' },
+            { title: '논리 서비스 정책 확인', text: '서비스가 별도 가격 정책을 사용하는 경우 LLM 서비스 화면에서 통화와 단가를 함께 확인합니다.', action: { label: 'LLM 서비스 열기', destination: 'services' } }
+          ] }
+        ]
+      },
+      {
+        id: 'quota-scope',
+        title: '총량제 범위와 차단',
+        blocks: [
+          { type: 'cards', items: [
+            { label: 'ORGANIZATION', title: '조직 전체', text: 'Workspace 전체 요청의 지출을 제한합니다.' },
+            { label: 'TEAM / PROJECT', title: '팀·프로젝트', text: '부서 또는 서비스별 예산을 분리합니다.' },
+            { label: 'API KEY', title: 'API 키', text: '호출 주체별로 최대 지출을 제한합니다.' }
+          ] },
+          { type: 'paragraph', text: '한도는 일간·월간·전체 기간 중 하나로 저장합니다. 활성 한도에 도달하면 Gateway가 요청을 허용하지 않고, 사용량과 요청 이력에 차단 결과를 남깁니다.' },
+          { type: 'callout', tone: 'warning', title: '통화는 임의로 합산하지 않습니다', text: 'KRW와 USD 사용량은 원래 통화별로 보존·표시합니다. 서로 다른 통화를 임의 환산한 단일 합계로 판단하지 말고 각 한도의 통화와 사용량을 비교하세요.' }
+        ]
+      },
+      {
+        id: 'review-usage',
+        title: '사용량 확인 순서',
+        blocks: [
+          { type: 'steps', items: [
+            { title: '쿼터 화면에서 기간 선택', text: '최근 7일·30일·이번 달·전체 기간을 선택하고 일별 선형 그래프와 월간 캘린더를 확인합니다.', action: { label: '요금·쿼터 열기', destination: 'quotas' } },
+            { title: '프로젝트·팀·API 키별 분해', text: '어느 소유 단위가 토큰과 비용을 사용했는지 표에서 비교합니다.' },
+            { title: '요청 이력으로 원인 확인', text: 'Request ID, 실제 배포, Provider, Failover와 비용 통화를 함께 확인합니다.', action: { label: '관측성 열기', destination: 'observability' } }
+          ] }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'api-playground-and-structure',
+    group: '운영과 참조',
+    title: 'API 테스트와 시스템 구조',
+    shortTitle: 'API 테스트·구조',
+    description: '실제 키 또는 임시 테스트 키로 연결을 확인하고, 현재 구성된 Gateway·서비스·Runtime·Provider·조직 구조를 읽습니다.',
+    audience: '공통',
+    minutes: 7,
+    icon: '↗',
+    keywords: ['playground', 'api test', 'JSON', 'SSE', 'request id', 'architecture', 'system structure'],
+    sections: [
+      {
+        id: 'playground',
+        title: '연결 테스트 페이지 사용',
+        blocks: [
+          { type: 'steps', items: [
+            { title: '모델 목록 조회', text: '테스트 화면에서 Gateway, Local LLM Runtime, 외부 AI Provider의 모델 노출 상태를 먼저 확인합니다.', action: { label: 'API 테스트 열기', destination: 'playground' } },
+            { title: 'JSON 요청으로 기본 연결 확인', text: '선택한 모델과 짧은 메시지로 비스트리밍 요청을 보내고 HTTP 상태와 실제 응답을 확인합니다.' },
+            { title: 'SSE 스트리밍 확인', text: '스트리밍을 켜면 이벤트가 순서대로 도착하는지 확인하고, 중간 오류가 발생하면 Request ID로 추적합니다.' },
+            { title: '실제 사용 키와 임시 키 구분', text: '운영 키는 권한·쿼터 정책을 그대로 검증하고, 임시 테스트 키는 짧은 유효기간과 제한된 범위로 연결만 검증합니다.' }
+          ] },
+          { type: 'callout', tone: 'success', title: '성공 기준', text: '실제 응답, 토큰 사용량, Request ID가 화면에 표시되고 요청 이력에 동일한 요청이 남으면 Gateway 연결 검증이 완료된 것입니다.' }
+        ]
+      },
+      {
+        id: 'system-map',
+        title: '현재 시스템 구조 읽기',
+        blocks: [
+          { type: 'flow', items: [
+            { label: '1', title: 'AICONNECT Gateway', text: 'API 키 인증과 요청 정책을 적용합니다.' },
+            { label: '2', title: '논리 LLM 서비스', text: '외부에 공개할 model과 Failover 정책입니다.' },
+            { label: '3', title: 'Runtime Endpoint 또는 Provider', text: '실제 Local LLM·외부 AI 연결 대상입니다.' },
+            { label: '4', title: '팀·프로젝트·API 키', text: '누가 어떤 모델을 사용할지 결정하는 접근 범위입니다.' }
+          ] },
+          { type: 'paragraph', text: '시스템 구조 화면의 실행 가능한 AI 자원 카드는 실제 호출 대상인 Runtime Endpoint와 외부 Provider만 표시합니다. GPU·Inference Node는 인프라 메타데이터로 관리하므로 실행 자원 수에 중복 합산하지 않습니다.' },
+          { type: 'steps', items: [
+            { title: '구성 맵 열기', text: '현재 연결된 Runtime, Provider, 논리 서비스, 팀, 프로젝트, API 키의 관계를 한 화면에서 확인합니다.', action: { label: '시스템 구조 열기', destination: 'system' } },
+            { title: '세부 설정으로 이동', text: '이름·Endpoint·가격·통화는 인프라 또는 외부 AI 화면에서, Target과 정책은 LLM 서비스 화면에서 수정합니다.', action: { label: '외부 AI 열기', destination: 'external' } }
+          ] }
+        ]
+      }
+    ]
+  },
 ]
 
 export const docGroups = ['시작하기', '사용자 가이드', '관리자 가이드', '운영과 참조'] as const

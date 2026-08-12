@@ -103,7 +103,8 @@ function isAllowedPage(target: PageKey) { return isAdminConsole.value || target 
 function fallbackPage(): PageKey { return isAdminConsole.value ? 'dashboard' : 'portal' }
 function resolveHash(): PageKey {
   const candidate = window.location.hash.replace(/^#\/?/, '')
-  return knownPage(candidate) ? candidate : fallbackPage()
+  const pageCandidate = candidate.split('/')[0]
+  return knownPage(pageCandidate) ? pageCandidate : fallbackPage()
 }
 function ensureAllowedPage() {
   if (!isAllowedPage(page.value)) navigate(fallbackPage())
