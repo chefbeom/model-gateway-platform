@@ -5,8 +5,6 @@ import { adminFetch, type AdminAuth, type Deployment, type Endpoint } from './ap
 type Profile = { profile: string; sharedStateProvider: string; instanceId?: string; redisConfigured?: boolean }
 type Provider = { id: string; displayName: string; providerType: string; baseUrl: string; enabled: boolean; healthStatus: string; apiKeyConfigured: boolean }
 type ProviderModel = { id: string; externalProviderId?: string | null; displayName: string; providerModelId: string; healthStatus: string; enabled: boolean }
-type RuntimeNode = { id: string; organizationId: string; name: string; status: string }
-type Accelerator = { id: string; nodeId: string; vendor: string; productName: string; memoryTotalMb?: number | null; driverVersion?: string | null }
 type Access = { id: string; projectId: string; projectName: string; providerId: string; providerName: string; status: string; autoFailoverEnabled: boolean }
 type Service = { id: string; serviceKey: string; displayName: string; enabled: boolean; failoverPolicy?: string; retryPolicy?: string }
 type Target = { id: string; deploymentId: string; priority: number; weight: number; degraded: boolean; enabled: boolean }
@@ -22,8 +20,6 @@ const props = defineProps<{ organizationId: string; auth: AdminAuth }>()
 
 const profile = ref<Profile | null>(null)
 const endpoints = ref<Endpoint[]>([])
-const nodes = ref<RuntimeNode[]>([])
-const accelerators = ref<Record<string, Accelerator[]>>({})
 const endpointDeployments = ref<Record<string, Deployment[]>>({})
 const providers = ref<Provider[]>([])
 const providerModels = ref<Record<string, ProviderModel[]>>({})
@@ -46,11 +42,11 @@ const healthyEndpoints = computed(() => endpoints.value.filter(item => item.enab
 const deploymentCount = computed(() => Object.values(endpointDeployments.value).reduce((total, items) => total + items.length, 0))
 const loadedDeploymentCount = computed(() => Object.values(endpointDeployments.value).flat().filter(item => item.enabled && (item.loaded || item.healthStatus === 'HEALTHY')).length)
 const providerCount = computed(() => providers.value.filter(item => item.enabled).length)
+const runnableResourceCount = computed(() => endpoints.value.length + providers.value.length)
 const enabledServiceCount = computed(() => services.value.filter(item => item.enabled).length)
 const activeKeyCount = computed(() => Object.values(keys.value).flat().filter(item => item.status === 'ACTIVE').length)
 const grantCount = computed(() => Object.values(grants.value).reduce((total, items) => total + items.length, 0))
 const targetCount = computed(() => Object.values(targets.value).reduce((total, items) => total + items.length, 0))
-const acceleratorCount = computed(() => Object.values(accelerators.value).reduce((total, items) => total + items.length, 0))
 
 function textError(error: unknown) { return error instanceof Error ? error.message : '요청을 처리하지 못했습니다.' }
 async function read<T>(path: string, section: string, fallback: T): Promise<T> {
@@ -58,7 +54,7 @@ async function read<T>(path: string, section: string, fallback: T): Promise<T> {
   catch (error) { errors.value.push({ section, path, message: textError(error) }); return fallback }
 }
 function reset() {
-  profile.value = null; endpoints.value = []; nodes.value = []; accelerators.value = {}; endpointDeployments.value = {}; providers.value = []; providerModels.value = {}
+  profile.value = null; endpoints.value = []; endpointDeployments.value = {}; providers.value = []; providerModels.value = {}
   accesses.value = []; services.value = []; targets.value = {}; teams.value = []; members.value = {}; users.value = []
   projects.value = []; keys.value = {}; grants.value = {}; errors.value = []; lastLoadedAt.value = ''
 }
@@ -78,11 +74,6 @@ async function load() {
     ])
     profile.value = values[0]; endpoints.value = values[1]; providers.value = values[2]; accesses.value = values[3]
     services.value = values[4]; teams.value = values[5]; users.value = values[6]; projects.value = values[7]
-    nodes.value = await read<RuntimeNode[]>('/api/admin/organizations/' + props.organizationId + '/nodes', 'Inference nodes', [])
-    const acceleratorRows = await Promise.all(nodes.value.map(async item => [
-      item.id,
-      await read<Accelerator[]>('/api/admin/nodes/' + item.id + '/accelerators', 'Accelerator �� ' + item.name, [])
-    ] as const))
 
     const [endpointRows, providerRows, serviceRows, teamRows, projectRows] = await Promise.all([
       Promise.all(endpoints.value.map(async item => [item.id, await read<Deployment[]>('/api/admin/runtime-endpoints/' + item.id + '/deployments', '모델 배포 · ' + (item.displayName || item.baseUrl), [])] as const)),
@@ -123,8 +114,6 @@ function statusLabel(value?: string | null) {
 }
 function endpointName(item: Endpoint) { return item.displayName || item.baseUrl.replace(/^https?:\/\//, '') }
 function modelsFor(item: Endpoint) { return endpointDeployments.value[item.id] || [] }
-function acceleratorsFor(item: RuntimeNode) { return accelerators.value[item.id] || [] }
-function endpointCountForNode(nodeId: string) { return endpoints.value.filter(item => item.nodeId === nodeId).length }
 function providerModelsFor(item: Provider) { return providerModels.value[item.id] || [] }
 function targetsFor(item: Service) { return targets.value[item.id] || [] }
 function membersFor(item: Team) { return members.value[item.id] || [] }
@@ -181,9 +170,8 @@ onMounted(() => { void load() })
           <section class="architecture-node gateway-node"><div class="node-icon">↗</div><div><span class="node-kicker">REQUEST EDGE</span><h3>AICONNECT Gateway</h3><p>OpenAI-compatible <code>/v1</code> API가 프로젝트 API 키의 요청을 받아 사용량·쿼터·라우팅을 적용합니다.</p><div class="chip-row"><span class="status-chip tiny healthy">AUTH</span><span class="status-chip tiny healthy">QUOTA</span><span class="status-chip tiny healthy">OBSERVABILITY</span></div></div></section>
           <div class="flow-connector"><span>요청 라우팅</span><i></i></div>
           <section v-if="show('runtime')" class="architecture-layer">
-            <div class="layer-heading"><div><span class="card-kicker">COMPUTE & PROVIDERS</span><h3>실행 가능한 AI 자원</h3></div><small>{{ endpoints.length + providers.length }}개 연결</small></div>
+            <div class="layer-heading"><div><span class="card-kicker">COMPUTE & PROVIDERS</span><h3>실행 가능한 AI 자원</h3></div><small>{{ runnableResourceCount }}개 연결</small></div>
             <div class="resource-grid">
-              <article v-for="item in nodes" :key="'node-' + item.id" class="resource-card"><div class="resource-icon">GPU</div><div class="resource-content"><div class="resource-heading"><strong>{{ item.name }}</strong><span class="status-chip tiny" :class="statusClass(item.status)">{{ statusLabel(item.status) }}</span></div><small>INFERENCE NODE · {{ item.status }}</small><div class="resource-meta"><span>Endpoints {{ endpointCountForNode(item.id) }}</span><span>Accelerators {{ acceleratorsFor(item).length }}</span></div><div v-if="acceleratorsFor(item).length" class="resource-tags"><span v-for="accelerator in acceleratorsFor(item).slice(0, 3)" :key="accelerator.id">{{ accelerator.vendor }} {{ accelerator.productName }}</span><span v-if="acceleratorsFor(item).length > 3">+{{ acceleratorsFor(item).length - 3 }}</span></div><div v-else class="resource-empty">No accelerator inventory</div></div></article>
               <article v-for="item in endpoints" :key="item.id" class="resource-card" :class="{ muted: !item.enabled }"><div class="resource-icon">◇</div><div class="resource-content"><div class="resource-heading"><strong>{{ endpointName(item) }}</strong><span class="status-chip tiny" :class="statusClass(item.healthStatus)">{{ statusLabel(item.healthStatus) }}</span></div><small>{{ item.runtimeType }} · {{ item.baseUrl }}</small><div class="resource-meta"><span>모델 {{ modelsFor(item).length }}</span><span>노드 {{ item.nodeId.slice(0, 8) }}</span></div><div v-if="modelsFor(item).length" class="resource-tags"><span v-for="model in modelsFor(item).slice(0, 3)" :key="model.id">{{ model.displayName }}</span><span v-if="modelsFor(item).length > 3">+{{ modelsFor(item).length - 3 }}</span></div><div v-else class="resource-empty">동기화된 모델 없음</div></div></article>
               <article v-for="item in providers" :key="item.id" class="resource-card" :class="{ muted: !item.enabled }"><div class="resource-icon provider">◎</div><div class="resource-content"><div class="resource-heading"><strong>{{ item.displayName }}</strong><span class="status-chip tiny" :class="statusClass(item.healthStatus)">{{ statusLabel(item.healthStatus) }}</span></div><small>{{ item.providerType }} · {{ item.baseUrl }}</small><div class="resource-meta"><span>모델 {{ providerModelsFor(item).length }}</span><span>{{ item.apiKeyConfigured ? 'API 키 설정됨' : 'API 키 미설정' }}</span></div><div v-if="providerModelsFor(item).length" class="resource-tags"><span v-for="model in providerModelsFor(item).slice(0, 3)" :key="model.id">{{ model.displayName }}</span><span v-if="providerModelsFor(item).length > 3">+{{ providerModelsFor(item).length - 3 }}</span></div><div v-else class="resource-empty">등록된 외부 모델 없음</div></div></article>
               <div v-if="!endpoints.length && !providers.length" class="empty-state compact layer-empty"><span>◇</span><p>연결된 Runtime Endpoint 또는 외부 Provider가 없습니다.</p></div>
