@@ -165,7 +165,7 @@ public class SpendQuotaService {
         }
         for (ServiceTarget target : serviceTargets) {
             ModelDeployment deployment = deploymentById.get(target.getDeploymentId());
-            if (deployment == null || !deployment.isExternal()
+            if (deployment == null
                     || deployment.getProviderInputPricePerMillion() == null
                     || deployment.getProviderOutputPricePerMillion() == null) {
                 continue;

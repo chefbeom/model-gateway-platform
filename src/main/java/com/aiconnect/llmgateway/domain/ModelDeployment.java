@@ -100,6 +100,16 @@ public class ModelDeployment {
         if (capabilityOverridesJson != null) this.capabilityOverridesJson = capabilityOverridesJson;
     }
 
+    public void configureDisplayName(String displayName) {
+        if (displayName != null && !displayName.isBlank()) this.displayName = displayName;
+    }
+
+    public void configurePricing(java.math.BigDecimal inputPrice, java.math.BigDecimal outputPrice, Currency priceCurrency) {
+        if (inputPrice != null) this.providerInputPricePerMillion = inputPrice;
+        if (outputPrice != null) this.providerOutputPricePerMillion = outputPrice;
+        if (priceCurrency != null) this.providerPriceCurrency = priceCurrency;
+    }
+
     public void configureProviderModel(String displayName, String compatibilityKey, Boolean enabled,
                                        Integer maxConcurrency, String capabilitiesJson,
                                        java.math.BigDecimal inputPrice, java.math.BigDecimal outputPrice) {
@@ -116,9 +126,7 @@ public class ModelDeployment {
         if (enabled != null) this.enabled = enabled;
         if (maxConcurrency != null) this.maxConcurrency = Math.max(1, maxConcurrency);
         if (capabilitiesJson != null) this.capabilitiesJson = capabilitiesJson;
-        if (inputPrice != null) this.providerInputPricePerMillion = inputPrice;
-        if (outputPrice != null) this.providerOutputPricePerMillion = outputPrice;
-        if (priceCurrency != null) this.providerPriceCurrency = priceCurrency;
+        configurePricing(inputPrice, outputPrice, priceCurrency);
         this.loaded = true;
         this.healthStatus = HealthStatus.HEALTHY;
         this.lastSyncedAt = Instant.now();

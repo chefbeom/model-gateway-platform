@@ -28,7 +28,9 @@ public final class AdminDtos {
     public record CreateDeployment(@NotNull UUID runtimeEndpointId, @NotBlank @Size(max = 500) String providerModelId,
                                    @Size(max = 500) String compatibilityKey, @NotBlank @Size(max = 200) String displayName,
                                    String modelFamily, String quantization, @Positive Integer contextLength,
-                                   @Min(1) Integer maxConcurrency, String capabilitiesJson) { }
+                                   @Min(1) Integer maxConcurrency, String capabilitiesJson,
+                                   @DecimalMin("0") BigDecimal inputPricePerMillion,
+                                   @DecimalMin("0") BigDecimal outputPricePerMillion, Currency currency) { }
     public record CreateService(@NotNull UUID organizationId,
                                 @NotBlank @Pattern(regexp = "[a-z0-9][a-z0-9-]{0,119}") String serviceKey,
                                 @NotBlank @Size(max = 200) String displayName, FailoverPolicy failoverPolicy,

@@ -22,6 +22,8 @@ public class DeploymentConfigurationService {
         ModelDeployment deployment = deployments.findById(deploymentId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "DEPLOYMENT_NOT_FOUND", "The model deployment does not exist."));
         deployment.configure(request.compatibilityKey(), request.enabled(), request.maxConcurrency(), request.capabilityOverridesJson());
+        deployment.configureDisplayName(request.displayName());
+        deployment.configurePricing(request.inputPricePerMillion(), request.outputPricePerMillion(), request.currency());
         return deployments.save(deployment);
     }
 }

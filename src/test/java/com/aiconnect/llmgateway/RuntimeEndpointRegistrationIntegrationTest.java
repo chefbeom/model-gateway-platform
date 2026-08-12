@@ -13,6 +13,9 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -52,5 +55,32 @@ class RuntimeEndpointRegistrationIntegrationTest {
                         .content("{\"nodeId\":\"" + node.getId() + "\",\"runtimeType\":\"LM_STUDIO\",\"baseUrl\":\"file:///etc/passwd\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("INVALID_RUNTIME_BASE_URL"));
+    }
+    @Test
+    void updatesNameAndArchivesEndpointForOrganizationAdministrator() throws Exception {
+        Organization organization = organizations.save(new Organization("Endpoint lifecycle"));
+        InferenceNode node = nodes.save(new InferenceNode(organization.getId(), "lifecycle-node", null, "DIRECT", null));
+        String authorization = "integration-admin-token";
+        String response = mvc.perform(post("/api/admin/runtime-endpoints")
+                        .header("X-Admin-Token", authorization)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"nodeId\":\"" + node.getId() + "\",\"runtimeType\":\"LM_STUDIO\",\"baseUrl\":\"http://lifecycle:1234\"}"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        String endpointId = new com.fasterxml.jackson.databind.ObjectMapper().readTree(response).path("id").asText();
+
+        mvc.perform(patch("/api/admin/runtime-endpoints/{endpointId}", endpointId)
+                        .header("X-Admin-Token", authorization)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"displayName\":\"Renamed LM Studio\",\"baseUrl\":\"http://lifecycle:1235\",\"enabled\":true}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.displayName").value("Renamed LM Studio"))
+                .andExpect(jsonPath("$.baseUrl").value("http://lifecycle:1235"));
+
+        mvc.perform(delete("/api/admin/runtime-endpoints/{endpointId}", endpointId)
+                        .header("X-Admin-Token", authorization))
+                .andExpect(status().isNoContent());
+        mvc.perform(get("/api/admin/organizations/{organizationId}/runtime-endpoints", organization.getId())
+                        .header("X-Admin-Token", authorization))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
     }
 }

@@ -94,9 +94,12 @@ public class ControlPlaneService {
     @Transactional
     public ModelDeployment create(AdminDtos.CreateDeployment request) {
         requireEndpoint(request.runtimeEndpointId());
-        return deployments.save(new ModelDeployment(request.runtimeEndpointId(), request.providerModelId(), request.compatibilityKey(),
+        ModelDeployment deployment = new ModelDeployment(request.runtimeEndpointId(), request.providerModelId(), request.compatibilityKey(),
                 request.displayName(), request.modelFamily(), request.quantization(), request.contextLength(), true,
-                request.maxConcurrency() == null ? 1 : request.maxConcurrency(), request.capabilitiesJson()));
+                request.maxConcurrency() == null ? 1 : request.maxConcurrency(), request.capabilitiesJson());
+        deployment.configurePricing(request.inputPricePerMillion(), request.outputPricePerMillion(),
+                request.currency() == null ? Currency.KRW : request.currency());
+        return deployments.save(deployment);
     }
 
     @Transactional

@@ -10,6 +10,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
+import java.math.BigDecimal;
+
+import com.aiconnect.llmgateway.domain.Currency;
 
 @RestController
 @RequestMapping("/api/admin/model-deployments")
@@ -27,9 +30,17 @@ public class DeploymentConfigurationController {
     }
 
     public record UpdateDeployment(
+            @Size(max = 200) String displayName,
             @Size(max = 500) String compatibilityKey,
             Boolean enabled,
             @Min(1) Integer maxConcurrency,
-            String capabilityOverridesJson
-    ) { }
+            String capabilityOverridesJson,
+            @jakarta.validation.constraints.DecimalMin("0") BigDecimal inputPricePerMillion,
+            @jakarta.validation.constraints.DecimalMin("0") BigDecimal outputPricePerMillion,
+            Currency currency
+    ) {
+        public UpdateDeployment(String compatibilityKey, Boolean enabled, Integer maxConcurrency, String capabilityOverridesJson) {
+            this(null, compatibilityKey, enabled, maxConcurrency, capabilityOverridesJson, null, null, null);
+        }
+    }
 }

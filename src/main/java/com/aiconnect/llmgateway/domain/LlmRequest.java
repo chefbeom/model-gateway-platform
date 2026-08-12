@@ -120,6 +120,8 @@ public class LlmRequest {
     public Integer getInputTokens() { return inputTokens; }
     public Integer getOutputTokens() { return outputTokens; }
     public BigDecimal getEstimatedCost() { return estimatedCost; }
+    public BigDecimal getInputUnitPrice() { return inputUnitPrice; }
+    public BigDecimal getOutputUnitPrice() { return outputUnitPrice; }
     public Currency getCostCurrency() { return costCurrency; }
     public Long getLatencyMs() { return latencyMs; }
     public int getFailoverCount() { return failoverCount; }

@@ -3,7 +3,7 @@ export type AdminAuth = { accessToken?: string; platformToken?: string }
 export type User = { id: string; email: string; platformAdmin: boolean }
 export type Session = { accessToken: string; user: User }
 export type Endpoint = { id: string; nodeId: string; displayName: string; runtimeType: string; baseUrl: string; enabled: boolean; healthStatus: string; lastCheckedAt?: string }
-export type Deployment = { id: string; runtimeEndpointId: string; externalProviderId?: string | null; providerModelId: string; compatibilityKey: string; displayName: string; modelFamily?: string; quantization?: string; contextLength?: number; loaded: boolean; enabled: boolean; healthStatus: string; maxConcurrency: number; capabilitiesJson: string; capabilityOverridesJson?: string | null }
+export type Deployment = { id: string; runtimeEndpointId: string; externalProviderId?: string | null; providerModelId: string; compatibilityKey: string; displayName: string; modelFamily?: string; quantization?: string; contextLength?: number; loaded: boolean; enabled: boolean; healthStatus: string; maxConcurrency: number; capabilitiesJson: string; capabilityOverridesJson?: string | null; inputPricePerMillion?: number | null; outputPricePerMillion?: number | null; currency?: 'KRW' | 'USD' | null }
 
 let refreshInFlight: Promise<Session> | null = null
 

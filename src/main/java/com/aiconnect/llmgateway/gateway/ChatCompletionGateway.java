@@ -84,13 +84,15 @@ public class ChatCompletionGateway {
                     attempt.succeed(attemptLatency, runtimeResult.statusCode()); attempts.save(attempt);
                     recordHealthy(candidate);
                     int inputTokens = readUsage(runtimeResult.body(), "prompt_tokens", "input_tokens");
+                    if (inputTokens <= 0) inputTokens = TokenUsageEstimator.estimateInputTokens(request);
                     int outputTokens = readUsage(runtimeResult.body(), "completion_tokens", "output_tokens");
+                    if (outputTokens <= 0) outputTokens = TokenUsageEstimator.estimateOutputTokens(runtimeResult.body());
                     int failoverCount = effectiveFailoverCount(candidate, failures);
                     audit.succeed(candidate.deployment().getId(), inputTokens, outputTokens, elapsed(audit.getStartedAt()),
                             runtimeResult.statusCode(), failoverCount, candidate.providerType(), candidate.routingReason(),
-                            candidate.external() ? candidate.deployment().getProviderInputPricePerMillion() : null,
-                            candidate.external() ? candidate.deployment().getProviderOutputPricePerMillion() : null,
-                            candidate.external() ? candidate.deployment().getProviderPriceCurrency() : null);
+                            candidate.deployment().getProviderInputPricePerMillion(),
+                            candidate.deployment().getProviderOutputPricePerMillion(),
+                            candidate.deployment().getProviderPriceCurrency());
                     requests.save(audit);
                     ObjectNode response = runtimeResult.body().isObject() ? ((ObjectNode) runtimeResult.body()).deepCopy() : objectMapper.createObjectNode();
                     response.put("model", serviceKey);

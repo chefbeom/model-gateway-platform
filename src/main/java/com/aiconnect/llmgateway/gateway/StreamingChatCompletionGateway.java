@@ -89,7 +89,7 @@ public class StreamingChatCompletionGateway {
                         InputStream prefetched = StreamingResponsePrefetcher.requireFirstByte(result.body());
                         attempt.markResponseStarted(); attempts.save(attempt);
                         return new StreamingGatewayResult(result.statusCode(), requestId,
-                                new AuditedStream(prefetched, audit, attempt, candidate, failures, started, result.statusCode()), null);
+                                new AuditedStream(prefetched, request, audit, attempt, candidate, failures, started, result.statusCode()), null);
                     } catch (IOException failure) {
                         closeQuietly(result.body());
                         RuntimeUnavailableException unavailable = new RuntimeUnavailableException("The runtime stream ended before its first response byte.", failure);
@@ -150,35 +150,36 @@ public class StreamingChatCompletionGateway {
 
     private final class AuditedStream extends InputStream {
         private final InputStream source;
+        private final JsonNode request;
         private final LlmRequest audit;
         private final LlmRequestAttempt attempt;
         private final ResolvedTarget target;
         private final int failures;
         private final Instant started;
         private final int statusCode;
-        private final UsageCollector usage = new UsageCollector();
+        private final UsageCollector usage;
         private boolean finalized;
 
-        private AuditedStream(InputStream source, LlmRequest audit, LlmRequestAttempt attempt, ResolvedTarget target, int failures, Instant started, int statusCode) {
-            this.source = source; this.audit = audit; this.attempt = attempt; this.target = target;
-            this.failures = failures; this.started = started; this.statusCode = statusCode;
+        private AuditedStream(InputStream source, JsonNode request, LlmRequest audit, LlmRequestAttempt attempt, ResolvedTarget target, int failures, Instant started, int statusCode) {
+            this.source = source; this.request = request; this.audit = audit; this.attempt = attempt; this.target = target;
+            this.failures = failures; this.started = started; this.statusCode = statusCode; this.usage = new UsageCollector(request);
         }
         @Override public int read() throws IOException {
             try {
                 int value = source.read();
-                if (value >= 0) usage.accept(new byte[] {(byte) value});
+                if (value >= 0) usage.accept(new byte[] {(byte) value}); else if (value < 0) { usage.finish(); finalizeSuccess(); }
                 return value;
             } catch (IOException exception) { finalizeFailure(exception); throw exception; }
         }
         @Override public int read(byte[] bytes, int offset, int length) throws IOException {
             try {
                 int count = source.read(bytes, offset, length);
-                if (count > 0) usage.accept(Arrays.copyOfRange(bytes, offset, offset + count));
+                if (count > 0) usage.accept(Arrays.copyOfRange(bytes, offset, offset + count)); else if (count < 0) { usage.finish(); finalizeSuccess(); }
                 return count;
             } catch (IOException exception) { finalizeFailure(exception); throw exception; }
         }
         @Override public void close() throws IOException {
-            try { source.close(); finalizeSuccess(); }
+            try { source.close(); usage.finish(); finalizeSuccess(); }
             catch (IOException exception) { finalizeFailure(exception); throw exception; }
         }
         private void finalizeSuccess() {
@@ -186,11 +187,11 @@ public class StreamingChatCompletionGateway {
             finalized = true;
             attempt.succeed(elapsed(started), statusCode); attempts.save(attempt);
             int failoverCount = "AUTO_FAILOVER".equals(target.routingReason()) && failures == 0 ? 1 : failures;
-            audit.succeed(target.deployment().getId(), usage.inputTokens, usage.outputTokens,
+            audit.succeed(target.deployment().getId(), usage.inputTokens(), usage.outputTokens(),
                     elapsed(audit.getStartedAt()), statusCode, failoverCount, target.providerType(), target.routingReason(),
-                    target.external() ? target.deployment().getProviderInputPricePerMillion() : null,
-                    target.external() ? target.deployment().getProviderOutputPricePerMillion() : null,
-                    target.external() ? target.deployment().getProviderPriceCurrency() : null);
+                    target.deployment().getProviderInputPricePerMillion(),
+                    target.deployment().getProviderOutputPricePerMillion(),
+                    target.deployment().getProviderPriceCurrency());
             requests.save(audit);
             if (target.external()) { target.externalProvider().recordHealth(true); providers.save(target.externalProvider()); }
             routing.release(target);
@@ -206,25 +207,54 @@ public class StreamingChatCompletionGateway {
     }
 
     private final class UsageCollector {
+        private final JsonNode request;
         private final StringBuilder pending = new StringBuilder();
+        private final StringBuilder generatedText = new StringBuilder();
         private int inputTokens;
         private int outputTokens;
+
+        private UsageCollector(JsonNode request) {
+            this.request = request;
+        }
+
         void accept(byte[] bytes) {
             pending.append(new String(bytes, StandardCharsets.UTF_8));
             int newline;
             while ((newline = pending.indexOf("\n")) >= 0) {
                 String line = pending.substring(0, newline).trim(); pending.delete(0, newline + 1);
-                if (!line.startsWith("data:")) continue;
-                String json = line.substring(5).trim();
-                if (json.equals("[DONE]")) continue;
-                try {
-                    JsonNode usage = objectMapper.readTree(json).path("usage");
-                    inputTokens = Math.max(inputTokens, usage.path("prompt_tokens").asInt(usage.path("input_tokens").asInt(0)));
-                    outputTokens = Math.max(outputTokens, usage.path("completion_tokens").asInt(usage.path("output_tokens").asInt(0)));
-                } catch (Exception ignored) { }
+                parseLine(line);
             }
         }
-    }
+
+        void finish() {
+            if (pending.length() > 0) {
+                parseLine(pending.toString().trim());
+                pending.setLength(0);
+            }
+        }
+
+        private void parseLine(String line) {
+            if (!line.startsWith("data:")) return;
+            String json = line.substring(5).trim();
+            if (json.equals("[DONE]") || json.isBlank()) return;
+            try {
+                JsonNode payload = objectMapper.readTree(json);
+                JsonNode usage = payload.path("usage");
+                inputTokens = Math.max(inputTokens, usage.path("prompt_tokens").asInt(usage.path("input_tokens").asInt(0)));
+                outputTokens = Math.max(outputTokens, usage.path("completion_tokens").asInt(usage.path("output_tokens").asInt(0)));
+                TokenUsageEstimator.appendOutputText(payload, generatedText);
+            } catch (Exception ignored) { }
+        }
+
+        int inputTokens() {
+            return inputTokens > 0 ? inputTokens : TokenUsageEstimator.estimateInputTokens(request);
+        }
+
+        int outputTokens() {
+            return outputTokens > 0 ? outputTokens : TokenUsageEstimator.estimateTextTokens(generatedText.toString());
+        }
+        }
+
 
     private void recordUnhealthy(ResolvedTarget candidate) {
         if (candidate.external()) {

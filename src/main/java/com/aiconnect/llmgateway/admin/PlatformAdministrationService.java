@@ -136,11 +136,14 @@ public class PlatformAdministrationService {
         execute("delete from project_content_policy where project_id in (select id from project where organization_id = :id)", organizationId);
         execute("delete from project_quota where project_id in (select id from project where organization_id = :id)", organizationId);
         execute("delete from project_external_access where project_id in (select id from project where organization_id = :id)", organizationId);
-        execute("delete from project_service_access where project_id in (select id from project where organization_id = :id)", organizationId);
         execute("delete from service_target where service_id in (select id from llm_service where organization_id = :id)", organizationId);
         execute("delete from service_target where deployment_id in (select d.id from model_deployment d join runtime_endpoint e on e.id=d.runtime_endpoint_id join inference_node n on n.id=e.node_id where n.organization_id=:id)", organizationId);
+        execute("delete from project_service_access where service_id in (select id from llm_service where organization_id = :id)", organizationId);
         execute("delete from llm_service where organization_id = :id", organizationId);
+        execute("delete from service_target where deployment_id in (select id from model_deployment where external_provider_id in (select id from external_provider where organization_id = :id))", organizationId);
         execute("delete from model_deployment where external_provider_id in (select id from external_provider where organization_id = :id)", organizationId);
+        execute("delete from runtime_model_operation where runtime_endpoint_id in (select e.id from runtime_endpoint e join inference_node n on n.id=e.node_id where n.organization_id=:id)", organizationId);
+        execute("delete from runtime_model_profile where runtime_endpoint_id in (select e.id from runtime_endpoint e join inference_node n on n.id=e.node_id where n.organization_id=:id)", organizationId);
         execute("delete from model_deployment where runtime_endpoint_id in (select e.id from runtime_endpoint e join inference_node n on n.id=e.node_id where n.organization_id=:id)", organizationId);
         execute("delete from project_external_access where provider_id in (select id from external_provider where organization_id = :id)", organizationId);
         execute("delete from incident where runtime_endpoint_id in (select e.id from runtime_endpoint e join inference_node n on n.id=e.node_id where n.organization_id=:id)", organizationId);
@@ -153,6 +156,7 @@ public class PlatformAdministrationService {
         execute("delete from team where organization_id = :id", organizationId);
         execute("delete from organization_member where organization_id = :id", organizationId);
         execute("delete from audit_log where organization_id = :id", organizationId);
+        execute("delete from accelerator_device where node_id in (select id from inference_node where organization_id = :id)", organizationId);
         execute("delete from inference_node where organization_id = :id", organizationId);
         execute("delete from organization where id = :id", organizationId);
         audit.record(null, CurrentActor.userIdOrNull(), "ORGANIZATION_PURGED", "ORGANIZATION", organizationId,
