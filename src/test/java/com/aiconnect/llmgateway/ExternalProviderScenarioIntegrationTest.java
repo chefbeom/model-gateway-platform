@@ -103,6 +103,9 @@ class ExternalProviderScenarioIntegrationTest {
             assertThat(manualRequest.getFinalProviderType()).isEqualTo("OPENAI");
             assertThat(manualRequest.getRoutingReason()).isEqualTo("MANUAL_EXTERNAL");
             assertThat(manualRequest.getEstimatedCost()).isEqualByComparingTo("0.008000");
+            assertThat(manualRequest.getCostCurrency()).isEqualTo(Currency.KRW);
+            assertThat(manualRequest.getInputUnitPrice()).isEqualByComparingTo("1000");
+            assertThat(manualRequest.getOutputUnitPrice()).isEqualByComparingTo("2000");
 
             InferenceNode node = nodes.save(new InferenceNode(organization.getId(), "offline-local", null, "DIRECT", null));
             RuntimeEndpoint endpoint = new RuntimeEndpoint(node.getId(), RuntimeType.LM_STUDIO, "http://127.0.0.1:1", null);

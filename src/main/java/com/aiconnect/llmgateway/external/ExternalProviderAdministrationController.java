@@ -53,6 +53,15 @@ public class ExternalProviderAdministrationController {
         return service.addModel(providerId, request.providerModelId(), request.displayName(), request.compatibilityKey(), request.contextLength(), request.maxConcurrency(), request.capabilitiesJson(), request.inputPricePerMillion(), request.outputPricePerMillion(), request.currency());
     }
 
+    @PatchMapping("/external-providers/{providerId}/models/{modelId}")
+    public ExternalProviderAdministrationService.ProviderModelView updateModel(@PathVariable UUID providerId,
+                                                                                @PathVariable UUID modelId,
+                                                                                @Valid @RequestBody UpdateModel request) {
+        return service.updateModel(providerId, modelId, request.displayName(), request.compatibilityKey(),
+                request.contextLength(), request.maxConcurrency(), request.capabilitiesJson(),
+                request.inputPricePerMillion(), request.outputPricePerMillion(), request.currency(), request.enabled());
+    }
+
     private boolean isPlatformAdmin(HttpServletRequest request) {
         AuthPrincipal actor = CurrentActor.principal().orElse(null);
         return Boolean.TRUE.equals(request.getAttribute("aiconnect.platform-admin")) || (actor != null && actor.platformAdmin());
@@ -65,4 +74,8 @@ public class ExternalProviderAdministrationController {
                            String compatibilityKey, @Positive Integer contextLength, @Positive Integer maxConcurrency,
                            String capabilitiesJson, @PositiveOrZero BigDecimal inputPricePerMillion,
                            @PositiveOrZero BigDecimal outputPricePerMillion, Currency currency) { }
+    public record UpdateModel(@Size(max = 200) String displayName, @Size(max = 500) String compatibilityKey,
+                              @Positive Integer contextLength, @Positive Integer maxConcurrency,
+                              String capabilitiesJson, @PositiveOrZero BigDecimal inputPricePerMillion,
+                              @PositiveOrZero BigDecimal outputPricePerMillion, Currency currency, Boolean enabled) { }
 }

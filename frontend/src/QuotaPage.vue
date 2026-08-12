@@ -48,7 +48,7 @@ const scopeOptions = ref<ScopeOption[]>([])
 
 function money(value: number | null | undefined, currency: Currency = 'KRW') {
   const amount = Number(value ?? 0)
-  return new Intl.NumberFormat(currency === 'USD' ? 'en-US' : 'ko-KR', { style: 'currency', currency, maximumFractionDigits: currency === 'USD' ? 4 : 0 }).format(amount)
+  return new Intl.NumberFormat(currency === 'USD' ? 'en-US' : 'ko-KR', { style: 'currency', currency, maximumFractionDigits: 6 }).format(amount)
 }
 function number(value: number | null | undefined) { return new Intl.NumberFormat('ko-KR').format(Number(value ?? 0)) }
 function percent(value: number | null | undefined) { return `${Math.min(100, Math.max(0, Number(value ?? 0))).toFixed(1)}%` }

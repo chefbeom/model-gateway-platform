@@ -82,11 +82,9 @@ public class LlmRequest {
         this.finalDeploymentId = deploymentId;
         this.finalProviderType = providerType;
         this.routingReason = routingReason;
-        if (providerInputPrice != null && providerOutputPrice != null) {
-            this.inputUnitPrice = providerInputPrice;
-            this.outputUnitPrice = providerOutputPrice;
-            if (providerCurrency != null) this.costCurrency = providerCurrency;
-        }
+        if (providerInputPrice != null) this.inputUnitPrice = providerInputPrice;
+        if (providerOutputPrice != null) this.outputUnitPrice = providerOutputPrice;
+        if (providerCurrency != null) this.costCurrency = providerCurrency;
         this.inputTokens = inputTokens;
         this.outputTokens = outputTokens;
         this.latencyMs = latencyMs;

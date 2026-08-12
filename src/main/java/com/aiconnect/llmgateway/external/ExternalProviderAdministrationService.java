@@ -196,6 +196,26 @@ public class ExternalProviderAdministrationService {
         return ProviderModelView.from(deployment);
     }
 
+    @Transactional
+    public ProviderModelView updateModel(UUID providerId, UUID modelId, String displayName,
+                                         String compatibilityKey, Integer contextLength, Integer maxConcurrency,
+                                         String capabilitiesJson, BigDecimal inputPrice, BigDecimal outputPrice,
+                                         Currency priceCurrency, Boolean enabled) {
+        ExternalProvider provider = requireProvider(providerId);
+        ModelDeployment deployment = deployments.findById(modelId)
+                .filter(item -> providerId.equals(item.getExternalProviderId()))
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "EXTERNAL_MODEL_NOT_FOUND",
+                        "The external model does not belong to this provider."));
+        validateCapabilities(capabilitiesJson);
+        deployment.configureProviderModel(displayName, compatibilityKey, enabled, maxConcurrency,
+                capabilitiesJson, inputPrice, outputPrice, priceCurrency);
+        deployments.save(deployment);
+        audit.record(provider.getOrganizationId(), CurrentActor.userIdOrNull(), "EXTERNAL_MODEL_UPDATED", "MODEL_DEPLOYMENT",
+                deployment.getId(), Map.of("providerModelId", deployment.getProviderModelId(),
+                        "providerId", providerId.toString(), "currency", deployment.getProviderPriceCurrency().name()));
+        return ProviderModelView.from(deployment);
+    }
+
     private void validateCapabilities(String json) {
         try {
             if (json == null) return;

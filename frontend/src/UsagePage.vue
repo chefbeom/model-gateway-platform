@@ -82,9 +82,9 @@ function integer(value = 0) { return new Intl.NumberFormat('ko-KR').format(value
 function cost(value = 0) { return `${new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 6 }).format(value)} 원` }
 function costBreakdown(item: { estimatedCost?: number; estimatedCostByCurrency?: Record<string, number>; costCurrency?: string }) {
   const map = item.estimatedCostByCurrency
-  if (map && Object.keys(map).length) return Object.entries(map).map(([currency, value]) => new Intl.NumberFormat(currency === 'USD' ? 'en-US' : 'ko-KR', { style: 'currency', currency, maximumFractionDigits: currency === 'USD' ? 4 : 0 }).format(Number(value ?? 0))).join(' · ')
+  if (map && Object.keys(map).length) return Object.entries(map).map(([currency, value]) => new Intl.NumberFormat(currency === 'USD' ? 'en-US' : 'ko-KR', { style: 'currency', currency, maximumFractionDigits: 6 }).format(Number(value ?? 0))).join(' · ')
   const currency = item.costCurrency === 'USD' ? 'USD' : 'KRW'
-  return new Intl.NumberFormat(currency === 'USD' ? 'en-US' : 'ko-KR', { style: 'currency', currency, maximumFractionDigits: currency === 'USD' ? 4 : 0 }).format(Number(item.estimatedCost ?? 0))
+  return new Intl.NumberFormat(currency === 'USD' ? 'en-US' : 'ko-KR', { style: 'currency', currency, maximumFractionDigits: 6 }).format(Number(item.estimatedCost ?? 0))
 }
 function successRate(metric?: UsageMetric | null) {
   return !metric?.requestCount ? '0%' : `${((metric.succeeded / metric.requestCount) * 100).toFixed(1)}%`

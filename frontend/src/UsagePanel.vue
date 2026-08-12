@@ -30,7 +30,7 @@ function currencyOf(value?: string): Currency | null { return value === 'USD' ||
 function formatCost(value: number | undefined, currency?: string) {
   const normalized = currencyOf(currency)
   if (!normalized) return '통화 정보 없음'
-  return new Intl.NumberFormat(normalized === 'USD' ? 'en-US' : 'ko-KR', { style: 'currency', currency: normalized, maximumFractionDigits: normalized === 'USD' ? 4 : 0 }).format(Number(value ?? 0))
+  return new Intl.NumberFormat(normalized === 'USD' ? 'en-US' : 'ko-KR', { style: 'currency', currency: normalized, maximumFractionDigits: 6 }).format(Number(value ?? 0))
 }
 function costBreakdown(values?: Record<string, number>) {
   const entries = Object.entries(values ?? {}).filter(([currency]) => currencyOf(currency))

@@ -27,7 +27,7 @@ function currencyOf(value: string): Currency | null { return value === 'USD' || 
 function costBreakdown(values?: Record<string, number>) {
   const entries = Object.entries(values ?? {}).filter(([currency]) => currencyOf(currency))
   if (!entries.length) return '통화별 비용 데이터 없음'
-  return entries.map(([currency, value]) => new Intl.NumberFormat(currency === 'USD' ? 'en-US' : 'ko-KR', { style: 'currency', currency, maximumFractionDigits: currency === 'USD' ? 4 : 0 }).format(Number(value ?? 0))).join(' · ')
+  return entries.map(([currency, value]) => new Intl.NumberFormat(currency === 'USD' ? 'en-US' : 'ko-KR', { style: 'currency', currency, maximumFractionDigits: 6 }).format(Number(value ?? 0))).join(' · ')
 }
 watch(() => props.organizationId, load); onMounted(load)
 </script>
