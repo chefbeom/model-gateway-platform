@@ -1,5 +1,7 @@
 package com.aiconnect.llmgateway.gateway;
 
+import com.aiconnect.llmgateway.billing.TokenPricingResolver;
+
 import com.aiconnect.llmgateway.domain.*;
 import com.aiconnect.llmgateway.repository.*;
 import com.aiconnect.llmgateway.routing.ResolvedTarget;
@@ -88,11 +90,10 @@ public class ChatCompletionGateway {
                     int outputTokens = readUsage(runtimeResult.body(), "completion_tokens", "output_tokens");
                     if (outputTokens <= 0) outputTokens = TokenUsageEstimator.estimateOutputTokens(runtimeResult.body());
                     int failoverCount = effectiveFailoverCount(candidate, failures);
+                    TokenPricingResolver.EffectivePricing pricing = TokenPricingResolver.forLocal(service, candidate.deployment(), candidate.endpoint());
                     audit.succeed(candidate.deployment().getId(), inputTokens, outputTokens, elapsed(audit.getStartedAt()),
                             runtimeResult.statusCode(), failoverCount, candidate.providerType(), candidate.routingReason(),
-                            candidate.deployment().getProviderInputPricePerMillion(),
-                            candidate.deployment().getProviderOutputPricePerMillion(),
-                            candidate.deployment().getProviderPriceCurrency());
+                            pricing.inputPricePerMillion(), pricing.outputPricePerMillion(), pricing.currency());
                     requests.save(audit);
                     ObjectNode response = runtimeResult.body().isObject() ? ((ObjectNode) runtimeResult.body()).deepCopy() : objectMapper.createObjectNode();
                     response.put("model", serviceKey);

@@ -20,6 +20,8 @@ public class LlmService {
     @Column(nullable = false, precision = 18, scale = 6) private BigDecimal outputPricePerMillion = BigDecimal.ZERO;
     @Enumerated(EnumType.STRING) @Column(nullable = false, length = 3) private Currency currency = Currency.KRW;
     @Column(nullable = false) private boolean enabled = true;
+    /** Tombstones keep the service identity available to request history and usage aggregation. */
+    @Column private Instant deletedAt;
     @Column(nullable = false) private Instant createdAt = Instant.now();
     @Column(nullable = false) private Instant updatedAt = Instant.now();
 
@@ -66,7 +68,12 @@ public class LlmService {
         if (inputPricePerMillion != null) this.inputPricePerMillion = inputPricePerMillion;
         if (outputPricePerMillion != null) this.outputPricePerMillion = outputPricePerMillion;
         if (currency != null) this.currency = currency;
-        if (enabled != null) this.enabled = enabled;
+        if (enabled != null && !isDeleted()) this.enabled = enabled;
+    }
+
+    public void markDeleted() {
+        this.enabled = false;
+        if (this.deletedAt == null) this.deletedAt = Instant.now();
     }
 
     @PreUpdate void updateTimestamp() { updatedAt = Instant.now(); }
@@ -82,4 +89,6 @@ public class LlmService {
     public BigDecimal getOutputPricePerMillion() { return outputPricePerMillion; }
     public Currency getCurrency() { return currency; }
     public boolean isEnabled() { return enabled; }
+    public Instant getDeletedAt() { return deletedAt; }
+    public boolean isDeleted() { return deletedAt != null; }
 }

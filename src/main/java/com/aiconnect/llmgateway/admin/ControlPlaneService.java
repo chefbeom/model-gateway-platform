@@ -85,7 +85,7 @@ public class ControlPlaneService {
         }
         try {
             return endpoints.saveAndFlush(new RuntimeEndpoint(request.nodeId(), request.displayName(), request.runtimeType(), baseUrl,
-                    secretCipher.encrypt(request.apiToken())));
+                    secretCipher.encrypt(request.apiToken()), request.inputPricePerMillion(), request.outputPricePerMillion(), request.currency()));
         } catch (DataIntegrityViolationException exception) {
             throw new ApiException(HttpStatus.CONFLICT, "RUNTIME_ENDPOINT_ALREADY_EXISTS", "The runtime Base URL is already registered.");
         }
@@ -236,7 +236,10 @@ public class ControlPlaneService {
     private InferenceNode requireNode(UUID id) { return nodes.findById(id).orElseThrow(() -> notFound("NODE_NOT_FOUND", "The node does not exist.")); }
     private RuntimeEndpoint requireEndpoint(UUID id) { return endpoints.findById(id).orElseThrow(() -> notFound("ENDPOINT_NOT_FOUND", "The runtime endpoint does not exist.")); }
     private ModelDeployment requireDeployment(UUID id) { return deployments.findById(id).orElseThrow(() -> notFound("DEPLOYMENT_NOT_FOUND", "The model deployment does not exist.")); }
-    private LlmService requireService(UUID id) { return services.findById(id).orElseThrow(() -> notFound("SERVICE_NOT_FOUND", "The service does not exist.")); }
+    private LlmService requireService(UUID id) {
+        return services.findById(id).filter(service -> !service.isDeleted())
+                .orElseThrow(() -> notFound("SERVICE_NOT_FOUND", "The service does not exist."));
+    }
     private ApiException notFound(String code, String message) { return new ApiException(HttpStatus.NOT_FOUND, code, message); }
     private String defaulted(String value, String fallback) { return value == null || value.isBlank() ? fallback : value; }
     private BigDecimal zeroIfNull(BigDecimal value) { return value == null ? BigDecimal.ZERO : value; }

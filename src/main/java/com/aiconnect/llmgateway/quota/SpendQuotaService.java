@@ -1,15 +1,18 @@
 package com.aiconnect.llmgateway.quota;
 
+import com.aiconnect.llmgateway.billing.TokenPricingResolver;
 import com.aiconnect.llmgateway.domain.ApiKey;
 import com.aiconnect.llmgateway.domain.Currency;
 import com.aiconnect.llmgateway.domain.LlmService;
 import com.aiconnect.llmgateway.domain.ModelDeployment;
 import com.aiconnect.llmgateway.domain.Project;
+import com.aiconnect.llmgateway.domain.RuntimeEndpoint;
 import com.aiconnect.llmgateway.domain.ServiceTarget;
 import com.aiconnect.llmgateway.repository.ApiKeyRepository;
 import com.aiconnect.llmgateway.repository.LlmServiceRepository;
 import com.aiconnect.llmgateway.repository.ModelDeploymentRepository;
 import com.aiconnect.llmgateway.repository.ProjectRepository;
+import com.aiconnect.llmgateway.repository.RuntimeEndpointRepository;
 import com.aiconnect.llmgateway.repository.ServiceTargetRepository;
 import com.aiconnect.llmgateway.service.ApiKeyCredentials;
 import com.aiconnect.llmgateway.service.ApiKeyService;
@@ -38,11 +41,13 @@ public class SpendQuotaService {
     private final SpendQuotaReservationRepository reservations;
     private final ServiceTargetRepository targets;
     private final ModelDeploymentRepository deployments;
+    private final RuntimeEndpointRepository endpoints;
 
     public SpendQuotaService(ApiKeyService apiKeys, SpendQuotaRepository quotas, SpendCostQuery costs,
                              ProjectRepository projects, TeamRepository teams, ApiKeyRepository keyRepository,
                              LlmServiceRepository services, SpendQuotaReservationRepository reservations,
-                             ServiceTargetRepository targets, ModelDeploymentRepository deployments) {
+                             ServiceTargetRepository targets, ModelDeploymentRepository deployments,
+                             RuntimeEndpointRepository endpoints) {
         this.apiKeys = apiKeys;
         this.quotas = quotas;
         this.costs = costs;
@@ -53,6 +58,7 @@ public class SpendQuotaService {
         this.reservations = reservations;
         this.targets = targets;
         this.deployments = deployments;
+        this.endpoints = endpoints;
     }
 
     @Transactional
@@ -165,14 +171,11 @@ public class SpendQuotaService {
         }
         for (ServiceTarget target : serviceTargets) {
             ModelDeployment deployment = deploymentById.get(target.getDeploymentId());
-            if (deployment == null
-                    || deployment.getProviderInputPricePerMillion() == null
-                    || deployment.getProviderOutputPricePerMillion() == null) {
-                continue;
-            }
-            addMax(estimates, deployment.getProviderPriceCurrency(), quote(
-                    deployment.getProviderInputPricePerMillion(),
-                    deployment.getProviderOutputPricePerMillion(), inputTokens, maxOutput));
+            if (deployment == null) continue;
+            RuntimeEndpoint endpoint = deployment.isExternal() ? null : endpoints.findById(deployment.getRuntimeEndpointId()).orElse(null);
+            TokenPricingResolver.EffectivePricing pricing = TokenPricingResolver.forLocal(service, deployment, endpoint);
+            addMax(estimates, pricing.currency(), quote(pricing.inputPricePerMillion(), pricing.outputPricePerMillion(),
+                    inputTokens, maxOutput));
         }
         return estimates;
     }

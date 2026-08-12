@@ -9,5 +9,6 @@ import java.util.UUID;
 public interface LlmServiceRepository extends JpaRepository<LlmService, UUID> {
     Optional<LlmService> findByOrganizationIdAndServiceKeyAndEnabledTrue(UUID organizationId, String serviceKey);
     List<LlmService> findByOrganizationIdAndEnabledTrue(UUID organizationId);
+    List<LlmService> findByOrganizationIdAndDeletedAtIsNullOrderByServiceKeyAsc(UUID organizationId);
     List<LlmService> findByOrganizationIdOrderByServiceKeyAsc(UUID organizationId);
 }

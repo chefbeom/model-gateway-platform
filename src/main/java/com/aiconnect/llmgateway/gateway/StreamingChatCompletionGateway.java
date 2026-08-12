@@ -1,5 +1,7 @@
 package com.aiconnect.llmgateway.gateway;
 
+import com.aiconnect.llmgateway.billing.TokenPricingResolver;
+
 import com.aiconnect.llmgateway.domain.LlmRequest;
 import com.aiconnect.llmgateway.domain.LlmRequestAttempt;
 import com.aiconnect.llmgateway.domain.LlmService;
@@ -89,7 +91,7 @@ public class StreamingChatCompletionGateway {
                         InputStream prefetched = StreamingResponsePrefetcher.requireFirstByte(result.body());
                         attempt.markResponseStarted(); attempts.save(attempt);
                         return new StreamingGatewayResult(result.statusCode(), requestId,
-                                new AuditedStream(prefetched, request, audit, attempt, candidate, failures, started, result.statusCode()), null);
+                                new AuditedStream(prefetched, request, audit, attempt, candidate, failures, service, started, result.statusCode()), null);
                     } catch (IOException failure) {
                         closeQuietly(result.body());
                         RuntimeUnavailableException unavailable = new RuntimeUnavailableException("The runtime stream ended before its first response byte.", failure);
@@ -155,14 +157,15 @@ public class StreamingChatCompletionGateway {
         private final LlmRequestAttempt attempt;
         private final ResolvedTarget target;
         private final int failures;
+        private final LlmService service;
         private final Instant started;
         private final int statusCode;
         private final UsageCollector usage;
         private boolean finalized;
 
-        private AuditedStream(InputStream source, JsonNode request, LlmRequest audit, LlmRequestAttempt attempt, ResolvedTarget target, int failures, Instant started, int statusCode) {
+        private AuditedStream(InputStream source, JsonNode request, LlmRequest audit, LlmRequestAttempt attempt, ResolvedTarget target, int failures, LlmService service, Instant started, int statusCode) {
             this.source = source; this.request = request; this.audit = audit; this.attempt = attempt; this.target = target;
-            this.failures = failures; this.started = started; this.statusCode = statusCode; this.usage = new UsageCollector(request);
+            this.failures = failures; this.service = service; this.started = started; this.statusCode = statusCode; this.usage = new UsageCollector(request);
         }
         @Override public int read() throws IOException {
             try {
@@ -187,11 +190,10 @@ public class StreamingChatCompletionGateway {
             finalized = true;
             attempt.succeed(elapsed(started), statusCode); attempts.save(attempt);
             int failoverCount = "AUTO_FAILOVER".equals(target.routingReason()) && failures == 0 ? 1 : failures;
+            TokenPricingResolver.EffectivePricing pricing = TokenPricingResolver.forLocal(service, target.deployment(), target.endpoint());
             audit.succeed(target.deployment().getId(), usage.inputTokens(), usage.outputTokens(),
                     elapsed(audit.getStartedAt()), statusCode, failoverCount, target.providerType(), target.routingReason(),
-                    target.deployment().getProviderInputPricePerMillion(),
-                    target.deployment().getProviderOutputPricePerMillion(),
-                    target.deployment().getProviderPriceCurrency());
+                    pricing.inputPricePerMillion(), pricing.outputPricePerMillion(), pricing.currency());
             requests.save(audit);
             if (target.external()) { target.externalProvider().recordHealth(true); providers.save(target.externalProvider()); }
             routing.release(target);

@@ -24,7 +24,7 @@ public final class AdminDtos {
     public record CreateNode(@NotNull UUID organizationId, @NotBlank @Size(max = 120) String name,
                              @Size(max = 500) String description, String connectionMode, String labelsJson) { }
     public record CreateEndpoint(@NotNull UUID nodeId, @Size(max = 160) String displayName, @NotNull RuntimeType runtimeType,
-                                 @NotBlank @Size(max = 500) String baseUrl, String apiToken) { }
+                                 @NotBlank @Size(max = 500) String baseUrl, String apiToken, @DecimalMin("0") BigDecimal inputPricePerMillion, @DecimalMin("0") BigDecimal outputPricePerMillion, Currency currency) { }
     public record CreateDeployment(@NotNull UUID runtimeEndpointId, @NotBlank @Size(max = 500) String providerModelId,
                                    @Size(max = 500) String compatibilityKey, @NotBlank @Size(max = 200) String displayName,
                                    String modelFamily, String quantization, @Positive Integer contextLength,

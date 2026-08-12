@@ -23,7 +23,7 @@ public class RoutingPolicyService {
     }
 
     public List<LlmService> services(UUID organizationId) {
-        return services.findByOrganizationIdOrderByServiceKeyAsc(organizationId);
+        return services.findByOrganizationIdAndDeletedAtIsNullOrderByServiceKeyAsc(organizationId);
     }
 
     public List<ServiceTarget> targets(UUID serviceId) {
@@ -56,6 +56,7 @@ public class RoutingPolicyService {
 
     private LlmService requireService(UUID serviceId) {
         return services.findById(serviceId)
+                .filter(service -> !service.isDeleted())
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "SERVICE_NOT_FOUND", "The logical service does not exist."));
     }
 

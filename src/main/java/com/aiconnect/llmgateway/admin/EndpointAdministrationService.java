@@ -2,6 +2,7 @@ package com.aiconnect.llmgateway.admin;
 
 import com.aiconnect.llmgateway.domain.InferenceNode;
 import com.aiconnect.llmgateway.domain.ModelDeployment;
+import com.aiconnect.llmgateway.domain.Currency;
 import com.aiconnect.llmgateway.domain.RuntimeEndpoint;
 import com.aiconnect.llmgateway.identity.AuditService;
 import com.aiconnect.llmgateway.identity.CurrentActor;
@@ -15,6 +16,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.net.URI;
 import java.util.List;
 import java.util.Map;
@@ -59,7 +61,7 @@ public class EndpointAdministrationService {
         }
         boolean replaceToken = command.apiToken() != null && !command.apiToken().isBlank();
         endpoint.configure(command.displayName(), baseUrl, replaceToken ? cipher.encrypt(command.apiToken()) : null, replaceToken,
-                command.clearApiToken(), command.enabled());
+                command.clearApiToken(), command.enabled(), command.clearPricing(), command.inputPricePerMillion(), command.outputPricePerMillion(), command.currency());
         RuntimeEndpoint saved = endpoints.save(endpoint);
         InferenceNode node = node(saved.getNodeId());
         audit.record(node.getOrganizationId(), CurrentActor.userIdOrNull(), "RUNTIME_ENDPOINT_UPDATED", "RUNTIME_ENDPOINT", saved.getId(),
@@ -109,15 +111,15 @@ public class EndpointAdministrationService {
         }
     }
 
-    public record UpdateCommand(String displayName, String baseUrl, String apiToken, boolean clearApiToken, Boolean enabled) { }
+    public record UpdateCommand(String displayName, String baseUrl, String apiToken, boolean clearApiToken, Boolean enabled, boolean clearPricing, BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Currency currency) { }
 
     public record EndpointDetail(UUID id, UUID nodeId, String displayName, String nodeName, String nodeDescription, String runtimeType,
                                  String baseUrl, boolean enabled, String healthStatus, String lastCheckedAt,
-                                 boolean apiTokenConfigured) {
+                                 boolean apiTokenConfigured, BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Currency currency) {
         static EndpointDetail from(RuntimeEndpoint endpoint, InferenceNode node) {
             return new EndpointDetail(endpoint.getId(), endpoint.getNodeId(), endpoint.getDisplayName(), node.getName(), node.getDescription(),
                     endpoint.getRuntimeType().name(), endpoint.getBaseUrl(), endpoint.isEnabled(), endpoint.getHealthStatus().name(),
-                    endpoint.getLastCheckedAt() == null ? null : endpoint.getLastCheckedAt().toString(), endpoint.getApiToken() != null);
+                    endpoint.getLastCheckedAt() == null ? null : endpoint.getLastCheckedAt().toString(), endpoint.getApiToken() != null, endpoint.getInputPricePerMillion(), endpoint.getOutputPricePerMillion(), endpoint.getCurrency());
         }
     }
 }

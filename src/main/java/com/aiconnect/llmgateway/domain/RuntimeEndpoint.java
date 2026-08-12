@@ -11,6 +11,7 @@ import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import org.hibernate.annotations.SQLRestriction;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -29,6 +30,9 @@ public class RuntimeEndpoint {
     @Enumerated(EnumType.STRING) @Column(nullable = false, length = 24) private HealthStatus healthStatus = HealthStatus.UNKNOWN;
     @Column(nullable = false) private int consecutiveFailures;
     @Column(nullable = false) private int failureThreshold = 3;
+    @Column(precision = 18, scale = 6) private BigDecimal inputPricePerMillion;
+    @Column(precision = 18, scale = 6) private BigDecimal outputPricePerMillion;
+    @Enumerated(EnumType.STRING) @Column(length = 3) private Currency currency;
     private Instant lastCheckedAt;
     private Instant lastSuccessAt;
     private Instant archivedAt;
@@ -48,14 +52,47 @@ public class RuntimeEndpoint {
         this(nodeId, "LM Studio Runtime", runtimeType, baseUrl, apiToken);
     }
 
+    public RuntimeEndpoint(UUID nodeId, String displayName, RuntimeType runtimeType, String baseUrl, String apiToken,
+                           BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Currency currency) {
+        this(nodeId, displayName, runtimeType, baseUrl, apiToken);
+        configurePricing(inputPricePerMillion, outputPricePerMillion, currency);
+    }
+
     private static String stripTrailingSlash(String value) { return value.replaceAll("/+$", ""); }
 
     public void configure(String displayName, String baseUrl, String encryptedApiToken, boolean replaceApiToken, boolean clearApiToken, Boolean enabled) {
+        configure(displayName, baseUrl, encryptedApiToken, replaceApiToken, clearApiToken, enabled,
+                false, null, null, null);
+    }
+
+    public void configure(String displayName, String baseUrl, String encryptedApiToken, boolean replaceApiToken,
+                          boolean clearApiToken, Boolean enabled, BigDecimal inputPricePerMillion,
+                          BigDecimal outputPricePerMillion, Currency currency) {
+        configure(displayName, baseUrl, encryptedApiToken, replaceApiToken, clearApiToken, enabled,
+                false, inputPricePerMillion, outputPricePerMillion, currency);
+    }
+
+    public void configure(String displayName, String baseUrl, String encryptedApiToken, boolean replaceApiToken,
+                          boolean clearApiToken, Boolean enabled, boolean clearPricing,
+                          BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Currency currency) {
         if (displayName != null && !displayName.isBlank()) this.displayName = displayName.trim();
         if (baseUrl != null && !baseUrl.isBlank()) this.baseUrl = stripTrailingSlash(baseUrl);
         if (clearApiToken) this.encryptedApiToken = null;
         else if (replaceApiToken) this.encryptedApiToken = encryptedApiToken;
         if (enabled != null) this.enabled = enabled;
+        if (clearPricing) {
+            this.inputPricePerMillion = null;
+            this.outputPricePerMillion = null;
+            this.currency = null;
+        } else {
+            configurePricing(inputPricePerMillion, outputPricePerMillion, currency);
+        }
+    }
+
+    public void configurePricing(BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Currency currency) {
+        if (inputPricePerMillion != null) this.inputPricePerMillion = inputPricePerMillion;
+        if (outputPricePerMillion != null) this.outputPricePerMillion = outputPricePerMillion;
+        if (currency != null) this.currency = currency;
     }
 
     /**
@@ -108,6 +145,9 @@ public class RuntimeEndpoint {
     public HealthStatus getHealthStatus() { return healthStatus; }
     public int getConsecutiveFailures() { return consecutiveFailures; }
     public int getFailureThreshold() { return failureThreshold; }
+    public BigDecimal getInputPricePerMillion() { return inputPricePerMillion; }
+    public BigDecimal getOutputPricePerMillion() { return outputPricePerMillion; }
+    public Currency getCurrency() { return currency; }
     public Instant getLastCheckedAt() { return lastCheckedAt; }
     public Instant getLastSuccessAt() { return lastSuccessAt; }
     public Instant getArchivedAt() { return archivedAt; }
