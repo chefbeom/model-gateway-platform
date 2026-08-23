@@ -72,7 +72,7 @@ public class StreamingChatCompletionGateway {
         }
         String requestId = UUID.randomUUID().toString();
         LlmRequest audit = requests.save(new LlmRequest(requestId, credentials.project().getId(), credentials.apiKey().getId(),
-                credentials.apiKey().getIssuedByUserId(), service, true));
+                credentials.apiKey().getIssuedByUserId(), service, true, RequestCapabilityDetector.requestType(request)));
         int failures = 0;
         boolean sawCapacity = false;
         for (ResolvedTarget candidate : routing.candidates(service, RequestCapabilityDetector.detect(request), credentials.project().getId())) {

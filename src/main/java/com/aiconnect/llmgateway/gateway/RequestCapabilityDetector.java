@@ -20,6 +20,17 @@ public final class RequestCapabilityDetector {
         return capabilities;
     }
 
+    public static String requestType(ObjectNode request) {
+        Set<String> capabilities = detect(request);
+        StringBuilder type = new StringBuilder();
+        for (String candidate : new String[]{"VISION", "TOOL_CALLING", "STRUCTURED_OUTPUT"}) {
+            if (capabilities.contains(candidate)) {
+                if (type.length() > 0) type.append('+');
+                type.append(candidate);
+            }
+        }
+        return type.length() == 0 ? "TEXT_CHAT" : type.toString();
+    }
     private static boolean containsImage(JsonNode node) {
         if (node == null || node.isMissingNode() || node.isNull()) return false;
         if (node.isArray()) {

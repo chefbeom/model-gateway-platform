@@ -9,12 +9,14 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 public interface LlmRequestRepository extends JpaRepository<LlmRequest, UUID> {
     long countByProjectId(UUID projectId);
     long countByFinalDeploymentIdIn(Collection<UUID> deploymentIds);
     List<LlmRequest> findTop50ByProjectIdOrderByStartedAtDesc(UUID projectId);
+    Optional<LlmRequest> findByRequestId(String requestId);
     List<LlmRequest> findByStartedAtAfter(Instant startedAt);
     List<LlmRequest> findByProjectIdInAndStartedAtAfter(Collection<UUID> projectIds, Instant startedAt);
     List<LlmRequest> findByProjectIdAndStartedAtGreaterThanEqualAndStartedAtLessThanOrderByStartedAtAsc(

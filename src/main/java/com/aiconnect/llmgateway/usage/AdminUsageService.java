@@ -54,13 +54,15 @@ public class AdminUsageService {
     private final ExternalProviderRepository externalProviders;
     private final TeamAccessService access;
     private final EntityManager entityManager;
+    private final RequestDetailService requestDetails;
 
     public AdminUsageService(OrganizationRepository organizations, ProjectRepository projects,
                              LlmRequestRepository requests, LlmServiceRepository services,
                              ModelDeploymentRepository deployments, RuntimeEndpointRepository endpoints,
                              InferenceNodeRepository nodes, ApiKeyRepository apiKeys,
                              ExternalProviderRepository externalProviders,
-                             TeamAccessService access, EntityManager entityManager) {
+                             TeamAccessService access, EntityManager entityManager,
+                             RequestDetailService requestDetails) {
         this.organizations = organizations;
         this.projects = projects;
         this.requests = requests;
@@ -72,6 +74,7 @@ public class AdminUsageService {
         this.externalProviders = externalProviders;
         this.access = access;
         this.entityManager = entityManager;
+        this.requestDetails = requestDetails;
     }
 
     /** Legacy administrator endpoint: always returns the complete organization scope. */
@@ -149,6 +152,34 @@ public class AdminUsageService {
                 new ArrayList<>(scopesByProject.values()));
     }
 
+    @Transactional(readOnly = true)
+    public RequestDetailService.RequestDetail requestDetailForActor(UUID organizationId,
+                                                                      AuthPrincipal actor,
+                                                                      String requestId) {
+        requireOrganization(organizationId);
+        if (!access.canViewOrganization(actor, organizationId)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ORGANIZATION_SCOPE_REQUIRED",
+                    "The current user is not a member of this organization.");
+        }
+
+        LlmRequest request = requests.findByRequestId(requestId)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "REQUEST_NOT_FOUND",
+                        "The request does not exist."));
+        Project project = projects.findById(request.getProjectId()).orElse(null);
+        if (project == null || !organizationId.equals(project.getOrganizationId())) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "REQUEST_NOT_FOUND",
+                    "The request does not exist in this organization.");
+        }
+
+        boolean organizationAdmin = access.isOrganizationAdmin(actor, organizationId);
+        boolean projectManager = access.canManageProject(actor, project.getId());
+        boolean ownKeyRequest = actor.userId().equals(request.getApiKeyIssuerUserId());
+        if (!organizationAdmin && !projectManager && !ownKeyRequest) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "REQUEST_DETAIL_ACCESS_DENIED",
+                    "The current role cannot view this request.");
+        }
+        return requestDetails.view(request);
+    }
     private String projectScopeLabel(ProjectScope scope) {
         return scope.name() + ("PROJECT_ALL".equals(scope.access())
                 ? " · 프로젝트의 모든 API 키" : " · 내가 발급한 API 키");

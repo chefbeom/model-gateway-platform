@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { adminFetch, type AdminAuth } from './api'
+import RequestDetailModal from './RequestDetailModal.vue'
+import type { RequestDetail } from './requestDetail'
 
 type UsageMetric = { label: string; detail: string; requestCount: number; succeeded: number; failed: number; inputTokens: number; outputTokens: number; estimatedCost: number; estimatedCostByCurrency?: Record<string, number>; failovers: number; averageLatencyMs: number }
 type UsageRequest = { requestId: string; projectName: string; serviceKey: string; infrastructure: string; apiKeyLabel: string; status: string; inputTokens: number; outputTokens: number; estimatedCost: number; costCurrency?: string; latencyMs?: number | null; failoverCount: number; errorCode?: string | null; startedAt: string }
@@ -25,6 +27,9 @@ const busy = ref(false)
 const message = ref('로그인 권한에 맞는 사용량을 준비하고 있습니다.')
 const period = ref<'today' | '7d' | '30d' | 'all'>('30d')
 const selectedProjectId = ref('')
+const requestDetail = ref<RequestDetail | null>(null)
+const requestDetailOpen = ref(false)
+const requestDetailLoading = ref(false)
 
 const pageTitle = computed(() => overview.value?.scope === 'ORGANIZATION' ? '전체 API 사용량'
   : overview.value?.scope === 'PROJECT_OWNER' ? '프로젝트 API 사용량' : '내 API 사용량')
@@ -77,6 +82,21 @@ async function loadUsage() {
   }
 }
 
+async function inspectRequest(item: UsageRequest) {
+  if (!props.organizationId) return
+  requestDetailOpen.value = true
+  requestDetailLoading.value = true
+  requestDetail.value = null
+  try {
+    const path = '/api/portal/organizations/' + props.organizationId + '/usage-overview/requests/' + encodeURIComponent(item.requestId)
+    requestDetail.value = await adminFetch<RequestDetail>(path, props.auth)
+  } catch (error) {
+    message.value = error instanceof Error ? error.message : '요청 상세를 조회하지 못했습니다.'
+    requestDetailOpen.value = false
+  } finally {
+    requestDetailLoading.value = false
+  }
+}
 function changeProject() { void loadUsage() }
 function integer(value = 0) { return new Intl.NumberFormat('ko-KR').format(value) }
 function cost(value = 0) { return `${new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 6 }).format(value)} 원` }
@@ -166,10 +186,17 @@ onMounted(() => { void loadUsage() })
 
       <article class="surface-card">
         <header class="card-header"><div><span class="card-kicker">REQUEST HISTORY</span><h2>최근 요청</h2></div><span class="count-badge">{{ overview.recentRequests.length }}</span></header>
-        <div v-if="overview.recentRequests.length" class="data-table-wrap"><table class="data-table"><thead><tr><th>시간</th><th>프로젝트</th><th>논리 모델·키</th><th>실제 배포</th><th>상태</th><th>토큰</th><th>비용</th><th>지연</th><th>Failover</th></tr></thead><tbody><tr v-for="item in overview.recentRequests" :key="item.requestId"><td>{{ new Date(item.startedAt).toLocaleString() }}</td><td>{{ item.projectName }}</td><td><strong>{{ item.serviceKey }}</strong><small>{{ item.apiKeyLabel }}</small></td><td>{{ item.infrastructure }}</td><td><span class="status-chip tiny" :class="item.status === 'SUCCEEDED' ? 'healthy' : 'unhealthy'">{{ item.status }}</span><small v-if="item.errorCode" class="danger-text">{{ item.errorCode }}</small></td><td>{{ integer(item.inputTokens + item.outputTokens) }}</td><td>{{ costBreakdown(item) }}</td><td>{{ integer(item.latencyMs ?? 0) }} ms</td><td>{{ item.failoverCount }}</td></tr></tbody></table></div>
+        <div v-if="overview.recentRequests.length" class="data-table-wrap"><table class="data-table"><thead><tr><th>시간</th><th>프로젝트</th><th>논리 모델·키</th><th>실제 배포</th><th>상태</th><th>토큰</th><th>비용</th><th>지연</th><th>Failover</th><th>상세</th></tr></thead><tbody><tr v-for="item in overview.recentRequests" :key="item.requestId"><td>{{ new Date(item.startedAt).toLocaleString() }}</td><td>{{ item.projectName }}</td><td><strong>{{ item.serviceKey }}</strong><small>{{ item.apiKeyLabel }}</small></td><td>{{ item.infrastructure }}</td><td><span class="status-chip tiny" :class="item.status === 'SUCCEEDED' ? 'healthy' : 'unhealthy'">{{ item.status }}</span><small v-if="item.errorCode" class="danger-text">{{ item.errorCode }}</small></td><td>{{ integer(item.inputTokens + item.outputTokens) }}</td><td>{{ costBreakdown(item) }}</td><td>{{ integer(item.latencyMs ?? 0) }} ms</td><td>{{ item.failoverCount }}</td><td><button class="text-button" @click="inspectRequest(item)">상세</button></td></tr></tbody></table></div>
         <div v-else class="empty-state"><span>◴</span><p>표시할 요청이 없습니다.</p></div>
       </article>
     </template>
+
+    <RequestDetailModal
+      :open="requestDetailOpen"
+      :detail="requestDetail"
+      :loading="requestDetailLoading"
+      @close="requestDetailOpen = false"
+    />
   </section>
 </template>
 

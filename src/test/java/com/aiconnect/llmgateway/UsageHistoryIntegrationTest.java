@@ -50,7 +50,8 @@ class UsageHistoryIntegrationTest {
         LlmService service = services.save(new LlmService(organization.getId(), "logical-analysis", "Logical Analysis",
                 FailoverPolicy.STRICT, RetryPolicy.SAFE, false, "[]", BigDecimal.valueOf(100), BigDecimal.valueOf(200)));
 
-        LlmRequest visible = new LlmRequest(UUID.randomUUID().toString(), project.getId(), visibleApiKey.getId(), service, true);
+        LlmRequest visible = new LlmRequest(UUID.randomUUID().toString(), project.getId(), visibleApiKey.getId(), null,
+                service, true, "VISION");
         visible.succeed(deployment.getId(), 3, 2, 50, 200, 1); requests.save(visible);
         LlmRequest hidden = new LlmRequest(UUID.randomUUID().toString(), other.getId(), otherApiKey.getId(), service, false);
         hidden.succeed(deployment.getId(), 100, 100, 50, 200, 0); requests.save(hidden);
@@ -67,5 +68,18 @@ class UsageHistoryIntegrationTest {
                 .andExpect(jsonPath("$.requestCount").value(1))
                 .andExpect(jsonPath("$.inputTokens").value(3))
                 .andExpect(jsonPath("$.outputTokens").value(2));
+        mvc.perform(get("/api/me/requests/" + visible.getRequestId()).header("Authorization", "Bearer " + key.secret()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.requestType").value("VISION"))
+                .andExpect(jsonPath("$.capabilities[0]").value("VISION"))
+                .andExpect(jsonPath("$.inputTokens").value(3))
+                .andExpect(jsonPath("$.outputTokens").value(2))
+                .andExpect(jsonPath("$.costCurrency").value("KRW"))
+                .andExpect(jsonPath("$.prompt").doesNotExist())
+                .andExpect(jsonPath("$.request").doesNotExist())
+                .andExpect(jsonPath("$.response").doesNotExist());
+
+        mvc.perform(get("/api/me/requests/" + hidden.getRequestId()).header("Authorization", "Bearer " + key.secret()))
+                .andExpect(status().isNotFound());
     }
 }

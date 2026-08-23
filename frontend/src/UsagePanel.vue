@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import RequestDetailModal from './RequestDetailModal.vue'
+import type { RequestDetail } from './requestDetail'
 
 type Currency = 'KRW' | 'USD'
 type Usage = { requestCount: number; inputTokens: number; outputTokens: number; estimatedCost: number; estimatedCostByCurrency?: Record<string, number>; failedRequests: number }
@@ -10,6 +12,9 @@ const usage = ref<Usage | null>(null)
 const requests = ref<RequestItem[]>([])
 const message = ref('프로젝트 API 키를 입력하면 사용량과 요청 이력을 확인할 수 있습니다.')
 const busy = ref(false)
+const requestDetail = ref<RequestDetail | null>(null)
+const requestDetailOpen = ref(false)
+const requestDetailLoading = ref(false)
 
 async function api<T>(path: string): Promise<T> {
   const response = await fetch(path, { headers: { Authorization: `Bearer ${apiKey.value}` } })
@@ -24,6 +29,19 @@ async function loadUsage() {
     usage.value = summary; requests.value = history; message.value = `최근 ${history.length}개 요청을 불러왔습니다.`
   } catch (error) { message.value = error instanceof Error ? error.message : '사용량 조회 실패' }
   finally { busy.value = false }
+}
+async function inspectRequest(item: RequestItem) {
+  requestDetailOpen.value = true
+  requestDetailLoading.value = true
+  requestDetail.value = null
+  try {
+    requestDetail.value = await api<RequestDetail>('/api/me/requests/' + encodeURIComponent(item.requestId))
+  } catch (error) {
+    message.value = error instanceof Error ? error.message : '요청 상세를 조회하지 못했습니다.'
+    requestDetailOpen.value = false
+  } finally {
+    requestDetailLoading.value = false
+  }
 }
 function number(value?: number) { return new Intl.NumberFormat('ko-KR').format(value ?? 0) }
 function currencyOf(value?: string): Currency | null { return value === 'USD' || value === 'KRW' ? value : null }
@@ -56,11 +74,18 @@ function costBreakdown(values?: Record<string, number>) {
       </div>
       <div v-if="requests.length" class="request-table">
         <table>
-          <thead><tr><th>시간</th><th>논리 모델</th><th>실제 배포</th><th>방식</th><th>상태</th><th>토큰</th><th>비용</th><th>지연</th><th>Failover</th><th>요청 ID</th></tr></thead>
-          <tbody><tr v-for="item in requests" :key="item.requestId"><td>{{ new Date(item.startedAt).toLocaleString() }}</td><td><strong>{{ item.serviceKey ?? '-' }}</strong><small>{{ item.serviceDisplayName }}</small></td><td>{{ item.deploymentDisplayName ?? '-' }}</td><td>{{ item.stream ? 'SSE' : 'JSON' }}</td><td><span class="status" :class="item.status === 'SUCCEEDED' ? 'healthy' : 'unhealthy'">{{ item.status }}</span></td><td>{{ number((item.inputTokens ?? 0) + (item.outputTokens ?? 0)) }}</td><td>{{ formatCost(item.estimatedCost, item.costCurrency) }}</td><td>{{ number(item.latencyMs) }} ms</td><td>{{ item.failoverCount }}</td><td class="mono">{{ item.requestId }}</td></tr></tbody>
+          <thead><tr><th>시간</th><th>논리 모델</th><th>실제 배포</th><th>방식</th><th>상태</th><th>토큰</th><th>비용</th><th>지연</th><th>Failover</th><th>요청 ID</th><th>상세</th></tr></thead>
+          <tbody><tr v-for="item in requests" :key="item.requestId"><td>{{ new Date(item.startedAt).toLocaleString() }}</td><td><strong>{{ item.serviceKey ?? '-' }}</strong><small>{{ item.serviceDisplayName }}</small></td><td>{{ item.deploymentDisplayName ?? '-' }}</td><td>{{ item.stream ? 'SSE' : 'JSON' }}</td><td><span class="status" :class="item.status === 'SUCCEEDED' ? 'healthy' : 'unhealthy'">{{ item.status }}</span></td><td>{{ number((item.inputTokens ?? 0) + (item.outputTokens ?? 0)) }}</td><td>{{ formatCost(item.estimatedCost, item.costCurrency) }}</td><td>{{ number(item.latencyMs) }} ms</td><td>{{ item.failoverCount }}</td><td class="mono">{{ item.requestId }}</td><td><button class="text-button" @click="inspectRequest(item)">상세</button></td></tr></tbody>
         </table>
       </div>
     </section>
+
+    <RequestDetailModal
+      :open="requestDetailOpen"
+      :detail="requestDetail"
+      :loading="requestDetailLoading"
+      @close="requestDetailOpen = false"
+    />
   </main>
 </template>
 

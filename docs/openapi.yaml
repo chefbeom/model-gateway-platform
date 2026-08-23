@@ -417,6 +417,36 @@ paths:
           description: Login session required.
         '403':
           description: Organization or project usage scope denied.
+  /api/portal/organizations/{organizationId}/usage-overview/requests/{requestId}:
+    get:
+      summary: Get safe metadata for one role-visible request
+      description: |
+        Returns request type, input/output token counts, cost and currency, routing,
+        failover attempts, status, and request identifiers. Prompt and model response
+        content are never included in this response.
+      security:
+        - AdminBearer: []
+      parameters:
+        - name: organizationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: requestId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Request metadata within the caller's role-scoped usage visibility.
+        '401':
+          description: Login session required.
+        '403':
+          description: Request detail scope denied.
+        '404':
+          description: Request not found in the organization.
   /api/admin/organizations/{organizationId}/external-providers:
     get:
       tags: [Control plane]
@@ -498,6 +528,23 @@ paths:
       responses:
         '200':
           description: Latest 50 project requests with logical service, actual deployment, stream mode, usage, latency, failover and error fields
+  /api/me/requests/{requestId}:
+    get:
+      tags: [Usage]
+      summary: Get safe metadata for one project request
+      description: |
+        Returns request type, input/output token counts, cost and currency, routing,
+        failover attempts, status, and request identifiers. Prompt and model response
+        content are never included in this response.
+      security: [{ ProjectApiKey: [] }]
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Request metadata for the authenticated project }
+        '404': { $ref: '#/components/responses/ApiError' }
 components:
   securitySchemes:
     ProjectApiKey: { type: http, scheme: bearer, bearerFormat: sk_llmg_... }

@@ -23,11 +23,21 @@ class RequestCapabilityDetectorTest {
                 """);
         assertThat(RequestCapabilityDetector.detect(request))
                 .containsExactlyInAnyOrder("STRUCTURED_OUTPUT", "TOOL_CALLING", "VISION");
+        assertThat(RequestCapabilityDetector.requestType(request)).isEqualTo("VISION+TOOL_CALLING+STRUCTURED_OUTPUT");
     }
 
     @Test
     void plainTextDoesNotRequireVisionOrTools() throws Exception {
         ObjectNode request = (ObjectNode) objectMapper.readTree("{\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}");
         assertThat(RequestCapabilityDetector.detect(request)).isEmpty();
+        assertThat(RequestCapabilityDetector.requestType(request)).isEqualTo("TEXT_CHAT");
+    }
+
+    @Test
+    void preservesAllStructuralRequestTypesWithoutReadingText() throws Exception {
+        ObjectNode request = (ObjectNode) objectMapper.readTree("""
+                {"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.test/image.png"}}]}]}
+                """);
+        assertThat(RequestCapabilityDetector.requestType(request)).isEqualTo("VISION");
     }
 }

@@ -52,13 +52,18 @@ public class LlmRequest {
 
     public LlmRequest(String requestId, UUID projectId, UUID apiKeyId, UUID apiKeyIssuerUserId,
                       LlmService service, boolean stream) {
+        this(requestId, projectId, apiKeyId, apiKeyIssuerUserId, service, stream, "TEXT_CHAT");
+    }
+
+    public LlmRequest(String requestId, UUID projectId, UUID apiKeyId, UUID apiKeyIssuerUserId,
+                      LlmService service, boolean stream, String requestType) {
         this.requestId = requestId;
         this.projectId = projectId;
         this.apiKeyId = apiKeyId;
         this.apiKeyIssuerUserId = apiKeyIssuerUserId;
         this.serviceId = service.getId();
         this.endpoint = "/v1/chat/completions";
-        this.requestType = "CHAT_COMPLETION";
+        this.requestType = requestType == null || requestType.isBlank() ? "TEXT_CHAT" : requestType;
         this.stream = stream;
         this.inputUnitPrice = service.getInputPricePerMillion();
         this.outputUnitPrice = service.getOutputPricePerMillion();
@@ -110,6 +115,8 @@ public class LlmRequest {
     public UUID getApiKeyId() { return apiKeyId; }
     public UUID getApiKeyIssuerUserId() { return apiKeyIssuerUserId; }
     public UUID getServiceId() { return serviceId; }
+    public String getEndpoint() { return endpoint; }
+    public String getRequestType() { return requestType; }
     public UUID getFinalDeploymentId() { return finalDeploymentId; }
     public String getFinalProviderType() { return finalProviderType; }
     public String getRoutingReason() { return routingReason; }

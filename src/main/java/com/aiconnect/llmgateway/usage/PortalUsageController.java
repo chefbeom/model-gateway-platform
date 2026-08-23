@@ -23,6 +23,13 @@ public class PortalUsageController {
         this.usage = usage;
     }
 
+    @GetMapping("/requests/{requestId}")
+    public RequestDetailService.RequestDetail requestDetail(@PathVariable UUID organizationId,
+                                                              @PathVariable String requestId) {
+        AuthPrincipal actor = CurrentActor.principal().orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED,
+                "PORTAL_AUTH_REQUIRED", "An authenticated user session is required."));
+        return usage.requestDetailForActor(organizationId, actor, requestId);
+    }
     @GetMapping
     public AdminUsageService.OrganizationUsageOverview overview(@PathVariable UUID organizationId,
                                                                  @RequestParam(required = false) LocalDate from,

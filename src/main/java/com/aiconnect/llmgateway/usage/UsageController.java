@@ -27,10 +27,13 @@ public class UsageController {
     private final LlmRequestRepository requests;
     private final LlmServiceRepository services;
     private final ModelDeploymentRepository deployments;
+    private final RequestDetailService requestDetails;
 
     public UsageController(ApiKeyService apiKeyService, LlmRequestRepository requests,
-                           LlmServiceRepository services, ModelDeploymentRepository deployments) {
-        this.apiKeyService = apiKeyService; this.requests = requests; this.services = services; this.deployments = deployments;
+                           LlmServiceRepository services, ModelDeploymentRepository deployments,
+                           RequestDetailService requestDetails) {
+        this.apiKeyService = apiKeyService; this.requests = requests; this.services = services;
+        this.deployments = deployments; this.requestDetails = requestDetails;
     }
     @GetMapping("/usage")
     public UsageSummary usage(@RequestHeader(HttpHeaders.AUTHORIZATION) String authorization,
@@ -54,6 +57,17 @@ public class UsageController {
     public List<RequestView> requestHistory(@RequestHeader(HttpHeaders.AUTHORIZATION) String authorization) {
         ApiKeyCredentials credentials = apiKeyService.authenticate(authorization);
         return requests.findTop50ByProjectIdOrderByStartedAtDesc(credentials.project().getId()).stream().map(this::view).toList();
+    }
+    @GetMapping("/requests/{requestId}")
+    public RequestDetailService.RequestDetail requestDetail(
+            @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization,
+            @PathVariable String requestId) {
+        ApiKeyCredentials credentials = apiKeyService.authenticate(authorization);
+        LlmRequest request = requests.findByRequestId(requestId)
+                .filter(item -> item.getProjectId().equals(credentials.project().getId()))
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "REQUEST_NOT_FOUND",
+                        "The request does not exist in this project."));
+        return requestDetails.view(request);
     }
     private RequestView view(LlmRequest request) {
         LlmService service = services.findById(request.getServiceId()).orElse(null);
