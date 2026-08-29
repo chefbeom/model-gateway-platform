@@ -1,0 +1,4 @@
+# Deployment credentials and snapshots stay on the Gateway host only.
+.env
+.env.external-data
+.env.before-external-data
