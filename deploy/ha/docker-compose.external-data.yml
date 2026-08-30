@@ -19,6 +19,7 @@ services:
       DB_USERNAME: ${DB_USERNAME:?set DB_USERNAME in the external data env file}
       REDIS_HOST: ${REDIS_HOST:?set REDIS_HOST in the external data env file}
       REDIS_PORT: ${REDIS_PORT:?set REDIS_PORT in the external data env file}
+      REDIS_USERNAME: ${REDIS_USERNAME:-}
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in the external data env file}
       REDIS_HEALTH_ENABLED: ${REDIS_HEALTH_ENABLED:-true}
     depends_on: !reset []
@@ -29,6 +30,7 @@ services:
       DB_USERNAME: ${DB_USERNAME:?set DB_USERNAME in the external data env file}
       REDIS_HOST: ${REDIS_HOST:?set REDIS_HOST in the external data env file}
       REDIS_PORT: ${REDIS_PORT:?set REDIS_PORT in the external data env file}
+      REDIS_USERNAME: ${REDIS_USERNAME:-}
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in the external data env file}
       REDIS_HEALTH_ENABLED: ${REDIS_HEALTH_ENABLED:-true}
     depends_on: !reset []

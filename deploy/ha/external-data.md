@@ -26,11 +26,12 @@ DB_PASSWORD=MariaDB_사용자_비밀번호
 MARIADB_ROOT_PASSWORD=별도로_생성한_긴_임의값
 REDIS_HOST=외부_Redis_호스트
 REDIS_PORT=6379
+REDIS_USERNAME=Redis_ACL_사용자명
 REDIS_PASSWORD=Redis_비밀번호
 ```
 
 The Compose overlay builds the JDBC URL from `DB_HOST`, `DB_PORT`, and `DB_NAME`.
-`DB_USERNAME` and both external passwords are passed to the Gateway containers. `MARIADB_ROOT_PASSWORD` is only required because the base Compose file still parses the bundled MariaDB definition; it is not used by the external mode. Generate a long random value for it and never reuse an application secret. Use the
+`DB_USERNAME`, `REDIS_USERNAME`, and both external passwords are passed to the Gateway containers. Leave `REDIS_USERNAME` blank when the Redis default user is used. `MARIADB_ROOT_PASSWORD` is only required because the base Compose file still parses the bundled MariaDB definition; it is not used by the external mode. Generate a long random value for it and never reuse an application secret. Use the
 external servers' private VCN/LAN or Tailscale addresses as seen from the
 Gateway host. Do not enter `localhost`, `127.0.0.1`, or the Gateway's own
 `10.0.0.214`/`100.100.9.74` address unless that machine actually hosts the
