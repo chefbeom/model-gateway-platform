@@ -30,6 +30,25 @@ class LmStudioModelDiscoveryTest {
     }
 
     @Test
+    void preservesQuantizationVariantsAndSelectedVariantInMetadata() throws Exception {
+        String json = """
+                {"models":[{
+                  "type":"llm","key":"google/gemma-4-12b","display_name":"Gemma 4 12B",
+                  "architecture":"gemma4","quantization":{"name":"Q8_0","bits_per_weight":8},
+                  "variants":["google/gemma-4-12b@q4_k_m","google/gemma-4-12b@q8_0"],
+                  "selected_variant":"google/gemma-4-12b@q8_0",
+                  "loaded_instances":[],"max_context_length":104983,
+                  "capabilities":{"vision":true,"trained_for_tool_use":true}
+                }]}
+                """;
+
+        DiscoveredRuntimeModel model = discovery.discover(objectMapper.readTree(json)).get(0);
+        assertThat(model.quantization()).isEqualTo("Q8_0");
+        assertThat(model.metadataJson()).contains("google/gemma-4-12b@q4_k_m", "google/gemma-4-12b@q8_0", "selected_variant");
+        assertThat(model.capabilitiesJson()).contains("VISION", "TOOL_CALLING");
+    }
+
+    @Test
     void keepsDownloadedButUnloadedModelsOutOfReadyState() throws Exception {
         String json = "{\"models\":[{\"type\":\"llm\",\"key\":\"future/model\",\"display_name\":\"Future\",\"loaded_instances\":[],\"max_context_length\":8192}]}";
         DiscoveredRuntimeModel model = discovery.discover(objectMapper.readTree(json)).get(0);

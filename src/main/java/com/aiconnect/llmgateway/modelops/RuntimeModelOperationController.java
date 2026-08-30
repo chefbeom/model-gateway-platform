@@ -3,6 +3,8 @@ package com.aiconnect.llmgateway.modelops;
 import com.aiconnect.llmgateway.runtime.RuntimeResult;
 import com.aiconnect.llmgateway.web.ApiException;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.DecimalMax;
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -15,6 +17,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -43,7 +46,7 @@ public class RuntimeModelOperationController {
         RuntimeModelOperationService.PreflightResult check = service.preflight(endpointId, request.command());
         if (!check.compatible()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "MODEL_CONFIGURATION_INCOMPATIBLE",
-                    "The requested context length exceeds the model capability. Correct the configuration and try again.");
+                    "The requested model variant or loading configuration is not compatible with this LM Studio endpoint. Review the preflight warnings and try again.");
         }
         return OperationView.from(service.load(endpointId, request.command(), null));
     }
@@ -89,6 +92,7 @@ public class RuntimeModelOperationController {
 
     public record LoadRequest(
             @NotBlank @Size(max = 500) String modelKey,
+            @Size(max = 500) String variantKey,
             @Min(1) Integer contextLength,
             @Min(1) Integer evalBatchSize,
             @Min(1) Integer physicalBatchSize,
@@ -97,12 +101,26 @@ public class RuntimeModelOperationController {
             Boolean flashAttention,
             Boolean offloadKvCacheToGpu,
             @Min(0) Integer gpuOffloadLayers,
-            @Min(1) Integer autoUnloadTtlSeconds
+            @Min(1) Integer autoUnloadTtlSeconds,
+            @Size(max = 200) String apiIdentifier,
+            @Size(max = 16) String gpuOffloadMode,
+            @DecimalMin("0.0") @DecimalMax("1.0") BigDecimal gpuOffloadRatio,
+            @Min(1) Integer cpuThreadPoolSize,
+            Boolean unifiedKvCache,
+            @DecimalMin("0.0") BigDecimal ropeFrequencyBase,
+            @DecimalMin("0.0") BigDecimal ropeFrequencyScale,
+            Boolean keepModelInMemory,
+            Boolean tryMmap,
+            @Min(0) Integer seed,
+            @Size(max = 20) String kCacheQuantizationType,
+            @Size(max = 20) String vCacheQuantizationType
     ) {
         RuntimeModelOperationService.LoadCommand command() {
-            return new RuntimeModelOperationService.LoadCommand(modelKey, contextLength, evalBatchSize,
+            return new RuntimeModelOperationService.LoadCommand(modelKey, variantKey, contextLength, evalBatchSize,
                     physicalBatchSize, parallel, numExperts, flashAttention, offloadKvCacheToGpu,
-                    gpuOffloadLayers, autoUnloadTtlSeconds);
+                    gpuOffloadLayers, autoUnloadTtlSeconds, apiIdentifier, gpuOffloadMode, gpuOffloadRatio,
+                    cpuThreadPoolSize, unifiedKvCache, ropeFrequencyBase, ropeFrequencyScale,
+                    keepModelInMemory, tryMmap, seed, kCacheQuantizationType, vCacheQuantizationType);
         }
     }
 

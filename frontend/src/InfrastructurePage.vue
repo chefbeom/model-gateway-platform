@@ -30,7 +30,17 @@ const accelerator = ref({ vendor: '', productName: '', deviceIndex: 0, deviceUui
 
 function healthClass(value?: string) { return (value ?? 'unknown').toLowerCase() }
 function endpointLabel(endpoint: Endpoint) { return endpoint.displayName || endpoint.baseUrl.replace(/^https?:\/\//, '') }
-
+function deploymentVariantSummary(deployment: Deployment) {
+  if (!deployment.metadataJson) return deployment.quantization || '-'
+  try {
+    const metadata = JSON.parse(deployment.metadataJson) as { variants?: unknown; selected_variant?: unknown }
+    const variants = Array.isArray(metadata.variants) ? metadata.variants.filter((value): value is string => typeof value === 'string') : []
+    const selected = typeof metadata.selected_variant === 'string' ? metadata.selected_variant : ''
+    if (!variants.length) return deployment.quantization || '-'
+    const label = selected.includes('@') ? selected.slice(selected.lastIndexOf('@') + 1).toUpperCase() : selected
+    return `${variants.length}개 변형${label ? ` · ${label}` : ''}`
+  } catch { return deployment.quantization || '-' }
+}
 async function selectEndpoint(endpoint: Endpoint) {
   selected.value = endpoint
   const [models, devices] = await Promise.all([
@@ -203,7 +213,7 @@ onMounted(load)
           <div v-if="accelerators.length" class="hardware-actions"><span>Hardware inventory is optional metadata. It does not change routing capacity automatically.</span><div><button v-for="device in accelerators" :key="`${device.id}-actions`" class="text-button" :disabled="busy" @click="openAccelerator(device)">Edit {{ device.deviceIndex }}</button><button v-for="device in accelerators" :key="`${device.id}-delete`" class="danger-text-button" :disabled="busy" @click="deleteAccelerator(device)">Delete {{ device.deviceIndex }}</button></div></div>
           <div v-else class="hardware-empty"><span>GPU 정보는 선택 항목입니다.</span><p>Endpoint와 모델 운영은 GPU 메타데이터 없이도 정상 동작합니다.</p><button class="text-button" @click="openAccelerator">인벤토리 추가</button></div>
           <div class="section-divider"><span>DISCOVERED MODEL DEPLOYMENTS</span><b>{{ deployments.length }}</b></div>
-          <div v-if="deployments.length" class="deployment-grid"><button v-for="deployment in deployments" :key="deployment.id" class="deployment-card" @click="openDeployment(deployment)"><div class="deployment-top"><span class="model-cube">◈</span><span class="status-chip tiny" :class="healthClass(deployment.healthStatus)">{{ deployment.loaded ? 'LOADED' : deployment.healthStatus }}</span></div><strong>{{ deployment.displayName }}</strong><small class="mono">{{ deployment.providerModelId }}</small><dl><div><dt>Context</dt><dd>{{ deployment.contextLength?.toLocaleString() ?? '-' }}</dd></div><div><dt>동시 요청</dt><dd>{{ deployment.maxConcurrency }}</dd></div><div><dt>양자화</dt><dd>{{ deployment.quantization ?? '-' }}</dd></div></dl><span class="capability-line">{{ deployment.capabilitiesJson }}</span></button></div>
+          <div v-if="deployments.length" class="deployment-grid"><button v-for="deployment in deployments" :key="deployment.id" class="deployment-card" @click="openDeployment(deployment)"><div class="deployment-top"><span class="model-cube">◈</span><span class="status-chip tiny" :class="healthClass(deployment.healthStatus)">{{ deployment.loaded ? 'LOADED' : deployment.healthStatus }}</span></div><strong>{{ deployment.displayName }}</strong><small class="mono">{{ deployment.providerModelId }}</small><small class="deployment-variant-summary">{{ deploymentVariantSummary(deployment) }}</small><dl><div><dt>Context</dt><dd>{{ deployment.contextLength?.toLocaleString() ?? '-' }}</dd></div><div><dt>동시 요청</dt><dd>{{ deployment.maxConcurrency }}</dd></div><div><dt>양자화</dt><dd>{{ deployment.quantization ?? '-' }}</dd></div></dl><span class="capability-line">{{ deployment.capabilitiesJson }}</span></button></div>
           <div v-else class="empty-state"><span>◈</span><h3>동기화된 모델이 없습니다</h3><p>LM Studio에서 모델을 준비한 뒤 ‘모델 동기화’를 실행하세요.</p></div>
           <ModelOperationsPanel :endpoint="selected" :deployments="deployments" :auth="auth" @changed="load(selected?.id)" />
         </template>
@@ -232,7 +242,7 @@ onMounted(load)
 .endpoint-list-row.active .endpoint-select { color: var(--text); }
 .endpoint-select > span:nth-child(2) { min-width: 0; display: grid; gap: 5px; }
 .endpoint-select strong, .endpoint-select small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.endpoint-select strong { font-size: 11px; }.endpoint-select small { color: var(--muted); font-size: 8px; }.endpoint-select b { color: var(--faint); }
+.endpoint-select strong { font-size: 11px; }.endpoint-select small { color: var(--muted); font-size: 8px; }.endpoint-select b { color: var(--faint); }.deployment-variant-summary { display: block; margin-top: 3px; color: var(--accent-strong); font-size: 9px; }
 .endpoint-settings-button { width: 34px; height: 34px; margin: auto 3px auto 0; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--muted); }
 .endpoint-settings-button:hover { border-color: var(--accent-border); background: var(--accent-dim); color: var(--accent-strong); }
 .endpoint-info { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }.endpoint-info div { display: grid; gap: 3px; }.endpoint-info span, .endpoint-info small { color: var(--muted); font-size: 9px; }.endpoint-info strong { font-size: 11px; }
