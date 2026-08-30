@@ -463,9 +463,9 @@ onUnmounted(() => { window.removeEventListener('keydown', onKeydown); cleanupFie
 :deep(.modal-body label.field), :deep(.modal-body label.toggle-field), :deep(.modal-body .retention-options > label) { position: relative; }
 :deep(.modal-help-trigger) { position: absolute; z-index: 3; top: -3px; right: 0; width: 18px; height: 18px; padding: 0; display: grid; place-items: center; border: 1px solid var(--accent-border); border-radius: 50%; background: var(--surface); color: var(--accent-strong); font-size: 11px; font-weight: 900; line-height: 1; cursor: help; }
 :deep(.modal-help-trigger:hover), :deep(.modal-help-trigger:focus-visible), :deep(.modal-help-trigger[aria-expanded="true"]) { outline: none; border-color: var(--accent-strong); background: var(--accent); color: var(--accent-ink); box-shadow: 0 0 0 3px var(--accent-dim); }
-:deep(.modal-help-tooltip) { position: fixed; z-index: 2000; width: min(320px, calc(100vw - 24px)); max-height: min(220px, calc(100vh - 24px)); padding: 10px 11px; display: none; box-sizing: border-box; border: 1px solid var(--accent-border); border-radius: 10px; background: var(--text); color: var(--surface); box-shadow: 0 12px 28px color-mix(in srgb, #07100c 35%, transparent); font-size: 11px; font-weight: 500; line-height: 1.55; text-align: left; white-space: pre-line; overflow: auto; overflow-wrap: anywhere; pointer-events: auto; }
-:deep(.modal-help-tooltip.is-open) { display: block; }
+:global(.modal-help-tooltip) { position: fixed; z-index: 2000; width: min(320px, calc(100vw - 24px)); max-height: min(220px, calc(100vh - 24px)); padding: 10px 11px; display: none; box-sizing: border-box; border: 1px solid var(--accent-border); border-radius: 10px; background: var(--text); color: var(--surface); box-shadow: 0 12px 28px color-mix(in srgb, #07100c 35%, transparent); font-size: 11px; font-weight: 500; line-height: 1.55; text-align: left; white-space: pre-line; overflow: auto; overflow-wrap: anywhere; pointer-events: auto; }
+:global(.modal-help-tooltip.is-open) { display: block !important; visibility: visible !important; opacity: 1 !important; }
 :deep(.modal-body .toggle-field .modal-help-trigger) { top: 50%; right: 43px; transform: translateY(-50%); }
 :deep(.modal-body .retention-options > label .modal-help-trigger) { top: 10px; right: 10px; }
-@media (max-width: 620px) { :deep(.modal-help-tooltip) { width: min(280px, calc(100vw - 24px)); } }
+@media (max-width: 620px) { :global(.modal-help-tooltip) { width: min(280px, calc(100vw - 24px)); } }
 </style>
