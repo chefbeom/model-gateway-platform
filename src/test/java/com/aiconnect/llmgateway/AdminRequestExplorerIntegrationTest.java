@@ -34,6 +34,7 @@ class AdminRequestExplorerIntegrationTest {
     @Autowired LlmServiceRepository services;
     @Autowired LlmRequestRepository requests;
     @Autowired LlmRequestAttemptRepository attempts;
+    @Autowired com.aiconnect.llmgateway.diagnostic.RequestDiagnosticRepository diagnostics;
 
     @Test
     void filtersOrganizationRequestsAndReturnsAttemptDetails() throws Exception {
@@ -56,5 +57,24 @@ class AdminRequestExplorerIntegrationTest {
         assertThat(body.path("totalElements").asLong()).isEqualTo(1);
         assertThat(body.path("items").get(0).path("requestId").asText()).isEqualTo("request-explorer");
         assertThat(body.path("items").get(0).path("attempts").get(0).path("errorType").asText()).isEqualTo("CONNECTION_REFUSED");
+    }
+
+    @Test
+    void organizationScopedDetailIncludesSafeFailureDiagnostic() throws Exception {
+        Organization organization = organizations.save(new Organization("Diagnostic Org"));
+        Project project = projects.save(new Project(organization.getId(), "diagnostic-project"));
+        ApiKey key = apiKeys.save(new ApiKey(project.getId(), "key", "sk_diag_" + UUID.randomUUID(), "0".repeat(64), null));
+        LlmService service = services.save(new LlmService(organization.getId(), "diagnostic", "Diagnostic", FailoverPolicy.STRICT, false, "[]", BigDecimal.ZERO, BigDecimal.ZERO));
+        LlmRequest request = requests.save(new LlmRequest("request-diagnostic", project.getId(), key.getId(), service, false));
+        request.fail("MODEL_UNAVAILABLE", 503, 20, 0); requests.save(request);
+        JsonNode diagnostic = objectMapper.readTree("{\"schemaVersion\":1,\"request\":{\"logicalModel\":\"diagnostic\",\"requestType\":\"VISION\",\"capabilities\":[\"VISION\"],\"stream\":false,\"messageCount\":1,\"toolCount\":0,\"hasResponseFormat\":false,\"responseFormatType\":null,\"hasMaxTokens\":false,\"hasMaxCompletionTokens\":false},\"service\":{\"failoverPolicy\":\"STRICT\",\"retryPolicy\":\"SAFE\",\"degradedAllowed\":false,\"requiredCapabilities\":[\"VISION\"]},\"finalCode\":\"MODEL_UNAVAILABLE\",\"httpStatus\":503,\"attemptedCount\":0,\"summary\":\"No eligible target\",\"targets\":[],\"recommendations\":[{\"code\":\"MODEL_UNAVAILABLE\",\"title\":\"라우팅 조건 확인\",\"detail\":\"Target 상태를 확인하세요.\"}]}");
+        diagnostics.save(new com.aiconnect.llmgateway.diagnostic.RequestDiagnostic(request.getId(), diagnostic.toString()));
+
+        String response = mvc.perform(get("/api/admin/organizations/{organizationId}/requests/{requestId}", organization.getId(), "request-diagnostic")
+                        .header("X-Admin-Token", "integration-admin-token"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        JsonNode body = objectMapper.readTree(response);
+        assertThat(body.path("diagnostic").path("finalCode").asText()).isEqualTo("MODEL_UNAVAILABLE");
+        assertThat(body.path("diagnostic").path("request").path("capabilities").get(0).asText()).isEqualTo("VISION");
     }
 }

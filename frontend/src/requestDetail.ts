@@ -10,6 +10,55 @@ export type RequestAttemptDetail = {
   responseStarted: boolean
 }
 
+export type RequestDiagnostic = {
+  schemaVersion: number
+  request: {
+    logicalModel?: string | null
+    requestType: string
+    capabilities: string[]
+    stream: boolean
+    messageCount: number
+    toolCount: number
+    hasResponseFormat: boolean
+    responseFormatType?: string | null
+    hasMaxTokens: boolean
+    hasMaxCompletionTokens: boolean
+  }
+  service: {
+    failoverPolicy: string
+    retryPolicy: string
+    degradedAllowed: boolean
+    requiredCapabilities: string[]
+  }
+  finalCode: string
+  httpStatus?: number | null
+  attemptedCount: number
+  summary: string
+  targets: Array<{
+    targetId: string
+    deploymentId: string
+    displayName: string
+    providerType: string
+    priority: number
+    weight: number
+    targetEnabled: boolean
+    degraded: boolean
+    deploymentEnabled: boolean
+    loaded: boolean
+    deploymentHealth?: string | null
+    endpointDisplayName?: string | null
+    providerDisplayName?: string | null
+    activeRequests?: number | null
+    maxConcurrency: number
+    requiredCapabilities: string[]
+    availableCapabilities: string[]
+    missingCapabilities: string[]
+    eligible: boolean
+    reasonCodes: string[]
+  }>
+  recommendations: Array<{ code: string; title: string; detail: string }>
+}
+
 export type RequestDetail = {
   requestId: string
   projectId: string
@@ -38,6 +87,7 @@ export type RequestDetail = {
   startedAt: string
   completedAt?: string | null
   attempts: RequestAttemptDetail[]
+  diagnostic?: RequestDiagnostic | null
 }
 
 const requestTypeLabels: Record<string, string> = {

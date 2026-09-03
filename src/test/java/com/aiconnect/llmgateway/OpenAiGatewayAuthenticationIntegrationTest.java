@@ -9,7 +9,9 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -21,6 +23,12 @@ class OpenAiGatewayAuthenticationIntegrationTest {
     void missingAuthorizationHeaderReturnsOpenAiCompatible401() throws Exception {
         mvc.perform(get("/v1/models"))
                 .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.error.code").value("INVALID_API_KEY"));
+                .andExpect(jsonPath("$.error.code").value("INVALID_API_KEY"))
+                .andExpect(header().exists("X-Request-Id"))
+                .andExpect(result -> {
+                    String requestId = result.getResponse().getHeader("X-Request-Id");
+                    assertThat(requestId).isNotBlank();
+                    assertThat(result.getResponse().getContentAsString()).contains(requestId);
+                });
     }
 }

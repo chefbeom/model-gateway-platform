@@ -13,6 +13,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
+import java.util.UUID;
 
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 1)
@@ -29,7 +30,9 @@ public class QuotaFilter extends OncePerRequestFilter {
             filterChain.doFilter(new BufferedBodyRequest(request, raw), response);
         } catch (ApiException exception) {
             response.setStatus(exception.getStatus().value()); response.setContentType("application/json");
-            objectMapper.writeValue(response.getOutputStream(), OpenAiError.of(exception.getMessage(), "invalid_request_error", exception.getCode(), null));
+            String requestId = UUID.randomUUID().toString();
+            response.setHeader("X-Request-Id", requestId);
+            objectMapper.writeValue(response.getOutputStream(), OpenAiError.of(exception.getMessage(), "invalid_request_error", exception.getCode(), requestId));
         }
     }
 }

@@ -8,9 +8,18 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
 import org.springframework.data.repository.query.Param;
 import java.time.Instant;
+import java.util.Optional;
 import java.util.UUID;
 
 public interface AdminRequestQueryRepository extends Repository<LlmRequest, UUID> {
+    @Query(value = """
+            select r from LlmRequest r, Project p
+            where r.projectId = p.id and p.organizationId = :organizationId
+              and r.requestId = :requestId
+            """)
+    Optional<LlmRequest> findByOrganizationIdAndRequestId(@Param("organizationId") UUID organizationId,
+                                                          @Param("requestId") String requestId);
+
     @Query(value = """
             select r from LlmRequest r, Project p
             where r.projectId = p.id and p.organizationId = :organizationId

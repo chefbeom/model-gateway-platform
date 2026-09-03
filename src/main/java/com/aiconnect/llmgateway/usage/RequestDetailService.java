@@ -1,5 +1,7 @@
 package com.aiconnect.llmgateway.usage;
 
+import com.aiconnect.llmgateway.diagnostic.RequestDiagnosticPayload;
+import com.aiconnect.llmgateway.diagnostic.RequestDiagnosticService;
 import com.aiconnect.llmgateway.domain.Currency;
 import com.aiconnect.llmgateway.domain.LlmRequest;
 import com.aiconnect.llmgateway.domain.ModelDeployment;
@@ -28,6 +30,9 @@ public class RequestDetailService {
     private final ModelDeploymentRepository deployments;
     private final RequestAttemptQueryRepository attempts;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private RequestDiagnosticService diagnostics;
+
     public RequestDetailService(LlmServiceRepository services,
                                 ModelDeploymentRepository deployments,
                                 RequestAttemptQueryRepository attempts) {
@@ -47,6 +52,7 @@ public class RequestDetailService {
                         item.getStartedAt(), item.getCompletedAt(), item.getLatencyMs(), item.getHttpStatus(),
                         item.getErrorType(), item.isResponseStarted()))
                 .toList();
+        RequestDiagnosticPayload diagnostic = diagnostics == null ? null : diagnostics.view(request.getId()).orElse(null);
 
         String requestType = normalizeType(request.getRequestType());
         return new RequestDetail(
@@ -76,7 +82,8 @@ public class RequestDetailService {
                 request.getErrorCode(),
                 request.getStartedAt(),
                 request.getCompletedAt(),
-                attemptViews
+                attemptViews,
+                diagnostic
         );
     }
 
@@ -119,7 +126,8 @@ public class RequestDetailService {
             String errorCode,
             Instant startedAt,
             Instant completedAt,
-            List<Attempt> attempts
+            List<Attempt> attempts,
+            RequestDiagnosticPayload diagnostic
     ) { }
 
     public record Attempt(

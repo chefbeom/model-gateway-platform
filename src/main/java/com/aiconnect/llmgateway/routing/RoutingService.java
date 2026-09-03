@@ -6,7 +6,13 @@ import com.aiconnect.llmgateway.repository.*;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
-import java.util.*;
+
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.UUID;
 
 @Service
 public class RoutingService {
@@ -29,7 +35,7 @@ public class RoutingService {
         this.weightedSelector = weightedSelector; this.objectMapper = objectMapper;
     }
 
-RoutingService(ServiceTargetRepository targets, ModelDeploymentRepository deployments,
+    RoutingService(ServiceTargetRepository targets, ModelDeploymentRepository deployments,
                    RuntimeEndpointRepository endpoints, ActiveRequestRegistry activeRequests,
                    WeightedTargetSelector weightedSelector, ObjectMapper objectMapper) {
         this(targets, deployments, endpoints, null, null, activeRequests, weightedSelector, objectMapper);
@@ -40,55 +46,107 @@ RoutingService(ServiceTargetRepository targets, ModelDeploymentRepository deploy
         return candidates(service, requestCapabilities, null);
     }
 
+    /** Existing routing API retained for callers that only need eligible targets. */
     public List<ResolvedTarget> candidates(LlmService service, Set<String> requestCapabilities, UUID projectId) {
-        Set<String> requiredCapabilities = new HashSet<>(readCapabilities(service.getRequiredCapabilitiesJson()));
-        requiredCapabilities.addAll(requestCapabilities);
+        return evaluateInternal(service, requestCapabilities, projectId,
+                targets.findByServiceIdAndEnabledTrueOrderByPriorityAsc(service.getId())).eligibleTargets();
+    }
 
-        List<ServiceTarget> configured = targets.findByServiceIdAndEnabledTrueOrderByPriorityAsc(service.getId());
+    /** Evaluate every configured target and retain exclusion reasons for request diagnostics. */
+    public RoutingDecision evaluate(LlmService service, Set<String> requestCapabilities, UUID projectId) {
+        return evaluateInternal(service, requestCapabilities, projectId,
+                targets.findByServiceIdOrderByPriorityAsc(service.getId()));
+    }
+
+    private RoutingDecision evaluateInternal(LlmService service, Set<String> requestCapabilities,
+                                             UUID projectId, List<ServiceTarget> configured) {
+        Set<String> requiredCapabilities = new TreeSet<>(readCapabilities(service.getRequiredCapabilitiesJson()));
+        if (requestCapabilities != null) requiredCapabilities.addAll(requestCapabilities);
+
         boolean degradedAllowed = service.isAllowDegraded() || service.getFailoverPolicy() == FailoverPolicy.DEGRADED;
         String strictCompatibilityKey = service.getFailoverPolicy() == FailoverPolicy.STRICT
                 ? referenceCompatibilityKey(configured, degradedAllowed) : null;
         boolean serviceHasLocalTargets = configured.stream()
+                .filter(ServiceTarget::isEnabled)
                 .map(target -> deployments.findById(target.getDeploymentId()).orElse(null))
-                .anyMatch(deployment -> deployment != null && !deployment.isExternal());
+                .anyMatch(deployment -> deployment != null && deployment.isEnabled() && !deployment.isExternal());
 
         List<ResolvedTarget> local = new ArrayList<>();
         List<ResolvedTarget> external = new ArrayList<>();
+        List<RoutingDecision.TargetEvaluation> evaluations = new ArrayList<>();
         for (ServiceTarget target : configured) {
-            if (target.isDegraded() && !degradedAllowed) continue;
             ModelDeployment deployment = deployments.findById(target.getDeploymentId()).orElse(null);
-            if (deployment == null || !deployment.isEnabled()) continue;
-            if (strictCompatibilityKey != null && !strictCompatibilityKey.equals(deployment.getCompatibilityKey())) continue;
-            if (!deployment.isLoaded() || deployment.getHealthStatus() != HealthStatus.HEALTHY) continue;
-            Set<String> availableCapabilities = new HashSet<>(readCapabilities(deployment.getCapabilitiesJson()));
-            availableCapabilities.addAll(readCapabilities(deployment.getCapabilityOverridesJson()));
-            if (!availableCapabilities.containsAll(requiredCapabilities)) continue;
-            int limit = target.effectiveMaxConcurrency(deployment.getMaxConcurrency());
-            if (limit > 0 && activeRequests.count(deployment.getId()) >= limit) continue;
+            String providerType = deployment != null && deployment.isExternal() ? "EXTERNAL" : "LOCAL";
+            List<String> availableCapabilities = deployment == null ? List.of()
+                    : sortedCapabilities(deployment.getCapabilitiesJson(), deployment.getCapabilityOverridesJson());
+            List<String> missingCapabilities = missing(requiredCapabilities, availableCapabilities);
+            List<String> reasons = new ArrayList<>();
+            RuntimeEndpoint endpoint = null;
+            ExternalProvider provider = null;
+            Integer activeCount = null;
+            int limit = 0;
 
-            if (deployment.isExternal()) {
-                if (projectId == null) continue;
-                ExternalProvider provider = providers.findById(deployment.getExternalProviderId()).orElse(null);
-                if (provider == null || !provider.isEnabled() || provider.getHealthStatus() != HealthStatus.HEALTHY) continue;
-                boolean allowed = serviceHasLocalTargets
-                        ? externalAccess.allowsAutoFailover(projectId, provider.getId())
-                        : externalAccess.allowsManual(projectId, provider.getId());
-                if (!allowed) continue;
-                external.add(new ResolvedTarget(target, deployment, null, provider, limit,
-                        serviceHasLocalTargets ? "AUTO_FAILOVER" : "MANUAL_EXTERNAL"));
-                continue;
+            if (!target.isEnabled()) reasons.add("TARGET_DISABLED");
+            if (target.isDegraded() && !degradedAllowed) reasons.add("DEGRADED_NOT_ALLOWED");
+            if (deployment == null) reasons.add("DEPLOYMENT_MISSING");
+            if (deployment != null && !deployment.isEnabled()) reasons.add("DEPLOYMENT_DISABLED");
+            if (deployment != null && strictCompatibilityKey != null && !strictCompatibilityKey.equals(deployment.getCompatibilityKey())) reasons.add("COMPATIBILITY_MISMATCH");
+            if (deployment != null && !deployment.isLoaded()) reasons.add("DEPLOYMENT_NOT_LOADED");
+            if (deployment != null && deployment.getHealthStatus() != HealthStatus.HEALTHY) reasons.add("DEPLOYMENT_UNHEALTHY");
+            if (deployment != null && !missingCapabilities.isEmpty()) reasons.add("CAPABILITY_MISSING");
+            if (deployment != null) {
+                limit = target.effectiveMaxConcurrency(deployment.getMaxConcurrency());
+                activeCount = activeRequests.count(deployment.getId());
+                if (limit > 0 && activeCount >= limit) reasons.add("CONCURRENCY_LIMIT_REACHED");
             }
 
-            RuntimeEndpoint endpoint = endpoints.findById(deployment.getRuntimeEndpointId()).orElse(null);
-            if (endpoint == null || !endpoint.isEnabled() || endpoint.getHealthStatus() != HealthStatus.HEALTHY) continue;
-            local.add(new ResolvedTarget(target, deployment, endpoint, null, limit, "LOCAL"));
+            if (deployment != null && deployment.isExternal()) {
+                if (providers == null || externalAccess == null) reasons.add("EXTERNAL_ACCESS_UNAVAILABLE");
+                else {
+                    provider = deployment.getExternalProviderId() == null ? null
+                            : providers.findById(deployment.getExternalProviderId()).orElse(null);
+                    if (provider == null) reasons.add("EXTERNAL_PROVIDER_MISSING");
+                    else {
+                        if (!provider.isEnabled()) reasons.add("EXTERNAL_PROVIDER_DISABLED");
+                        if (provider.getHealthStatus() != HealthStatus.HEALTHY) reasons.add("EXTERNAL_PROVIDER_UNHEALTHY");
+                        if (projectId == null) reasons.add("EXTERNAL_PROJECT_REQUIRED");
+                        else {
+                            boolean allowed = serviceHasLocalTargets
+                                    ? externalAccess.allowsAutoFailover(projectId, provider.getId())
+                                    : externalAccess.allowsManual(projectId, provider.getId());
+                            if (!allowed) reasons.add(serviceHasLocalTargets ? "EXTERNAL_AUTO_FAILOVER_NOT_ALLOWED" : "EXTERNAL_MANUAL_ACCESS_NOT_ALLOWED");
+                        }
+                    }
+                }
+            } else if (deployment != null) {
+                endpoint = deployment.getRuntimeEndpointId() == null ? null
+                        : endpoints.findById(deployment.getRuntimeEndpointId()).orElse(null);
+                if (endpoint == null) reasons.add("ENDPOINT_MISSING");
+                else {
+                    if (!endpoint.isEnabled()) reasons.add("ENDPOINT_DISABLED");
+                    if (endpoint.getHealthStatus() != HealthStatus.HEALTHY) reasons.add("ENDPOINT_UNHEALTHY");
+                }
+            }
+
+            boolean eligible = reasons.isEmpty();
+            evaluations.add(new RoutingDecision.TargetEvaluation(target.getId(), deployment == null ? target.getDeploymentId() : deployment.getId(),
+                    deployment == null ? "Unknown deployment" : deployment.getDisplayName(), providerType, target.getPriority(), target.getWeight(),
+                    target.isEnabled(), target.isDegraded(), deployment != null && deployment.isEnabled(), deployment != null && deployment.isLoaded(),
+                    deployment == null || deployment.getHealthStatus() == null ? null : deployment.getHealthStatus().name(),
+                    endpoint == null ? null : endpoint.getDisplayName(), provider == null ? null : provider.getDisplayName(), activeCount, limit,
+                    List.copyOf(requiredCapabilities), availableCapabilities, missingCapabilities, eligible, List.copyOf(reasons)));
+            if (!eligible) continue;
+            if (deployment.isExternal()) {
+                external.add(new ResolvedTarget(target, deployment, null, provider, limit, serviceHasLocalTargets ? "AUTO_FAILOVER" : "MANUAL_EXTERNAL"));
+            } else local.add(new ResolvedTarget(target, deployment, endpoint, null, limit, "LOCAL"));
         }
 
         List<ResolvedTarget> ordered = new ArrayList<>(weightedSelector.order(local));
         // External targets are always appended after local targets. Their numeric priority
         // can never accidentally turn an opt-in failover target into the primary route.
         ordered.addAll(weightedSelector.order(external));
-        return ordered;
+        return new RoutingDecision(List.copyOf(ordered), Set.copyOf(requiredCapabilities), degradedAllowed,
+                service.getFailoverPolicy().name(), service.getRetryPolicy().name(), List.copyOf(evaluations));
     }
 
     public boolean acquire(ResolvedTarget target) { return activeRequests.tryAcquire(target.deployment().getId(), target.maxConcurrency()); }
@@ -96,11 +154,23 @@ RoutingService(ServiceTargetRepository targets, ModelDeploymentRepository deploy
 
     private String referenceCompatibilityKey(List<ServiceTarget> configured, boolean degradedAllowed) {
         for (ServiceTarget target : configured) {
-            if (target.isDegraded() && !degradedAllowed) continue;
+            if (!target.isEnabled() || (target.isDegraded() && !degradedAllowed)) continue;
             ModelDeployment deployment = deployments.findById(target.getDeploymentId()).orElse(null);
             if (deployment != null && deployment.isEnabled()) return deployment.getCompatibilityKey();
         }
         return null;
+    }
+
+    private List<String> sortedCapabilities(String... jsonValues) {
+        Set<String> values = new TreeSet<>();
+        for (String json : jsonValues) values.addAll(readCapabilities(json));
+        return List.copyOf(values);
+    }
+
+    private List<String> missing(Set<String> required, List<String> available) {
+        Set<String> values = new TreeSet<>(required);
+        values.removeAll(available);
+        return List.copyOf(values);
     }
 
     private Set<String> readCapabilities(String json) {

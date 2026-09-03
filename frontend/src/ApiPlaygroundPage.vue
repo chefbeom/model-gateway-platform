@@ -42,6 +42,7 @@ const curlCopied = ref(false)
 const message = ref('1단계에서 대상을 선택하고, 2단계에서 테스트 키를 준비하세요.')
 const projectError = ref('')
 const rawError = ref('')
+const failureRequestId = ref('')
 const result = ref<ChatResult | null>(null)
 
 const targetPresets: Array<{ id: TargetMode; label: string; description: string; icon: string }> = [
@@ -82,6 +83,7 @@ function resetProbe() {
   models.value = []
   result.value = null
   rawError.value = ''
+  failureRequestId.value = ''
   probeStatus.value = 'idle'
   probeLatencyMs.value = 0
   lastProbeAt.value = ''
@@ -118,8 +120,10 @@ async function parseResponse(response: Response) {
 }
 function requestError(response: Response, body: unknown, fallback: string) {
   if (body && typeof body === 'object') {
-    const error = body as { error?: { message?: string }; message?: string }
-    return error.error?.message || error.message || fallback + ' (HTTP ' + response.status + ')'
+    const error = body as { error?: { message?: string; code?: string }; message?: string; code?: string }
+    const message = error.error?.message || error.message || fallback + ' (HTTP ' + response.status + ')'
+    const code = error.error?.code || error.code
+    return code ? message + ' [' + code + ']' : message
   }
   return fallback + ' (HTTP ' + response.status + ')'
 }
@@ -201,6 +205,7 @@ async function copyApiKey() {
 }
 async function loadModels() {
   rawError.value = ''
+  failureRequestId.value = ''
   if (!apiKey.value.trim()) { message.value = keyMode.value === 'temporary' ? '먼저 임시 테스트 키를 발급하세요.' : '실사용 키를 입력하세요.'; return }
   if (directTarget.value && keyMode.value === 'temporary') { message.value = '임시 Gateway 키는 직접 Provider 주소에서 사용할 수 없습니다. AICONNECT Gateway를 선택하세요.'; return }
   loadingModels.value = true
@@ -264,6 +269,7 @@ async function runTest() {
   if (!canRun.value) return
   rawError.value = ''
   result.value = null
+  failureRequestId.value = ''
   running.value = true
   const started = performance.now()
   const messages: Array<{ role: string; content: string }> = []
@@ -274,6 +280,7 @@ async function runTest() {
   try {
     const response = await fetch(normalizedBaseUrl() + '/chat/completions', { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(body) })
     const requestId = response.headers.get('X-Request-Id') ?? response.headers.get('x-request-id') ?? ''
+    failureRequestId.value = requestId
     const parsed = stream.value && response.ok ? await readStream(response) : await parseResponse(response)
     const elapsedMs = Math.round(performance.now() - started)
     if (!response.ok) throw new Error(requestError(response, parsed.body, 'Chat Completions 요청이 실패했습니다.'))
@@ -288,6 +295,7 @@ async function runTest() {
 function clearResult() {
   result.value = null
   rawError.value = ''
+  failureRequestId.value = ''
   message.value = '입력값은 유지한 채 결과만 지웠습니다.'
 }
 async function copyCurl() {
@@ -419,6 +427,7 @@ watch(() => [props.organizationId, props.auth.accessToken], () => { void loadPro
     <article v-else-if="rawError" class="surface-card playground-card result-card error-result">
       <header class="card-header"><div><span class="card-kicker">DIAGNOSTICS</span><h2>요청 실패</h2></div><span class="status-chip danger">ERROR</span></header>
       <p>{{ rawError }}</p>
+      <p v-if="failureRequestId">Request ID: <code>{{ failureRequestId }}</code> · 관리자 관측에서 이 ID로 상세 진단을 확인할 수 있습니다.</p>
       <p>Gateway라면 프로젝트 권한·총량제·서비스 Target 상태를, 직접 호출이라면 Provider 키·Base URL·CORS를 확인하세요.</p>
     </article>
   </section>

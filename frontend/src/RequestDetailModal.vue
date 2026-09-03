@@ -15,6 +15,22 @@ withDefaults(defineProps<{
 }>(), { loading: false })
 
 const emit = defineEmits<{ close: [] }>()
+
+function reasonLabel(code: string) {
+  const labels: Record<string, string> = {
+    CAPABILITY_MISSING: '필수 기능 미지원', ENDPOINT_UNHEALTHY: 'Endpoint 비정상', ENDPOINT_MISSING: 'Endpoint 없음', ENDPOINT_DISABLED: 'Endpoint 비활성',
+    DEPLOYMENT_UNHEALTHY: '배포 비정상', DEPLOYMENT_NOT_LOADED: '모델 미로드', DEPLOYMENT_MISSING: '배포 없음', DEPLOYMENT_DISABLED: '배포 비활성',
+    TARGET_DISABLED: 'Target 비활성', DEGRADED_NOT_ALLOWED: 'Degraded 제외', COMPATIBILITY_MISMATCH: '호환성 불일치', CONCURRENCY_LIMIT_REACHED: '동시성 한도',
+    EXTERNAL_AUTO_FAILOVER_NOT_ALLOWED: '자동 Failover 미승인', EXTERNAL_MANUAL_ACCESS_NOT_ALLOWED: '수동 사용 미승인', EXTERNAL_PROVIDER_UNHEALTHY: 'Provider 비정상',
+    EXTERNAL_PROVIDER_DISABLED: 'Provider 비활성', EXTERNAL_PROVIDER_MISSING: 'Provider 없음', EXTERNAL_ACCESS_UNAVAILABLE: '외부 권한 확인 불가', EXTERNAL_PROJECT_REQUIRED: '프로젝트 정보 없음',
+    UPSTREAM_REJECTED: 'Provider 요청 거부', RUNTIME_UNAVAILABLE: 'Runtime 응답 없음', STREAM_START_FAILED: '스트림 시작 실패', MODEL_AT_CAPACITY: '모델 처리 한도'
+  }
+  return labels[code] ?? code
+}
+function targetState(target: NonNullable<RequestDetail['diagnostic']>['targets'][number]) {
+  if (target.eligible) return '사용 가능'
+  return target.reasonCodes.map(reasonLabel).join(' · ') || '제외 사유 없음'
+}
 </script>
 
 <template>
@@ -38,6 +54,38 @@ const emit = defineEmits<{ close: [] }>()
           {{ detail.status }}
         </span>
       </header>
+
+      <section v-if="detail.status === 'FAILED'" class="request-detail-section diagnostic-section">
+        <header><span>FAILURE DIAGNOSIS</span><h4>실패 원인과 권장 조치</h4></header>
+        <div v-if="detail.diagnostic" class="diagnostic-panel">
+          <div class="diagnostic-summary">
+            <strong>{{ detail.diagnostic.summary }}</strong>
+            <span>최종 코드 {{ detail.diagnostic.finalCode }} · HTTP {{ detail.diagnostic.httpStatus ?? detail.httpStatus ?? '-' }} · 시도 {{ detail.diagnostic.attemptedCount }}회</span>
+          </div>
+          <div class="diagnostic-profile">
+            <div><small>요청 모델</small><strong class="mono">{{ detail.diagnostic.request.logicalModel ?? detail.serviceKey ?? '-' }}</strong></div>
+            <div><small>요청 기능</small><strong>{{ detail.diagnostic.request.capabilities.join(' · ') || 'TEXT' }}</strong></div>
+            <div><small>응답 형식</small><strong>{{ detail.diagnostic.request.responseFormatType ?? '일반 텍스트' }}</strong></div>
+            <div><small>토큰 필드</small><strong>{{ detail.diagnostic.request.hasMaxCompletionTokens ? 'max_completion_tokens' : detail.diagnostic.request.hasMaxTokens ? 'max_tokens' : '미지정' }}</strong></div>
+            <div><small>Failover / Retry</small><strong>{{ detail.diagnostic.service.failoverPolicy }} / {{ detail.diagnostic.service.retryPolicy }}</strong></div>
+            <div><small>메시지 · 도구</small><strong>{{ detail.diagnostic.request.messageCount }}개 · {{ detail.diagnostic.request.toolCount }}개</strong></div>
+          </div>
+          <div v-if="detail.diagnostic.targets.length" class="diagnostic-targets">
+            <div v-for="target in detail.diagnostic.targets" :key="target.targetId" class="diagnostic-target" :class="{ eligible: target.eligible }">
+              <div class="diagnostic-target-heading"><strong>{{ target.displayName }}</strong><span>{{ target.providerDisplayName ?? target.providerType }} · P{{ target.priority }}</span></div>
+              <div class="diagnostic-target-meta"><span>{{ target.endpointDisplayName ?? '외부 Provider' }}</span><span>{{ target.deploymentHealth ?? '상태 미상' }}</span><span v-if="target.activeRequests != null">동시 {{ target.activeRequests }}/{{ target.maxConcurrency }}</span></div>
+              <p :class="target.eligible ? 'diagnostic-ok' : 'diagnostic-reason'">{{ targetState(target) }}</p>
+              <small v-if="target.missingCapabilities.length" class="diagnostic-missing">누락 기능: {{ target.missingCapabilities.join(' · ') }}</small>
+            </div>
+          </div>
+          <div v-if="detail.diagnostic.recommendations.length" class="diagnostic-recommendations">
+            <div v-for="recommendation in detail.diagnostic.recommendations" :key="recommendation.code" class="diagnostic-recommendation">
+              <strong>{{ recommendation.title }}</strong><p>{{ recommendation.detail }}</p>
+            </div>
+          </div>
+        </div>
+        <div v-else class="diagnostic-empty">이 요청에는 진단 스냅샷이 없습니다. 마이그레이션 이전 요청이거나 저장에 실패했을 수 있습니다.</div>
+      </section>
 
       <section class="request-detail-section">
         <header><span>REQUEST INFO</span><h4>요청 정보</h4></header>
@@ -138,5 +186,28 @@ const emit = defineEmits<{ close: [] }>()
 .request-detail-privacy strong { font-size: 10px; }
 .request-detail-privacy p { margin: 5px 0 0; color: var(--muted); font-size: 9px; line-height: 1.6; }
 .request-detail-error { margin: 0; color: var(--danger); font-size: 10px; }
+.diagnostic-panel { display: grid; gap: 10px; padding: 12px; border: 1px solid color-mix(in srgb,var(--danger) 30%,var(--border)); border-radius: 11px; background: color-mix(in srgb,var(--danger) 5%,var(--surface)); }
+.diagnostic-summary { display: grid; gap: 4px; }
+.diagnostic-summary strong { color: var(--text); font-size: 11px; line-height: 1.5; }
+.diagnostic-summary span, .diagnostic-target-meta, .diagnostic-target-heading span { color: var(--muted); font-size: 9px; }
+.diagnostic-profile { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 7px; }
+.diagnostic-profile > div { min-width: 0; display: grid; gap: 4px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+.diagnostic-profile small { color: var(--muted); font-size: 8px; }
+.diagnostic-profile strong { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.diagnostic-targets { display: grid; gap: 7px; }
+.diagnostic-target { display: grid; gap: 5px; padding: 9px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2); }
+.diagnostic-target.eligible { border-color: var(--accent-border); }
+.diagnostic-target-heading, .diagnostic-target-meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 7px; }
+.diagnostic-target-heading strong { color: var(--text); font-size: 10px; }
+.diagnostic-target-meta { justify-content: flex-start; }
+.diagnostic-target p { margin: 0; font-size: 9px; line-height: 1.5; }
+.diagnostic-reason { color: var(--danger); }
+.diagnostic-ok { color: var(--accent-strong); }
+.diagnostic-missing { color: var(--danger); font-size: 8px; }
+.diagnostic-recommendations { display: grid; gap: 6px; }
+.diagnostic-recommendation { padding: 9px; border-left: 2px solid var(--accent-strong); background: var(--surface-2); }
+.diagnostic-recommendation strong { font-size: 9px; }
+.diagnostic-recommendation p { margin: 3px 0 0; color: var(--muted); font-size: 9px; line-height: 1.5; }
+.diagnostic-empty { padding: 12px; border: 1px dashed var(--border); border-radius: 9px; color: var(--muted); font-size: 10px; }
 @media (max-width: 720px) { .request-detail-grid, .request-detail-grid.four { grid-template-columns: repeat(2,minmax(0,1fr)); } .request-detail-route { grid-template-columns: 1fr; } .request-detail-route > i { justify-self: center; transform: rotate(90deg); } .request-attempt { grid-template-columns: 30px 1fr auto; } .request-attempt > span:nth-last-child(-n+2) { display: none; } }
 </style>

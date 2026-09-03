@@ -11,6 +11,7 @@ import com.aiconnect.llmgateway.repository.LlmServiceRepository;
 import com.aiconnect.llmgateway.repository.ProjectServiceAccessRepository;
 import com.aiconnect.llmgateway.repository.RuntimeEndpointRepository;
 import com.aiconnect.llmgateway.repository.ExternalProviderRepository;
+import com.aiconnect.llmgateway.routing.RoutingDecision;
 import com.aiconnect.llmgateway.routing.ResolvedTarget;
 import com.aiconnect.llmgateway.routing.RoutingService;
 import com.aiconnect.llmgateway.runtime.RuntimeUnavailableException;
@@ -19,6 +20,7 @@ import com.aiconnect.llmgateway.runtime.StreamingOpenAiRuntimeClient;
 import com.aiconnect.llmgateway.runtime.StreamingRuntimeResult;
 import com.aiconnect.llmgateway.service.ApiKeyCredentials;
 import com.aiconnect.llmgateway.service.ApiKeyService;
+import com.aiconnect.llmgateway.diagnostic.RequestDiagnosticService;
 import com.aiconnect.llmgateway.web.ApiException;
 import com.aiconnect.llmgateway.web.OpenAiError;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -49,6 +51,9 @@ public class StreamingChatCompletionGateway {
     private final ObjectMapper objectMapper;
     private final FailoverRetryDecider retryDecider;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private RequestDiagnosticService diagnostics;
+
     public StreamingChatCompletionGateway(ApiKeyService apiKeyService, LlmServiceRepository services, ProjectServiceAccessRepository access,
                                           RoutingService routing, StreamingLmStudioRuntimeClient runtimeClient,
                                           StreamingOpenAiRuntimeClient openAiClient, LlmRequestRepository requests,
@@ -73,12 +78,15 @@ public class StreamingChatCompletionGateway {
         String requestId = UUID.randomUUID().toString();
         LlmRequest audit = requests.save(new LlmRequest(requestId, credentials.project().getId(), credentials.apiKey().getId(),
                 credentials.apiKey().getIssuedByUserId(), service, true, RequestCapabilityDetector.requestType(request)));
+        RoutingDecision decision = routing.evaluate(service, RequestCapabilityDetector.detect(request), credentials.project().getId());
         int failures = 0;
+        int attemptedCount = 0;
         boolean sawCapacity = false;
-        for (ResolvedTarget candidate : routing.candidates(service, RequestCapabilityDetector.detect(request), credentials.project().getId())) {
+        for (ResolvedTarget candidate : decision.eligibleTargets()) {
             if (!routing.acquire(candidate)) continue;
             Instant started = Instant.now();
             LlmRequestAttempt attempt = attempts.save(new LlmRequestAttempt(audit.getId(), candidate.deployment().getId(), failures + 1));
+            attemptedCount++;
             try {
                 ObjectNode proxied = request.deepCopy();
                 proxied.put("model", candidate.deployment().getProviderModelId());
@@ -91,13 +99,14 @@ public class StreamingChatCompletionGateway {
                         InputStream prefetched = StreamingResponsePrefetcher.requireFirstByte(result.body());
                         attempt.markResponseStarted(); attempts.save(attempt);
                         return new StreamingGatewayResult(result.statusCode(), requestId,
-                                new AuditedStream(prefetched, request, audit, attempt, candidate, failures, service, started, result.statusCode()), null);
+                                new AuditedStream(prefetched, request, audit, attempt, candidate, failures, service, started, result.statusCode(), decision), null);
                     } catch (IOException failure) {
                         closeQuietly(result.body());
                         RuntimeUnavailableException unavailable = new RuntimeUnavailableException("The runtime stream ended before its first response byte.", failure);
                         recordStartFailure(candidate, attempt, started, unavailable);
                         if (!retryDecider.retryFailure(service.getRetryPolicy(), unavailable)) {
                             audit.fail("STREAM_START_FAILED", HttpStatus.BAD_GATEWAY.value(), elapsed(audit.getStartedAt()), failures); requests.save(audit);
+                            diagnostics.recordFailure(audit.getId(), request, service, decision, "STREAM_START_FAILED", HttpStatus.BAD_GATEWAY.value(), attemptedCount);
                             return error(HttpStatus.BAD_GATEWAY.value(), requestId, "STREAM_START_FAILED", "The runtime ended before its first response byte; SAFE policy did not replay the request.");
                         }
                         failures++;
@@ -118,6 +127,7 @@ public class StreamingChatCompletionGateway {
                 if (!retryDecider.retryHttp(service.getRetryPolicy(), result.statusCode(), errorBody)) {
                     audit.fail("UPSTREAM_REJECTED", result.statusCode(), elapsed(audit.getStartedAt()), failures);
                     requests.save(audit);
+                    diagnostics.recordFailure(audit.getId(), request, service, decision, "UPSTREAM_REJECTED", result.statusCode(), attemptedCount);
                     return error(result.statusCode(), requestId, "UPSTREAM_REJECTED",
                             "The selected runtime rejected the request; the service retry policy did not permit failover.");
                 }
@@ -126,6 +136,7 @@ public class StreamingChatCompletionGateway {
                 recordStartFailure(candidate, attempt, started, exception);
                 if (!retryDecider.retryFailure(service.getRetryPolicy(), exception)) {
                     audit.fail("RUNTIME_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), elapsed(audit.getStartedAt()), failures); requests.save(audit);
+                    diagnostics.recordFailure(audit.getId(), request, service, decision, "RUNTIME_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), attemptedCount);
                     return error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, "RUNTIME_UNAVAILABLE", "The runtime failed after the request may have started; SAFE policy did not retry it.");
                 }
                 failures++;
@@ -134,11 +145,13 @@ public class StreamingChatCompletionGateway {
         if (sawCapacity) {
             audit.fail("MODEL_AT_CAPACITY", HttpStatus.TOO_MANY_REQUESTS.value(), elapsed(audit.getStartedAt()), failures);
             requests.save(audit);
+            diagnostics.recordFailure(audit.getId(), request, service, decision, "MODEL_AT_CAPACITY", HttpStatus.TOO_MANY_REQUESTS.value(), attemptedCount);
             return error(HttpStatus.TOO_MANY_REQUESTS.value(), requestId, "MODEL_AT_CAPACITY",
                     "The selected model is at capacity. Please try a different model.");
         }
         audit.fail("MODEL_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), elapsed(audit.getStartedAt()), failures);
         requests.save(audit);
+        diagnostics.recordFailure(audit.getId(), request, service, decision, "MODEL_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), attemptedCount);
         return error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, "MODEL_UNAVAILABLE",
                 "No compatible deployment could start a stream.");
     }
@@ -152,20 +165,21 @@ public class StreamingChatCompletionGateway {
 
     private final class AuditedStream extends InputStream {
         private final InputStream source;
-        private final JsonNode request;
+        private final ObjectNode request;
         private final LlmRequest audit;
         private final LlmRequestAttempt attempt;
         private final ResolvedTarget target;
         private final int failures;
         private final LlmService service;
+        private final RoutingDecision decision;
         private final Instant started;
         private final int statusCode;
         private final UsageCollector usage;
         private boolean finalized;
 
-        private AuditedStream(InputStream source, JsonNode request, LlmRequest audit, LlmRequestAttempt attempt, ResolvedTarget target, int failures, LlmService service, Instant started, int statusCode) {
+        private AuditedStream(InputStream source, ObjectNode request, LlmRequest audit, LlmRequestAttempt attempt, ResolvedTarget target, int failures, LlmService service, Instant started, int statusCode, RoutingDecision decision) {
             this.source = source; this.request = request; this.audit = audit; this.attempt = attempt; this.target = target;
-            this.failures = failures; this.service = service; this.started = started; this.statusCode = statusCode; this.usage = new UsageCollector(request);
+            this.failures = failures; this.service = service; this.decision = decision; this.started = started; this.statusCode = statusCode; this.usage = new UsageCollector(request);
         }
         @Override public int read() throws IOException {
             try {
@@ -203,6 +217,7 @@ public class StreamingChatCompletionGateway {
             finalized = true;
             attempt.fail("STREAM_INTERRUPTED", exception.getMessage(), elapsed(started), null); attempts.save(attempt);
             audit.fail("STREAM_INTERRUPTED", 502, elapsed(audit.getStartedAt()), failures); requests.save(audit);
+            diagnostics.recordFailure(audit.getId(), request, service, decision, "STREAM_INTERRUPTED", 502, failures + 1);
             recordUnhealthy(target);
             routing.release(target);
         }

@@ -39,6 +39,7 @@ class GatewaySafeRetryIntegrationTest {
     @Autowired ServiceTargetRepository targets;
     @Autowired ProjectServiceAccessRepository access;
     @Autowired LlmRequestRepository requests;
+    @Autowired com.aiconnect.llmgateway.diagnostic.RequestDiagnosticRepository diagnostics;
 
     @Test
     void safePolicyDoesNotReplayRequestAfterRuntimeReturned503() throws Exception {
@@ -69,6 +70,7 @@ class GatewaySafeRetryIntegrationTest {
             assertThat(primaryCalls).hasValue(1);
             assertThat(secondaryCalls).hasValue(0);
             assertThat(requests.findTop50ByProjectIdOrderByStartedAtDesc(project.getId()).get(0).getFailoverCount()).isZero();
+            assertThat(diagnostics.findById(requests.findTop50ByProjectIdOrderByStartedAtDesc(project.getId()).get(0).getId()).orElseThrow().getPayloadJson()).contains("UPSTREAM_REJECTED");
         } finally {
             primary.stop(0);
             secondary.stop(0);

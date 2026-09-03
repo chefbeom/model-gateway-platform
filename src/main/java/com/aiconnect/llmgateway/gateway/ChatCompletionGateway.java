@@ -5,8 +5,10 @@ import com.aiconnect.llmgateway.billing.TokenPricingResolver;
 import com.aiconnect.llmgateway.domain.*;
 import com.aiconnect.llmgateway.repository.*;
 import com.aiconnect.llmgateway.routing.ResolvedTarget;
+import com.aiconnect.llmgateway.routing.RoutingDecision;
 import com.aiconnect.llmgateway.routing.RoutingService;
 import com.aiconnect.llmgateway.runtime.*;
+import com.aiconnect.llmgateway.diagnostic.RequestDiagnosticService;
 import com.aiconnect.llmgateway.service.ApiKeyCredentials;
 import com.aiconnect.llmgateway.service.ApiKeyService;
 import com.aiconnect.llmgateway.web.ApiException;
@@ -36,6 +38,8 @@ public class ChatCompletionGateway {
     private final ObjectMapper objectMapper;
     private final FailoverRetryDecider retryDecider;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private RequestDiagnosticService diagnostics;
     public ChatCompletionGateway(ApiKeyService apiKeyService, LlmServiceRepository services,
                                  ProjectServiceAccessRepository access, RoutingService routing,
                                  InferenceRuntimeClient runtimeClient, OpenAiRuntimeClient openAiClient,
@@ -63,18 +67,22 @@ public class ChatCompletionGateway {
         String requestId = UUID.randomUUID().toString();
         LlmRequest audit = requests.save(new LlmRequest(requestId, credentials.project().getId(), credentials.apiKey().getId(),
                 credentials.apiKey().getIssuedByUserId(), service, false, RequestCapabilityDetector.requestType(request)));
-        List<ResolvedTarget> candidates = routing.candidates(service, RequestCapabilityDetector.detect(request), credentials.project().getId());
+        RoutingDecision decision = routing.evaluate(service, RequestCapabilityDetector.detect(request), credentials.project().getId());
+        List<ResolvedTarget> candidates = decision.eligibleTargets();
         if (candidates.isEmpty()) {
             audit.fail("MODEL_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), elapsed(audit.getStartedAt()), 0); requests.save(audit);
+            diagnostics.recordFailure(audit.getId(), request, service, decision, "MODEL_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), 0);
             return error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, "model_unavailable", "MODEL_UNAVAILABLE", "No compatible, healthy or approved deployment is available.");
         }
 
         int failures = 0;
+        int attemptedCount = 0;
         boolean sawCapacity = false;
         for (ResolvedTarget candidate : candidates) {
             if (!routing.acquire(candidate)) continue;
             Instant attemptStarted = Instant.now();
             LlmRequestAttempt attempt = attempts.save(new LlmRequestAttempt(audit.getId(), candidate.deployment().getId(), failures + 1));
+            attemptedCount++;
             try {
                 ObjectNode proxiedRequest = request.deepCopy();
                 proxiedRequest.put("model", candidate.deployment().getProviderModelId());
@@ -110,6 +118,7 @@ public class ChatCompletionGateway {
                 if (!retryDecider.retryHttp(service.getRetryPolicy(), runtimeResult.statusCode(), upstreamBody)) {
                     audit.fail("UPSTREAM_REJECTED", runtimeResult.statusCode(), elapsed(audit.getStartedAt()), failures);
                     requests.save(audit);
+                    diagnostics.recordFailure(audit.getId(), request, service, decision, "UPSTREAM_REJECTED", runtimeResult.statusCode(), attemptedCount);
                     return error(runtimeResult.statusCode(), requestId, "invalid_request_error", "UPSTREAM_REJECTED",
                             "The selected provider rejected the request; the service retry policy did not permit failover.");
                 }
@@ -119,6 +128,7 @@ public class ChatCompletionGateway {
                 recordUnhealthy(candidate);
                 if (!retryDecider.retryFailure(service.getRetryPolicy(), exception)) {
                     audit.fail("RUNTIME_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), elapsed(audit.getStartedAt()), failures); requests.save(audit);
+                    diagnostics.recordFailure(audit.getId(), request, service, decision, "RUNTIME_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), attemptedCount);
                     return error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, "runtime_unavailable", "RUNTIME_UNAVAILABLE", "The provider failed after the request may have started; SAFE policy did not retry it.");
                 }
                 failures++;
@@ -127,11 +137,13 @@ public class ChatCompletionGateway {
         if (sawCapacity) {
             audit.fail("MODEL_AT_CAPACITY", HttpStatus.TOO_MANY_REQUESTS.value(), elapsed(audit.getStartedAt()), failures);
             requests.save(audit);
+            diagnostics.recordFailure(audit.getId(), request, service, decision, "MODEL_AT_CAPACITY", HttpStatus.TOO_MANY_REQUESTS.value(), attemptedCount);
             return error(HttpStatus.TOO_MANY_REQUESTS.value(), requestId, "rate_limit_error", "MODEL_AT_CAPACITY",
                     "The selected model is at capacity. Please try a different model.");
         }
         audit.fail("MODEL_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), elapsed(audit.getStartedAt()), failures);
         requests.save(audit);
+        diagnostics.recordFailure(audit.getId(), request, service, decision, "MODEL_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), attemptedCount);
         return error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, "model_unavailable", "MODEL_UNAVAILABLE",
                 "All eligible deployments failed before producing a response.");
     }

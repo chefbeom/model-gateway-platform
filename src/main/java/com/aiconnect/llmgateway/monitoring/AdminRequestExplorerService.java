@@ -1,6 +1,7 @@
 package com.aiconnect.llmgateway.monitoring;
 
 import com.aiconnect.llmgateway.domain.LlmRequest;
+import com.aiconnect.llmgateway.usage.RequestDetailService;
 import com.aiconnect.llmgateway.domain.RequestStatus;
 import com.aiconnect.llmgateway.web.ApiException;
 import org.springframework.data.domain.Page;
@@ -17,7 +18,8 @@ import java.util.UUID;
 public class AdminRequestExplorerService {
     private final AdminRequestQueryRepository requests;
     private final RequestAttemptQueryRepository attempts;
-    public AdminRequestExplorerService(AdminRequestQueryRepository requests, RequestAttemptQueryRepository attempts) { this.requests = requests; this.attempts = attempts; }
+    private final RequestDetailService requestDetails;
+    public AdminRequestExplorerService(AdminRequestQueryRepository requests, RequestAttemptQueryRepository attempts, RequestDetailService requestDetails) { this.requests = requests; this.attempts = attempts; this.requestDetails = requestDetails; }
     @Transactional(readOnly = true)
     public PageResult search(UUID organizationId, UUID projectId, UUID serviceId, UUID deploymentId, String status,
                              boolean failoverOnly, Instant from, Instant to, int page, int size) {
@@ -26,6 +28,12 @@ public class AdminRequestExplorerService {
                 PageRequest.of(Math.max(0, page), Math.max(1, Math.min(100, size))));
         List<RequestView> items = result.getContent().stream().map(this::view).toList();
         return new PageResult(items, result.getNumber(), result.getSize(), result.getTotalElements(), result.getTotalPages());
+    }
+    @Transactional(readOnly = true)
+    public RequestDetailService.RequestDetail detail(UUID organizationId, String requestId) {
+        LlmRequest request = requests.findByOrganizationIdAndRequestId(organizationId, requestId)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "REQUEST_NOT_FOUND", "The request does not exist in this organization."));
+        return requestDetails.view(request);
     }
     private RequestView view(LlmRequest request) {
         List<AttemptView> attemptViews = attempts.findAttempts(request.getId()).stream().map(AttemptView::from).toList();
@@ -43,7 +51,7 @@ public class AdminRequestExplorerService {
                               Integer inputTokens, Integer outputTokens, java.math.BigDecimal estimatedCost, Long latencyMs, int failoverCount,
                               String providerType, String routingReason, Integer httpStatus, String errorCode, Instant startedAt, Instant completedAt, List<AttemptView> attempts) { }
     public record AttemptView(UUID deploymentId, int attemptNumber, String status, Instant startedAt, Instant completedAt, Long latencyMs,
-                              Integer httpStatus, String errorType, String errorMessage, boolean responseStarted) {
-        static AttemptView from(RequestAttemptQueryRepository.AttemptProjection item) { return new AttemptView(item.getDeploymentId(), item.getAttemptNumber(), item.getStatus(), item.getStartedAt(), item.getCompletedAt(), item.getLatencyMs(), item.getHttpStatus(), item.getErrorType(), item.getErrorMessage(), item.isResponseStarted()); }
+                              Integer httpStatus, String errorType, boolean responseStarted) {
+        static AttemptView from(RequestAttemptQueryRepository.AttemptProjection item) { return new AttemptView(item.getDeploymentId(), item.getAttemptNumber(), item.getStatus(), item.getStartedAt(), item.getCompletedAt(), item.getLatencyMs(), item.getHttpStatus(), item.getErrorType(), item.isResponseStarted()); }
     }
 }

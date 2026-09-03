@@ -1,16 +1,17 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
-import BaseModal from './BaseModal.vue'
+import RequestDetailModal from './RequestDetailModal.vue'
 import { adminFetch, type AdminAuth } from './api'
+import type { RequestDetail } from './requestDetail'
 
 const props = defineProps<{ organizationId: string; auth: AdminAuth }>()
-type Attempt = { deploymentId: string; attemptNumber: number; status: string; latencyMs?: number; httpStatus?: number; errorType?: string; errorMessage?: string; responseStarted: boolean }
+type Attempt = { deploymentId: string; attemptNumber: number; status: string; latencyMs?: number; httpStatus?: number; errorType?: string; responseStarted: boolean }
 type RequestItem = { requestId: string; projectId: string; serviceId: string; finalDeploymentId?: string; status: string; inputTokens?: number; outputTokens?: number; estimatedCost?: number; latencyMs?: number; failoverCount: number; providerType?: string; routingReason?: string; startedAt: string; attempts: Attempt[] }
 type PageResult = { items: RequestItem[]; totalElements: number; totalPages: number }
 type Delivery = { id: string; channelType?: string; eventType: string; status: string; errorMessage?: string; createdAt: string }
 type Incident = { id: string; endpointBaseUrl?: string; status: string; reason: string; openedAt: string; recoveredAt?: string; deliveries: Delivery[] }
 const tab = ref<'requests' | 'incidents'>('requests'); const requests = ref<RequestItem[]>([]); const total = ref(0); const incidents = ref<Incident[]>([])
-const status = ref(''); const failoverOnly = ref(false); const incidentStatus = ref(''); const selectedRequest = ref<RequestItem | null>(null); const detailOpen = ref(false); const busy = ref(false); const message = ref('')
+const status = ref(''); const failoverOnly = ref(false); const incidentStatus = ref(''); const selectedDetail = ref<RequestDetail | null>(null); const detailOpen = ref(false); const detailLoading = ref(false); const busy = ref(false); const message = ref('')
 
 async function loadRequests() {
   if (!props.organizationId) return
@@ -25,7 +26,19 @@ async function loadIncidents() {
   catch (error) { message.value = error instanceof Error ? error.message : '장애 조회 실패' } finally { busy.value = false }
 }
 function switchTab(value: 'requests' | 'incidents') { tab.value = value; value === 'requests' ? loadRequests() : loadIncidents() }
-function inspect(item: RequestItem) { selectedRequest.value = item; detailOpen.value = true }
+async function inspect(item: RequestItem) {
+  selectedDetail.value = null
+  detailOpen.value = true
+  detailLoading.value = true
+  try {
+    selectedDetail.value = await adminFetch<RequestDetail>(`/api/admin/organizations/${props.organizationId}/requests/${encodeURIComponent(item.requestId)}`, props.auth)
+  } catch (error) {
+    message.value = error instanceof Error ? error.message : '요청 상세 조회 실패'
+    detailOpen.value = false
+  } finally {
+    detailLoading.value = false
+  }
+}
 function duration(value?: number) { return value == null ? '-' : `${new Intl.NumberFormat().format(value)} ms` }
 watch(() => props.organizationId, () => { loadRequests(); loadIncidents() }); onMounted(() => { loadRequests(); loadIncidents() })
 </script>
@@ -43,6 +56,6 @@ watch(() => props.organizationId, () => { loadRequests(); loadIncidents() }); on
       <div class="filter-bar surface-card"><select v-model="incidentStatus"><option value="">모든 상태</option><option>OPEN</option><option>RECOVERED</option></select><button class="secondary-button" @click="loadIncidents">필터 적용</button></div>
       <article v-for="incident in incidents" :key="incident.id" class="surface-card incident-card"><header><span class="status-chip" :class="incident.status === 'RECOVERED' ? 'healthy' : 'unhealthy'"><i></i>{{ incident.status }}</span><time>{{ new Date(incident.openedAt).toLocaleString() }}</time></header><h2>{{ incident.endpointBaseUrl ?? incident.id }}</h2><p>{{ incident.reason }}</p><div class="incident-timeline"><span><i></i>발생 {{ new Date(incident.openedAt).toLocaleString() }}</span><span v-if="incident.recoveredAt"><i></i>복구 {{ new Date(incident.recoveredAt).toLocaleString() }}</span></div><div class="delivery-row"><span v-for="delivery in incident.deliveries" :key="delivery.id" class="delivery-chip" :class="delivery.status.toLowerCase()">{{ delivery.channelType ?? '채널 없음' }} · {{ delivery.eventType }} · {{ delivery.status }}</span></div></article><div v-if="!incidents.length" class="surface-card empty-state"><span>✓</span><h3>표시할 장애가 없습니다</h3></div>
     </div>
-    <BaseModal :open="detailOpen" title="요청 Attempt 상세" :description="selectedRequest?.requestId" size="lg" @close="detailOpen = false"><div v-if="selectedRequest" class="request-detail"><div class="detail-stats"><div><span>상태</span><strong>{{ selectedRequest.status }}</strong></div><div><span>최종 Deployment</span><strong class="mono">{{ selectedRequest.finalDeploymentId ?? '-' }}</strong></div><div><span>토큰</span><strong>{{ (selectedRequest.inputTokens ?? 0) + (selectedRequest.outputTokens ?? 0) }}</strong></div><div><span>총 지연</span><strong>{{ duration(selectedRequest.latencyMs) }}</strong></div></div><div class="attempt-timeline"><div v-for="attempt in selectedRequest.attempts" :key="attempt.attemptNumber" class="attempt-step"><span class="attempt-index">{{ attempt.attemptNumber }}</span><div><strong>{{ attempt.status }}</strong><small class="mono">{{ attempt.deploymentId }}</small><p>{{ duration(attempt.latencyMs) }} · HTTP {{ attempt.httpStatus ?? '-' }} · {{ attempt.errorType ?? '정상 완료' }}</p><small v-if="attempt.errorMessage" class="error-copy">{{ attempt.errorMessage }}</small></div></div></div></div><template #footer><button class="primary-button" @click="detailOpen = false">확인</button></template></BaseModal>
+    <RequestDetailModal :open="detailOpen" :detail="selectedDetail" :loading="detailLoading" @close="detailOpen = false" />
   </section>
 </template>

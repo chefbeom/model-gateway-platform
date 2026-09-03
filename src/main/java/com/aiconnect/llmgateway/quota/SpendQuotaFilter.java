@@ -16,6 +16,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.util.UUID;
 
 /** Separate filter preserves the existing RPM and token quota behavior. */
 @Component
@@ -47,8 +48,10 @@ public class SpendQuotaFilter extends OncePerRequestFilter {
         } catch (ApiException exception) {
             response.setStatus(exception.getStatus().value());
             response.setContentType("application/json");
+            String requestId = UUID.randomUUID().toString();
+            response.setHeader("X-Request-Id", requestId);
             mapper.writeValue(response.getOutputStream(), OpenAiError.of(exception.getMessage(),
-                    "rate_limit_error", exception.getCode(), null));
+                    "rate_limit_error", exception.getCode(), requestId));
         } finally {
             if (reservation != null) {
                 try {

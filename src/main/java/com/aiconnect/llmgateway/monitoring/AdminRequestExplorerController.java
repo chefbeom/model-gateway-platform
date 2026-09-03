@@ -1,5 +1,6 @@
 package com.aiconnect.llmgateway.monitoring;
 
+import com.aiconnect.llmgateway.usage.RequestDetailService;
 import org.springframework.web.bind.annotation.*;
 import java.time.Instant;
 import java.util.UUID;
@@ -21,5 +22,10 @@ public class AdminRequestExplorerController {
                                                          @RequestParam(defaultValue = "0") int page,
                                                          @RequestParam(defaultValue = "25") int size) {
         return explorer.search(organizationId, projectId, serviceId, deploymentId, status, failoverOnly, from, to, page, size);
+    }
+    @GetMapping("/{requestId}")
+    public RequestDetailService.RequestDetail detail(@PathVariable UUID organizationId,
+                                                       @PathVariable String requestId) {
+        return explorer.detail(organizationId, requestId);
     }
 }
