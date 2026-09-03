@@ -23,7 +23,7 @@ function reasonLabel(code: string) {
     TARGET_DISABLED: 'Target 비활성', DEGRADED_NOT_ALLOWED: 'Degraded 제외', COMPATIBILITY_MISMATCH: '호환성 불일치', CONCURRENCY_LIMIT_REACHED: '동시성 한도',
     EXTERNAL_AUTO_FAILOVER_NOT_ALLOWED: '자동 Failover 미승인', EXTERNAL_MANUAL_ACCESS_NOT_ALLOWED: '수동 사용 미승인', EXTERNAL_PROVIDER_UNHEALTHY: 'Provider 비정상',
     EXTERNAL_PROVIDER_DISABLED: 'Provider 비활성', EXTERNAL_PROVIDER_MISSING: 'Provider 없음', EXTERNAL_ACCESS_UNAVAILABLE: '외부 권한 확인 불가', EXTERNAL_PROJECT_REQUIRED: '프로젝트 정보 없음',
-    UPSTREAM_REJECTED: 'Provider 요청 거부', RUNTIME_UNAVAILABLE: 'Runtime 응답 없음', STREAM_START_FAILED: '스트림 시작 실패', MODEL_AT_CAPACITY: '모델 처리 한도'
+    UPSTREAM_REJECTED: 'Provider 요청 거부', RUNTIME_UNAVAILABLE: 'Runtime 응답 없음', STREAM_START_FAILED: '스트림 시작 실패', MODEL_AT_CAPACITY: '모델 처리 한도', DATA_POLICY_BLOCKED: '데이터 보호 정책 차단', DATA_PROTECTION_EXTERNAL_BLOCKED: '외부 전송 차단', DATA_PROTECTION_EXTERNAL_FAILOVER_BLOCKED: '외부 Failover 차단'
   }
   return labels[code] ?? code
 }
@@ -94,6 +94,8 @@ function targetState(target: NonNullable<RequestDetail['diagnostic']>['targets']
           <div><small>Endpoint</small><strong class="mono">{{ detail.endpoint }}</strong></div>
           <div><small>Capability</small><strong>{{ detail.capabilities.join(' · ') }}</strong></div>
           <div><small>HTTP 상태</small><strong>{{ detail.httpStatus ?? '-' }}</strong></div>
+          <div v-if="detail.dataProtectionMode"><small>데이터 보호</small><strong>{{ detail.dataProtectionMode }} · {{ detail.dataProtectionLevel }} · {{ detail.dataProtectionAction }}</strong><em>{{ detail.dataClassificationsJson || '감지 없음' }}</em></div>
+          <div v-if="detail.dataExternalAllowed != null"><small>외부 전송</small><strong>{{ detail.dataExternalAllowed ? '허용' : '차단' }}</strong></div>
         </div>
       </section>
 

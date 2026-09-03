@@ -9,6 +9,8 @@ import com.aiconnect.llmgateway.routing.RoutingDecision;
 import com.aiconnect.llmgateway.routing.RoutingService;
 import com.aiconnect.llmgateway.runtime.*;
 import com.aiconnect.llmgateway.diagnostic.RequestDiagnosticService;
+import com.aiconnect.llmgateway.dataprotection.DataProtectionDecision;
+import com.aiconnect.llmgateway.dataprotection.DataProtectionPolicyService;
 import com.aiconnect.llmgateway.service.ApiKeyCredentials;
 import com.aiconnect.llmgateway.service.ApiKeyService;
 import com.aiconnect.llmgateway.web.ApiException;
@@ -40,6 +42,8 @@ public class ChatCompletionGateway {
 
     @org.springframework.beans.factory.annotation.Autowired
     private RequestDiagnosticService diagnostics;
+    @org.springframework.beans.factory.annotation.Autowired
+    private DataProtectionPolicyService dataProtection;
     public ChatCompletionGateway(ApiKeyService apiKeyService, LlmServiceRepository services,
                                  ProjectServiceAccessRepository access, RoutingService routing,
                                  InferenceRuntimeClient runtimeClient, OpenAiRuntimeClient openAiClient,
@@ -64,10 +68,21 @@ public class ChatCompletionGateway {
             throw new ApiException(HttpStatus.FORBIDDEN, "MODEL_NOT_ALLOWED", "This API key is not allowed to use the requested model.");
         }
 
+        DataProtectionDecision protection = dataProtection.inspect(credentials.project(), credentials.apiKey(), service, request, null);
         String requestId = UUID.randomUUID().toString();
         LlmRequest audit = requests.save(new LlmRequest(requestId, credentials.project().getId(), credentials.apiKey().getId(),
                 credentials.apiKey().getIssuedByUserId(), service, false, RequestCapabilityDetector.requestType(request)));
-        RoutingDecision decision = routing.evaluate(service, RequestCapabilityDetector.detect(request), credentials.project().getId());
+        RoutingDecision decision = routing.evaluate(service, RequestCapabilityDetector.detect(request), credentials.project().getId(), protection.routingConstraint());
+        audit.recordDataProtection(protection.policy().mode().name(), protection.policy().level().name(),
+                protection.action().name(), protection.classificationSummary(), protection.externalAllowed());
+        requests.save(audit);
+        if (protection.blocked()) {
+            audit.fail("DATA_POLICY_BLOCKED", HttpStatus.FORBIDDEN.value(), elapsed(audit.getStartedAt()), 0);
+            requests.save(audit);
+            diagnostics.recordFailure(audit.getId(), request, service, decision, "DATA_POLICY_BLOCKED", HttpStatus.FORBIDDEN.value(), 0);
+            return error(HttpStatus.FORBIDDEN.value(), requestId, "invalid_request_error", "DATA_POLICY_BLOCKED",
+                    "The request was blocked by the active data-protection policy (" + protection.classificationSummary() + ").");
+        }
         List<ResolvedTarget> candidates = decision.eligibleTargets();
         if (candidates.isEmpty()) {
             audit.fail("MODEL_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), elapsed(audit.getStartedAt()), 0); requests.save(audit);

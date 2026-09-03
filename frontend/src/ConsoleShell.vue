@@ -15,13 +15,14 @@ import ObservabilityPage from './ObservabilityPage.vue'
 import NotificationsPage from './NotificationsPage.vue'
 import UsagePage from './UsagePage.vue'
 import QuotaPage from './QuotaPage.vue'
+import DataProtectionPage from './DataProtectionPage.vue'
 import ApiPlaygroundPage from './ApiPlaygroundPage.vue'
 import PlatformAdminPage from './PlatformAdminPage.vue'
 import { adminFetch, type AdminAuth, type User } from './api'
 
 type Theme = 'dark' | 'light'
 type FontScale = '100' | '115' | '125' | '135'
-type PageKey = 'dashboard' | 'infrastructure' | 'system' | 'external' | 'services' | 'teams' | 'projects' | 'observability' | 'usage' | 'quotas' | 'notifications' | 'audit' | 'platform' | 'portal' | 'playground' | 'docs'
+type PageKey = 'dashboard' | 'infrastructure' | 'system' | 'external' | 'services' | 'teams' | 'projects' | 'observability' | 'usage' | 'quotas' | 'data-protection' | 'notifications' | 'audit' | 'platform' | 'portal' | 'playground' | 'docs'
 type OrganizationRole = 'ORGANIZATION_ADMIN' | 'DEVELOPER'
 type TeamRole = 'TEAM_ADMIN' | 'PROJECT_OWNER' | 'DEVELOPER' | 'AUDITOR'
 type Organization = { id: string; name: string; status: string }
@@ -47,6 +48,7 @@ const adminNavItems: NavItem[] = [
   { id: 'notifications', label: '알림 채널', description: 'Discord와 Telegram 연동', keywords: 'notification discord telegram alert', icon: '◇', group: '시스템' },
   { id: 'audit', label: '감사 로그', description: '관리자 변경·열람 증적', keywords: 'audit log admin change security', icon: '◎', group: '시스템' },
   { id: 'quotas', label: '요금·한도', description: '범위별 예산과 초과 차단', keywords: 'budget quota limit spend cost', icon: '₩', group: '관측' },
+  { id: 'data-protection', label: '데이터 보호', description: '민감정보 탐지·외부 전송 정책', keywords: 'security privacy dlp pii secret local only external block', icon: '◇', group: '시스템' },
   { id: 'playground', label: 'API 테스트', description: '모델 연결·Chat Completions 테스트', keywords: 'playground api test chat completion models', icon: '▷', group: '개발자 도구' }
 ]
 const platformNavItem: NavItem = { id: 'platform', label: 'Platform Admin', description: '조직·사용자·키·데이터 정리', keywords: 'platform admin organization user api key cleanup purge', icon: '⚡', group: '시스템' }
@@ -97,7 +99,7 @@ const searchResults = computed(() => {
 })
 
 function knownPage(value: string): value is PageKey {
-  return ['dashboard', 'infrastructure', 'system', 'external', 'services', 'teams', 'projects', 'observability', 'usage', 'quotas', 'notifications', 'audit', 'platform', 'portal', 'playground', 'docs'].includes(value)
+  return ['dashboard', 'infrastructure', 'system', 'external', 'services', 'teams', 'projects', 'observability', 'usage', 'quotas', 'data-protection', 'notifications', 'audit', 'platform', 'portal', 'playground', 'docs'].includes(value)
 }
 function isAllowedPage(target: PageKey) { return isAdminConsole.value || target === 'portal' || target === 'usage' || target === 'playground' || target === 'docs' }
 function fallbackPage(): PageKey { return isAdminConsole.value ? 'dashboard' : 'portal' }
@@ -233,6 +235,7 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
         <PlatformAdminPage v-else-if="platformAdmin && page === 'platform'" :auth="auth" />
         <UsagePage v-else-if="page === 'usage'" :organization-id="organizationId" :auth="auth" />
         <QuotaPage v-else-if="isAdminConsole && page === 'quotas'" :organization-id="organizationId" :auth="auth" />
+        <DataProtectionPage v-else-if="isAdminConsole && page === 'data-protection'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" />
         <ApiPlaygroundPage v-else-if="page === 'playground'" :organization-id="organizationId" :auth="auth" />
         <DevDocsPage v-else-if="page === 'docs'" @navigate="navigate" />
         <DeveloperPortalPage v-else :organization-id="organizationId" :auth="auth" />

@@ -21,6 +21,8 @@ import com.aiconnect.llmgateway.runtime.StreamingRuntimeResult;
 import com.aiconnect.llmgateway.service.ApiKeyCredentials;
 import com.aiconnect.llmgateway.service.ApiKeyService;
 import com.aiconnect.llmgateway.diagnostic.RequestDiagnosticService;
+import com.aiconnect.llmgateway.dataprotection.DataProtectionDecision;
+import com.aiconnect.llmgateway.dataprotection.DataProtectionPolicyService;
 import com.aiconnect.llmgateway.web.ApiException;
 import com.aiconnect.llmgateway.web.OpenAiError;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -53,6 +55,8 @@ public class StreamingChatCompletionGateway {
 
     @org.springframework.beans.factory.annotation.Autowired
     private RequestDiagnosticService diagnostics;
+    @org.springframework.beans.factory.annotation.Autowired
+    private DataProtectionPolicyService dataProtection;
 
     public StreamingChatCompletionGateway(ApiKeyService apiKeyService, LlmServiceRepository services, ProjectServiceAccessRepository access,
                                           RoutingService routing, StreamingLmStudioRuntimeClient runtimeClient,
@@ -75,10 +79,22 @@ public class StreamingChatCompletionGateway {
         if (!access.existsByIdProjectIdAndIdServiceId(credentials.project().getId(), service.getId())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "MODEL_NOT_ALLOWED", "This API key is not allowed to use the requested model.");
         }
+        DataProtectionDecision protection = dataProtection.inspect(credentials.project(), credentials.apiKey(), service, request, null);
         String requestId = UUID.randomUUID().toString();
         LlmRequest audit = requests.save(new LlmRequest(requestId, credentials.project().getId(), credentials.apiKey().getId(),
                 credentials.apiKey().getIssuedByUserId(), service, true, RequestCapabilityDetector.requestType(request)));
-        RoutingDecision decision = routing.evaluate(service, RequestCapabilityDetector.detect(request), credentials.project().getId());
+        RoutingDecision decision = routing.evaluate(service, RequestCapabilityDetector.detect(request), credentials.project().getId(), protection.routingConstraint());
+        audit.recordDataProtection(protection.policy().mode().name(), protection.policy().level().name(),
+                protection.action().name(), protection.classificationSummary(), protection.externalAllowed());
+        requests.save(audit);
+        if (protection.blocked()) {
+            audit.fail("DATA_POLICY_BLOCKED", HttpStatus.FORBIDDEN.value(), elapsed(audit.getStartedAt()), 0);
+            requests.save(audit);
+            diagnostics.recordFailure(audit.getId(), request, service, decision, "DATA_POLICY_BLOCKED", HttpStatus.FORBIDDEN.value(), 0);
+            return new StreamingGatewayResult(HttpStatus.FORBIDDEN.value(), requestId, null,
+                    objectMapper.valueToTree(OpenAiError.of("The request was blocked by the active data-protection policy (" + protection.classificationSummary() + ").",
+                            "invalid_request_error", "DATA_POLICY_BLOCKED", requestId)));
+        }
         int failures = 0;
         int attemptedCount = 0;
         boolean sawCapacity = false;

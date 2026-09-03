@@ -41,6 +41,11 @@ public class LlmRequest {
     @Column(nullable = false) private int failoverCount;
     private Integer httpStatus;
     @Column(length = 80) private String errorCode;
+    @Column(length = 16) private String dataProtectionMode;
+    @Column(length = 16) private String dataProtectionLevel;
+    @Column(length = 16) private String dataProtectionAction;
+    @Column(columnDefinition = "text") private String dataClassificationsJson;
+    private Boolean dataExternalAllowed;
     @Column(nullable = false) private Instant startedAt = Instant.now();
     private Instant completedAt;
 
@@ -134,4 +139,18 @@ public class LlmRequest {
     public String getErrorCode() { return errorCode; }
     public Instant getStartedAt() { return startedAt; }
     public Instant getCompletedAt() { return completedAt; }
+    /** Stores only policy metadata and classification names, never matched values. */
+    public void recordDataProtection(String mode, String level, String action,
+                                     String classificationsJson, boolean externalAllowed) {
+        this.dataProtectionMode = mode;
+        this.dataProtectionLevel = level;
+        this.dataProtectionAction = action;
+        this.dataClassificationsJson = classificationsJson;
+        this.dataExternalAllowed = externalAllowed;
+    }
+    public String getDataProtectionMode() { return dataProtectionMode; }
+    public String getDataProtectionLevel() { return dataProtectionLevel; }
+    public String getDataProtectionAction() { return dataProtectionAction; }
+    public String getDataClassificationsJson() { return dataClassificationsJson; }
+    public Boolean getDataExternalAllowed() { return dataExternalAllowed; }
 }

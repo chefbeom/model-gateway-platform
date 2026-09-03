@@ -83,7 +83,12 @@ public class RequestDetailService {
                 request.getStartedAt(),
                 request.getCompletedAt(),
                 attemptViews,
-                diagnostic
+                diagnostic,
+                request.getDataProtectionMode(),
+                request.getDataProtectionLevel(),
+                request.getDataProtectionAction(),
+                request.getDataClassificationsJson(),
+                request.getDataExternalAllowed()
         );
     }
 
@@ -127,7 +132,12 @@ public class RequestDetailService {
             Instant startedAt,
             Instant completedAt,
             List<Attempt> attempts,
-            RequestDiagnosticPayload diagnostic
+            RequestDiagnosticPayload diagnostic,
+            String dataProtectionMode,
+            String dataProtectionLevel,
+            String dataProtectionAction,
+            String dataClassificationsJson,
+            Boolean dataExternalAllowed
     ) { }
 
     public record Attempt(

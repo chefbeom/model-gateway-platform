@@ -122,6 +122,12 @@ public class RequestDiagnosticService {
                     "모델이 처리 한도에 도달했습니다. 잠시 후 재시도하거나 다른 정상 Target을 추가하세요.");
             case "MODEL_UNAVAILABLE" -> new RequestDiagnosticPayload.Recommendation(code, "라우팅 조건 확인",
                     "아래 Target별 제외 사유를 확인하고 적어도 하나의 정상·호환·승인된 Target을 준비하세요.");
+            case "DATA_POLICY_BLOCKED" -> new RequestDiagnosticPayload.Recommendation(code, "데이터 보호 정책 확인",
+                    "요청에 민감정보가 감지되어 외부 전송이 차단되었습니다. 프로젝트·API 키·서비스의 보호 모드와 허용 동작을 확인하거나 민감정보를 제거하세요.");
+            case "DATA_PROTECTION_EXTERNAL_BLOCKED" -> new RequestDiagnosticPayload.Recommendation(code, "외부 전송 차단 정책 확인",
+                    "보호 정책이 외부 Provider 전송을 허용하지 않습니다. 로컬 Target을 준비하거나 정책 범위를 프로젝트·키별로 조정하세요.");
+            case "DATA_PROTECTION_EXTERNAL_FAILOVER_BLOCKED" -> new RequestDiagnosticPayload.Recommendation(code, "외부 Failover 차단 정책 확인",
+                    "보호 정책이 자동 외부 Failover를 허용하지 않습니다. 로컬 장애 시 요청을 차단할지, 승인된 외부 Failover를 허용할지 선택하세요.");
             default -> null;
         };
         if (recommendation != null) result.put(code, recommendation);
@@ -149,6 +155,9 @@ public class RequestDiagnosticService {
         long excluded = targets.size() - eligible;
         if ("MODEL_UNAVAILABLE".equals(code)) return "호환되고 정상이며 승인된 Target이 없습니다. 평가 대상 " + targets.size() + "개 중 " + excluded + "개가 제외되었습니다.";
         if ("UPSTREAM_REJECTED".equals(code)) return "선택된 Provider가 요청을 거부했고 현재 Retry 정책에서 Failover가 허용되지 않았습니다.";
+        if ("DATA_POLICY_BLOCKED".equals(code)) return "민감정보 보호 정책이 요청의 외부 전송을 차단했습니다. 원문은 저장하지 않고 분류명만 기록했습니다.";
+        if ("DATA_PROTECTION_EXTERNAL_BLOCKED".equals(code)) return "데이터 보호 정책에 따라 외부 Target이 제외되었습니다. 로컬 Target만 선택할 수 있습니다.";
+        if ("DATA_PROTECTION_EXTERNAL_FAILOVER_BLOCKED".equals(code)) return "데이터 보호 정책에 따라 자동 외부 Failover가 제외되었습니다.";
         return "요청 처리 중 " + code + " 오류가 발생했습니다. 평가 대상 " + targets.size() + "개, 사용 가능 " + eligible + "개입니다.";
     }
 

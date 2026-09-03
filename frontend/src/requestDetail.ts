@@ -88,6 +88,11 @@ export type RequestDetail = {
   completedAt?: string | null
   attempts: RequestAttemptDetail[]
   diagnostic?: RequestDiagnostic | null
+  dataProtectionMode?: string | null
+  dataProtectionLevel?: string | null
+  dataProtectionAction?: string | null
+  dataClassificationsJson?: string | null
+  dataExternalAllowed?: boolean | null
 }
 
 const requestTypeLabels: Record<string, string> = {
