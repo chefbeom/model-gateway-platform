@@ -32,7 +32,7 @@ export const runtimeDiagnosticsDoc: DocPage = {
           { title: 'GPU 노드가 온라인인지 확인', text: 'GPU 서버에서 Tailscale이 로그인되어 있고 LM Studio Developer Server가 실행 중인지 확인합니다. Tailnet 상태가 offline이면 Gateway는 연결할 수 없습니다.' },
           { title: '호스트 연결 확인', text: 'AICONNECT 호스트에서 Runtime URL의 TCP 1234와 /v1/models를 확인합니다. 여기서 실패하면 Docker나 Gateway 설정을 바꾸기 전에 원격 GPU 서버·Tailscale부터 복구합니다.' },
           { title: '인프라의 연결 확인 실행', text: '인프라 화면의 연결 확인은 성공일 때만 “연결 성공”을 표시합니다. 실패하면 HTTP 상태 또는 “runtime endpoint is unreachable” 사유가 표시됩니다.', action: { label: '인프라 열기', destination: 'infrastructure' } },
-          { title: '모델 동기화와 Target 재확인', text: '연결이 성공한 후 모델 동기화를 실행하고, 사용할 Deployment가 LOADED·HEALTHY인지 및 논리 서비스 Target이 활성인지 확인합니다.', action: { label: 'LLM 서비스 열기', destination: 'services' } }
+          { title: '모델 동기화와 Target 재확인', text: '연결이 성공한 후 모델 동기화를 실행합니다. 모델 변경 자동 추적이 켜진 로컬 Target은 같은 Runtime에 정상 모델이 하나로 식별될 때 새 Deployment로 보정됩니다. 후보가 여러 개면 임의 전환하지 않으므로 LLM 서비스에서 Target 또는 요청 진단을 확인합니다.', action: { label: 'LLM 서비스 열기', destination: 'services' } }
         ] },
         { type: 'callout', tone: 'warning', title: 'Docker Desktop과 Tailnet', text: '호스트에서 Runtime URL이 열리지만 API 컨테이너에서만 실패한다면 Docker가 호스트의 Tailnet 경로를 사용하지 못하는 상태일 수 있습니다. 이 경우 TS_AUTHKEY를 준비해 docker-compose.tailscale.yml 오버레이를 사용하거나, 네트워크 운영자가 Gateway 컨테이너에서 Tailnet으로 나가는 경로를 제공해야 합니다.' }
       ]

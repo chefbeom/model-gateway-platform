@@ -93,6 +93,7 @@ public class RoutingService {
             if (deployment != null && strictCompatibilityKey != null && !strictCompatibilityKey.equals(deployment.getCompatibilityKey())) reasons.add("COMPATIBILITY_MISMATCH");
             if (deployment != null && !deployment.isLoaded()) reasons.add("DEPLOYMENT_NOT_LOADED");
             if (deployment != null && deployment.getHealthStatus() != HealthStatus.HEALTHY) reasons.add("DEPLOYMENT_UNHEALTHY");
+            if (deployment != null && target.isFollowModelChanges() && hasLoadedReplacement(deployment)) reasons.add("TARGET_MODEL_STALE");
             if (deployment != null && !missingCapabilities.isEmpty()) reasons.add("CAPABILITY_MISSING");
             if (deployment != null) {
                 limit = target.effectiveMaxConcurrency(deployment.getMaxConcurrency());
@@ -159,6 +160,15 @@ public class RoutingService {
             if (deployment != null && deployment.isEnabled()) return deployment.getCompatibilityKey();
         }
         return null;
+    }
+
+    private boolean hasLoadedReplacement(ModelDeployment deployment) {
+        if (deployment.isExternal() || deployment.getRuntimeEndpointId() == null) return false;
+        if (deployment.isLoaded() && deployment.getHealthStatus() == HealthStatus.HEALTHY) return false;
+        return deployments.findByRuntimeEndpointId(deployment.getRuntimeEndpointId()).stream()
+                .anyMatch(candidate -> !candidate.getId().equals(deployment.getId())
+                        && !candidate.isExternal() && candidate.isEnabled() && candidate.isLoaded()
+                        && candidate.getHealthStatus() == HealthStatus.HEALTHY);
     }
 
     private List<String> sortedCapabilities(String... jsonValues) {

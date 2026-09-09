@@ -140,7 +140,8 @@ public class ControlPlaneService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ORGANIZATION_MISMATCH", "A service target must belong to the service organization.");
         }
         return targets.save(new ServiceTarget(serviceId, deployment.getId(), request.priority(),
-                request.weight() == null ? 100 : request.weight(), request.degraded(), request.maxConcurrencyOverride()));
+                request.weight() == null ? 100 : request.weight(), request.degraded(), request.maxConcurrencyOverride(),
+                !deployment.isExternal() && (request.followModelChanges() == null || request.followModelChanges())));
     }
 
     @Transactional
@@ -169,6 +170,16 @@ public class ControlPlaneService {
 
     @Transactional
     public List<ModelDeployment> syncModels(UUID endpointId) {
+        return syncModels(endpointId, null);
+    }
+
+    /**
+     * Synchronize a runtime and, when possible, keep existing service targets attached to
+     * the current model. The preferred key is supplied by an explicit load operation; a
+     * manual sync falls back to an unambiguous replacement only.
+     */
+    @Transactional
+    public List<ModelDeployment> syncModels(UUID endpointId, String preferredModelKey) {
         RuntimeEndpoint endpoint = requireEndpoint(endpointId);
         RuntimeResult result = runtimeClient.listModels(endpoint);
         if (!result.isSuccessful()) {
@@ -202,7 +213,59 @@ public class ControlPlaneService {
                 deployments.save(deployment);
             }
         }
+        rebindStaleTargets(endpointId, preferredModelKey, existing.values());
         return created;
+    }
+
+    private void rebindStaleTargets(UUID endpointId, String preferredModelKey,
+                                     Collection<ModelDeployment> previousDeployments) {
+        if (previousDeployments.isEmpty()) return;
+        List<UUID> previousIds = previousDeployments.stream().map(ModelDeployment::getId).toList();
+        List<ServiceTarget> affectedTargets = targets.findByDeploymentIdIn(previousIds).stream()
+                .filter(ServiceTarget::isFollowModelChanges)
+                .toList();
+        if (affectedTargets.isEmpty()) return;
+
+        List<ModelDeployment> replacements = deployments.findByRuntimeEndpointId(endpointId).stream()
+                .filter(item -> !item.isExternal() && item.isEnabled() && item.isLoaded()
+                        && item.getHealthStatus() == HealthStatus.HEALTHY)
+                .toList();
+        if (replacements.isEmpty()) return;
+
+        Map<UUID, ModelDeployment> previousById = previousDeployments.stream()
+                .collect(Collectors.toMap(ModelDeployment::getId, Function.identity()));
+        for (ServiceTarget target : affectedTargets) {
+            ModelDeployment previous = previousById.get(target.getDeploymentId());
+            if (previous == null || previous.isExternal() || !endpointId.equals(previous.getRuntimeEndpointId())) continue;
+            if (previous.isEnabled() && previous.isLoaded() && previous.getHealthStatus() == HealthStatus.HEALTHY) continue;
+
+            ModelDeployment replacement = selectReplacement(previous, replacements, preferredModelKey);
+            if (replacement == null || replacement.getId().equals(previous.getId())) continue;
+            if (targets.findByServiceIdAndDeploymentId(target.getServiceId(), replacement.getId()).isPresent()) continue;
+            target.rebindTo(replacement.getId());
+            targets.save(target);
+        }
+    }
+
+    private ModelDeployment selectReplacement(ModelDeployment previous, List<ModelDeployment> replacements,
+                                              String preferredModelKey) {
+        String preferred = preferredModelKey == null ? "" : preferredModelKey.trim();
+        if (!preferred.isBlank()) {
+            List<ModelDeployment> preferredMatches = replacements.stream()
+                    .filter(item -> preferred.equals(item.getCompatibilityKey()) || preferred.equals(item.getProviderModelId()))
+                    .toList();
+            if (preferredMatches.size() == 1) return preferredMatches.get(0);
+            if (preferredMatches.size() > 1) return null;
+        }
+        String previousCompatibility = previous.getCompatibilityKey();
+        if (previousCompatibility != null && !previousCompatibility.isBlank()) {
+            List<ModelDeployment> sameModel = replacements.stream()
+                    .filter(item -> previousCompatibility.equals(item.getCompatibilityKey()))
+                    .toList();
+            if (sameModel.size() == 1) return sameModel.get(0);
+            if (sameModel.size() > 1) return null;
+        }
+        return replacements.size() == 1 ? replacements.get(0) : null;
     }
 
     public List<RuntimeEndpoint> endpoints() { return endpoints.findAll(); }

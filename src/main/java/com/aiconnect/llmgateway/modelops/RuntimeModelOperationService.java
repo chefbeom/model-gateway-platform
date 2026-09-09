@@ -188,7 +188,10 @@ public class RuntimeModelOperationService {
                 operation.fail(failureMessage(result));
                 return operations.save(operation);
             }
-            controlPlane.syncModels(endpointId);
+            // The runtime response may assign a new loaded instance ID. Pass the
+            // selected model key so stale service targets can follow this explicit
+            // model operation when the replacement is unambiguous.
+            controlPlane.syncModels(endpointId, warmupModelKey);
             String recoveryMessage = recover(endpoint, warmupModelKey, "LOAD".equals(type));
             operation.complete(json(result.body()), withWarnings(recoveryMessage, preflightWarnings));
         } catch (RuntimeException exception) {

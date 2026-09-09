@@ -97,6 +97,8 @@ public class RequestDiagnosticService {
                     "요청에 필요한 기능(" + missing + ")이 대상 모델에 등록되어 있지 않습니다. 외부 AI 또는 배포 모델 설정에서 실제 지원 여부를 확인한 뒤 Capability를 등록하세요.");
             case "ENDPOINT_UNHEALTHY", "ENDPOINT_MISSING", "ENDPOINT_DISABLED" -> new RequestDiagnosticPayload.Recommendation(code, "Runtime 연결 확인",
                     "LM Studio Endpoint의 실행 상태, 주소, 방화벽과 포트 연결을 확인한 뒤 인프라 연결 확인을 다시 실행하세요.");
+            case "TARGET_MODEL_STALE" -> new RequestDiagnosticPayload.Recommendation(code, "Target 모델 동기화 확인",
+                    "인프라 모델이 변경되어 Target이 이전 Deployment를 참조하고 있습니다. 모델 동기화를 다시 실행하거나 Target의 모델 변경 자동 추적 설정을 확인하세요.");
             case "DEPLOYMENT_UNHEALTHY", "DEPLOYMENT_NOT_LOADED" -> new RequestDiagnosticPayload.Recommendation(code, "모델 배포 상태 확인",
                     "대상 모델이 로드되어 있고 정상 상태인지 확인하세요. 모델을 다시 로드하거나 정상 Deployment를 서비스 Target에 연결하세요.");
             case "EXTERNAL_AUTO_FAILOVER_NOT_ALLOWED" -> new RequestDiagnosticPayload.Recommendation(code, "외부 AI Failover 권한 확인",

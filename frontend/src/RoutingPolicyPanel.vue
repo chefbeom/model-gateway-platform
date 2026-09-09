@@ -3,7 +3,7 @@ import { ref } from 'vue'
 import { adminFetch, type AdminAuth } from './api'
 
 type ServicePolicy = { id: string; serviceKey: string; displayName: string; failoverPolicy: 'STRICT' | 'COMPATIBLE' | 'DEGRADED'; retryPolicy: 'SAFE' | 'AGGRESSIVE'; allowDegraded: boolean; requiredCapabilitiesJson: string; inputPricePerMillion: number; outputPricePerMillion: number; currency?: 'KRW' | 'USD'; enabled: boolean }
-type TargetPolicy = { id: string; deploymentId: string; priority: number; weight: number; degraded: boolean; enabled: boolean; maxConcurrencyOverride?: number | null }
+type TargetPolicy = { id: string; deploymentId: string; priority: number; weight: number; degraded: boolean; enabled: boolean; maxConcurrencyOverride?: number | null; followModelChanges?: boolean }
 
 const organizationId = ref(sessionStorage.getItem('aiconnect.setup.organizationId') ?? '')
 const services = ref<ServicePolicy[]>([])
@@ -77,7 +77,7 @@ async function removeTarget(target: TargetPolicy) {
           <h3>Service Targets</h3>
           <div v-for="target in targets" :key="target.id" class="target-row">
             <small class="mono">{{ target.deploymentId }}</small><div class="filters"><label>Priority<input v-model.number="target.priority" type="number" min="1" /></label><label>Weight<input v-model.number="target.weight" type="number" min="1" /></label><label>동시성<input v-model.number="target.maxConcurrencyOverride" type="number" min="1" /></label></div>
-            <div class="filters"><label><input v-model="target.degraded" type="checkbox" /> Degraded</label><label><input v-model="target.enabled" type="checkbox" /> 활성</label><button :disabled="busy" @click="saveTarget(target)">저장</button><button class="danger" :disabled="busy" @click="removeTarget(target)">삭제</button></div>
+            <div class="filters"><label><input v-model="target.degraded" type="checkbox" /> Degraded</label><label><input v-model="target.enabled" type="checkbox" /> 활성</label><label><input v-model="target.followModelChanges" type="checkbox" /> 모델 자동 추적</label><button :disabled="busy" @click="saveTarget(target)">저장</button><button class="danger" :disabled="busy" @click="removeTarget(target)">삭제</button></div>
           </div>
         </article>
       </div>

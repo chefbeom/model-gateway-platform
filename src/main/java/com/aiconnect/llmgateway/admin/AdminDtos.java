@@ -39,6 +39,12 @@ public final class AdminDtos {
                                 @DecimalMin("0") BigDecimal outputPricePerMillion, Currency currency) { }
     public record GrantServiceAccess(@NotNull UUID serviceId) { }
     public record CreateTarget(@NotNull UUID deploymentId, @Min(1) int priority, @Min(1) Integer weight,
-                               boolean degraded, @Min(1) Integer maxConcurrencyOverride) { }
+                               boolean degraded, @Min(1) Integer maxConcurrencyOverride,
+                               Boolean followModelChanges) {
+        public CreateTarget(UUID deploymentId, int priority, Integer weight, boolean degraded,
+                            Integer maxConcurrencyOverride) {
+            this(deploymentId, priority, weight, degraded, maxConcurrencyOverride, true);
+        }
+    }
     public record CreateApiKey(@NotBlank @Size(max = 120) String name, Instant expiresAt) { }
 }

@@ -44,7 +44,8 @@ public class RoutingPolicyService {
     public ServiceTarget configureTarget(UUID serviceId, UUID targetId, RoutingPolicyController.UpdateTarget request) {
         requireService(serviceId);
         ServiceTarget target = requireTarget(serviceId, targetId);
-        target.configure(request.priority(), request.weight(), request.degraded(), request.enabled(), request.maxConcurrencyOverride());
+        target.configure(request.priority(), request.weight(), request.degraded(), request.enabled(),
+                request.maxConcurrencyOverride(), request.followModelChanges());
         return targets.save(target);
     }
 

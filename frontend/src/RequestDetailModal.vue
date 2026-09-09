@@ -19,7 +19,7 @@ const emit = defineEmits<{ close: [] }>()
 function reasonLabel(code: string) {
   const labels: Record<string, string> = {
     CAPABILITY_MISSING: '필수 기능 미지원', ENDPOINT_UNHEALTHY: 'Endpoint 비정상', ENDPOINT_MISSING: 'Endpoint 없음', ENDPOINT_DISABLED: 'Endpoint 비활성',
-    DEPLOYMENT_UNHEALTHY: '배포 비정상', DEPLOYMENT_NOT_LOADED: '모델 미로드', DEPLOYMENT_MISSING: '배포 없음', DEPLOYMENT_DISABLED: '배포 비활성',
+    DEPLOYMENT_UNHEALTHY: '배포 비정상', DEPLOYMENT_NOT_LOADED: '모델 미로드', DEPLOYMENT_MISSING: '배포 없음', DEPLOYMENT_DISABLED: '배포 비활성', TARGET_MODEL_STALE: 'Target 모델 변경 필요',
     TARGET_DISABLED: 'Target 비활성', DEGRADED_NOT_ALLOWED: 'Degraded 제외', COMPATIBILITY_MISMATCH: '호환성 불일치', CONCURRENCY_LIMIT_REACHED: '동시성 한도',
     EXTERNAL_AUTO_FAILOVER_NOT_ALLOWED: '자동 Failover 미승인', EXTERNAL_MANUAL_ACCESS_NOT_ALLOWED: '수동 사용 미승인', EXTERNAL_PROVIDER_UNHEALTHY: 'Provider 비정상',
     EXTERNAL_PROVIDER_DISABLED: 'Provider 비활성', EXTERNAL_PROVIDER_MISSING: 'Provider 없음', EXTERNAL_ACCESS_UNAVAILABLE: '외부 권한 확인 불가', EXTERNAL_PROJECT_REQUIRED: '프로젝트 정보 없음',

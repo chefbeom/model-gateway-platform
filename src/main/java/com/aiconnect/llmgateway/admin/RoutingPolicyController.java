@@ -83,8 +83,14 @@ public class RoutingPolicyController {
             @Min(1) Integer weight,
             Boolean degraded,
             Boolean enabled,
-            @Min(1) Integer maxConcurrencyOverride
-    ) { }
+            @Min(1) Integer maxConcurrencyOverride,
+            Boolean followModelChanges
+    ) {
+        public UpdateTarget(Integer priority, Integer weight, Boolean degraded, Boolean enabled,
+                            Integer maxConcurrencyOverride) {
+            this(priority, weight, degraded, enabled, maxConcurrencyOverride, null);
+        }
+    }
 
     public record ServicePolicyView(UUID id, UUID organizationId, String serviceKey, String displayName,
                                     FailoverPolicy failoverPolicy, RetryPolicy retryPolicy, boolean allowDegraded,
@@ -98,10 +104,12 @@ public class RoutingPolicyController {
     }
 
     public record TargetPolicyView(UUID id, UUID serviceId, UUID deploymentId, int priority, int weight,
-                                   boolean degraded, boolean enabled, Integer maxConcurrencyOverride) {
+                                   boolean degraded, boolean enabled, Integer maxConcurrencyOverride,
+                                   boolean followModelChanges) {
         static TargetPolicyView from(ServiceTarget target) {
             return new TargetPolicyView(target.getId(), target.getServiceId(), target.getDeploymentId(), target.getPriority(),
-                    target.getWeight(), target.isDegraded(), target.isEnabled(), target.getMaxConcurrencyOverride());
+                    target.getWeight(), target.isDegraded(), target.isEnabled(), target.getMaxConcurrencyOverride(),
+                    target.isFollowModelChanges());
         }
     }
 }

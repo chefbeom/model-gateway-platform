@@ -718,3 +718,7 @@ components:
         weight: { type: integer, minimum: 1, default: 100 }
         degraded: { type: boolean, default: false }
         maxConcurrencyOverride: { type: [integer, 'null'], minimum: 1 }
+        followModelChanges:
+          type: boolean
+          default: true
+          description: Automatically move this Target to an unambiguous replacement Deployment when the same runtime model changes.

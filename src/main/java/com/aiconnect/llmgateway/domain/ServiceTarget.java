@@ -14,22 +14,34 @@ public class ServiceTarget {
     @Column(nullable = false) private int weight = 100;
     @Column(nullable = false) private boolean degraded;
     @Column(nullable = false) private boolean enabled = true;
+    @Column(nullable = false) private boolean followModelChanges = true;
     private Integer maxConcurrencyOverride;
     @Column(nullable = false) private Instant createdAt = Instant.now();
     @Column(nullable = false) private Instant updatedAt = Instant.now();
 
     protected ServiceTarget() { }
     public ServiceTarget(UUID serviceId, UUID deploymentId, int priority, int weight, boolean degraded, Integer maxConcurrencyOverride) {
+        this(serviceId, deploymentId, priority, weight, degraded, maxConcurrencyOverride, true);
+    }
+    public ServiceTarget(UUID serviceId, UUID deploymentId, int priority, int weight, boolean degraded,
+                         Integer maxConcurrencyOverride, boolean followModelChanges) {
         this.serviceId = serviceId; this.deploymentId = deploymentId; this.priority = priority; this.weight = weight;
         this.degraded = degraded; this.maxConcurrencyOverride = maxConcurrencyOverride;
+        this.followModelChanges = followModelChanges;
     }
     public void configure(Integer priority, Integer weight, Boolean degraded, Boolean enabled, Integer maxConcurrencyOverride) {
+        configure(priority, weight, degraded, enabled, maxConcurrencyOverride, null);
+    }
+    public void configure(Integer priority, Integer weight, Boolean degraded, Boolean enabled,
+                          Integer maxConcurrencyOverride, Boolean followModelChanges) {
         if (priority != null) this.priority = Math.max(1, priority);
         if (weight != null) this.weight = Math.max(1, weight);
         if (degraded != null) this.degraded = degraded;
         if (enabled != null) this.enabled = enabled;
         if (maxConcurrencyOverride != null) this.maxConcurrencyOverride = Math.max(1, maxConcurrencyOverride);
+        if (followModelChanges != null) this.followModelChanges = followModelChanges;
     }
+    public void rebindTo(UUID deploymentId) { this.deploymentId = deploymentId; }
     @PreUpdate void updateTimestamp() { updatedAt = Instant.now(); }
     public UUID getId() { return id; }
     public UUID getServiceId() { return serviceId; }
@@ -38,6 +50,7 @@ public class ServiceTarget {
     public int getWeight() { return weight; }
     public boolean isDegraded() { return degraded; }
     public boolean isEnabled() { return enabled; }
+    public boolean isFollowModelChanges() { return followModelChanges; }
     public Integer getMaxConcurrencyOverride() { return maxConcurrencyOverride; }
     public int effectiveMaxConcurrency(int deploymentLimit) { return maxConcurrencyOverride == null ? deploymentLimit : maxConcurrencyOverride; }
 }
