@@ -36,6 +36,27 @@ class FailoverRetryDeciderTest {
     void capacityResponsesFailoverEvenWithSafePolicy() {
         assertThat(decider.isCapacityResponse(429, "Selected model is at capacity. Please try a different model.")).isTrue();
         assertThat(decider.retryHttp(RetryPolicy.SAFE, 429, "Selected model is at capacity.")).isTrue();
+        assertThat(decider.retryHttp(RetryPolicy.SAFE, 429,
+                ProviderFailureClassifier.classify(429, "{\"error\":{\"message\":\"model at capacity\"}}"))).isTrue();
         assertThat(decider.isCapacityResponse(429, "ordinary rate limit")).isFalse();
+    }
+
+    @Test
+    void modelSpecificProviderRejectionsFailoverEvenWithSafePolicy() {
+        assertThat(decider.retryHttp(RetryPolicy.SAFE, 400,
+                "{\"error\":{\"message\":\"context length exceeded\"}}")).isTrue();
+        assertThat(decider.retryHttp(RetryPolicy.SAFE, 400,
+                "{\"error\":{\"message\":\"max_tokens exceeds the output limit\"}}")).isTrue();
+        assertThat(decider.retryHttp(RetryPolicy.SAFE, 400,
+                "{\"error\":{\"message\":\"invalid api parameter\"}}")).isFalse();
+    }
+
+    @Test
+    void contextErrorsRemainModelSpecificWhenProviderUsesServerStatus() {
+        ProviderFailureClassifier.Analysis analysis = ProviderFailureClassifier.classify(500,
+                "{\"error\":{\"message\":\"context length exceeded\"}}");
+
+        assertThat(analysis.code()).isEqualTo(ProviderFailureClassifier.Code.CONTEXT_LENGTH_EXCEEDED);
+        assertThat(decider.retryHttp(RetryPolicy.SAFE, 500, analysis)).isTrue();
     }
 }

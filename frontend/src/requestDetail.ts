@@ -7,6 +7,7 @@ export type RequestAttemptDetail = {
   latencyMs?: number | null
   httpStatus?: number | null
   errorType?: string | null
+  errorMessage?: string | null
   responseStarted: boolean
 }
 
@@ -23,6 +24,8 @@ export type RequestDiagnostic = {
     responseFormatType?: string | null
     hasMaxTokens: boolean
     hasMaxCompletionTokens: boolean
+    estimatedInputTokens: number
+    requestedOutputTokens: number
   }
   service: {
     failoverPolicy: string
@@ -57,6 +60,12 @@ export type RequestDiagnostic = {
     reasonCodes: string[]
   }>
   recommendations: Array<{ code: string; title: string; detail: string }>
+  failure?: {
+    code: string
+    message?: string | null
+    providerMessage?: string | null
+    failoverAllowed: boolean
+  } | null
 }
 
 export type RequestDetail = {

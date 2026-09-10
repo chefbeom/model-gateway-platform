@@ -2,6 +2,8 @@ package com.aiconnect.llmgateway.diagnostic;
 
 import com.aiconnect.llmgateway.domain.LlmService;
 import com.aiconnect.llmgateway.gateway.RequestCapabilityDetector;
+import com.aiconnect.llmgateway.gateway.ProviderFailureClassifier;
+import com.aiconnect.llmgateway.gateway.TokenUsageEstimator;
 import com.aiconnect.llmgateway.routing.RoutingDecision;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -32,8 +34,25 @@ public class RequestDiagnosticService {
     public void recordFailure(UUID requestId, ObjectNode request, LlmService service,
                               RoutingDecision decision, String finalCode, int httpStatus,
                               int attemptedCount) {
+        recordFailure(requestId, request, service, decision, finalCode, httpStatus, attemptedCount,
+                null, null, false);
+    }
+
+    public void recordFailure(UUID requestId, ObjectNode request, LlmService service,
+                              RoutingDecision decision, String finalCode, int httpStatus,
+                              int attemptedCount, String failureMessage, String providerMessage,
+                              boolean failoverAllowed) {
+        recordFailure(requestId, request, service, decision, finalCode, httpStatus, attemptedCount,
+                finalCode, failureMessage, providerMessage, failoverAllowed);
+    }
+
+    public void recordFailure(UUID requestId, ObjectNode request, LlmService service,
+                              RoutingDecision decision, String finalCode, int httpStatus,
+                              int attemptedCount, String failureCode, String failureMessage,
+                              String providerMessage, boolean failoverAllowed) {
         try {
-            RequestDiagnosticPayload payload = build(request, service, decision, finalCode, httpStatus, attemptedCount);
+            RequestDiagnosticPayload payload = build(request, service, decision, finalCode, httpStatus, attemptedCount,
+                    failureCode, failureMessage, providerMessage, failoverAllowed);
             diagnostics.save(new RequestDiagnostic(requestId, objectMapper.writeValueAsString(payload)));
         } catch (Exception exception) {
             // A diagnostic must never turn a completed gateway failure into a second failure.
@@ -49,7 +68,9 @@ public class RequestDiagnosticService {
     }
 
     private RequestDiagnosticPayload build(ObjectNode request, LlmService service, RoutingDecision decision,
-                                           String finalCode, int httpStatus, int attemptedCount) {
+                                           String finalCode, int httpStatus, int attemptedCount,
+                                           String failureCode, String failureMessage, String providerMessage,
+                                           boolean failoverAllowed) {
         String requestType = RequestCapabilityDetector.requestType(request);
         JsonNode messages = request.path("messages");
         JsonNode tools = request.path("tools");
@@ -59,7 +80,8 @@ public class RequestDiagnosticService {
                 sorted(RequestCapabilityDetector.detect(request)), request.path("stream").asBoolean(false),
                 messages.isArray() ? messages.size() : 0, tools.isArray() ? tools.size() : 0,
                 responseFormat.isObject(), responseFormat.path("type").asText(null),
-                request.has("max_tokens"), request.has("max_completion_tokens"));
+                request.has("max_tokens"), request.has("max_completion_tokens"),
+                TokenUsageEstimator.estimateInputTokens(request), ProviderFailureClassifier.requestedOutputTokens(request));
         RequestDiagnosticPayload.ServicePolicy policy = new RequestDiagnosticPayload.ServicePolicy(
                 decision.failoverPolicy(), decision.retryPolicy(), decision.degradedAllowed(),
                 List.copyOf(decision.requiredCapabilities()));
@@ -70,9 +92,11 @@ public class RequestDiagnosticService {
                         item.loaded(), item.deploymentHealth(), item.endpointDisplayName(), item.providerDisplayName(),
                         item.activeRequests(), item.maxConcurrency(), item.requiredCapabilities(), item.availableCapabilities(),
                         item.missingCapabilities(), item.eligible(), item.reasonCodes())).toList();
-        List<RequestDiagnosticPayload.Recommendation> recommendations = recommendations(finalCode, targetViews, httpStatus);
+        String diagnosticCode = failureCode == null ? finalCode : failureCode;
+        List<RequestDiagnosticPayload.Recommendation> recommendations = recommendations(diagnosticCode, targetViews, httpStatus);
         return new RequestDiagnosticPayload(1, profile, policy, finalCode, httpStatus, attemptedCount,
-                summary(finalCode, targetViews), targetViews, recommendations);
+                summary(finalCode, targetViews), targetViews, recommendations,
+                new RequestDiagnosticPayload.Failure(diagnosticCode, failureMessage, providerMessage, failoverAllowed));
     }
 
     private List<RequestDiagnosticPayload.Recommendation> recommendations(String finalCode,
@@ -117,6 +141,18 @@ public class RequestDiagnosticService {
                     "모델의 동시 요청이 한도에 도달했습니다. 진행 중인 요청을 기다리거나 동시성 한도를 조정하세요.");
             case "TARGET_DISABLED", "DEGRADED_NOT_ALLOWED" -> new RequestDiagnosticPayload.Recommendation(code, "서비스 Target 활성화 확인",
                     "서비스 Target이 비활성화 또는 Degraded 제외 상태입니다. 서비스 라우팅 정책과 Target 상태를 확인하세요.");
+            case "CONTEXT_LENGTH_EXCEEDED", "INPUT_TOKEN_LIMIT_EXCEEDED", "OUTPUT_TOKEN_LIMIT_EXCEEDED" -> new RequestDiagnosticPayload.Recommendation(code, "토큰 한도 확인",
+                    "요청이 대상 모델의 컨텍스트·입력·출력 토큰 한도를 초과했습니다. 요청을 줄이거나 호환되는 대체 Target을 사용하세요.");
+            case "REQUEST_FORMAT_UNSUPPORTED" -> new RequestDiagnosticPayload.Recommendation(code, "요청 형식 호환성 확인",
+                    "대상 모델 또는 Provider가 response_format이나 토큰 필드를 지원하지 않습니다. 모델 기능과 Retry 정책을 확인하세요.");
+            case "AUTHENTICATION_FAILED" -> new RequestDiagnosticPayload.Recommendation(code, "Provider 인증 확인",
+                    "Provider가 API 키 또는 권한을 거부했습니다. 키의 유효성·권한·만료 상태와 Base URL을 확인하세요.");
+            case "MODEL_NOT_FOUND" -> new RequestDiagnosticPayload.Recommendation(code, "Provider 모델 ID 확인",
+                    "Provider에서 실제 모델 또는 경로를 찾지 못했습니다. 등록된 Provider Model ID와 Chat Completions 경로를 확인하세요.");
+            case "RATE_LIMITED" -> new RequestDiagnosticPayload.Recommendation(code, "Provider 요청 한도 확인",
+                    "Provider의 rate limit에 도달했습니다. 잠시 후 재시도하거나 다른 Target·Provider를 사용하세요.");
+            case "REQUEST_TIMEOUT", "UPSTREAM_UNAVAILABLE" -> new RequestDiagnosticPayload.Recommendation(code, "Provider 연결 상태 확인",
+                    "Provider가 시간 초과 또는 일시적 장애로 응답하지 않았습니다. 연결 상태와 Retry 정책을 확인하세요.");
             case "UPSTREAM_REJECTED" -> upstreamRecommendation(code, httpStatus);
             case "RUNTIME_UNAVAILABLE", "STREAM_START_FAILED" -> new RequestDiagnosticPayload.Recommendation(code, "Runtime 응답 확인",
                     "Runtime이 응답을 시작하지 못했습니다. Endpoint 상태와 연결 제한 시간을 확인한 뒤 재시도하세요.");

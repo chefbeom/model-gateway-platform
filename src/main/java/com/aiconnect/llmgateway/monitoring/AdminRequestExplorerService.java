@@ -51,7 +51,7 @@ public class AdminRequestExplorerService {
                               Integer inputTokens, Integer outputTokens, java.math.BigDecimal estimatedCost, Long latencyMs, int failoverCount,
                               String providerType, String routingReason, Integer httpStatus, String errorCode, Instant startedAt, Instant completedAt, List<AttemptView> attempts) { }
     public record AttemptView(UUID deploymentId, int attemptNumber, String status, Instant startedAt, Instant completedAt, Long latencyMs,
-                              Integer httpStatus, String errorType, boolean responseStarted) {
-        static AttemptView from(RequestAttemptQueryRepository.AttemptProjection item) { return new AttemptView(item.getDeploymentId(), item.getAttemptNumber(), item.getStatus(), item.getStartedAt(), item.getCompletedAt(), item.getLatencyMs(), item.getHttpStatus(), item.getErrorType(), item.isResponseStarted()); }
+                              Integer httpStatus, String errorType, String errorMessage, boolean responseStarted) {
+        static AttemptView from(RequestAttemptQueryRepository.AttemptProjection item) { return new AttemptView(item.getDeploymentId(), item.getAttemptNumber(), item.getStatus(), item.getStartedAt(), item.getCompletedAt(), item.getLatencyMs(), item.getHttpStatus(), item.getErrorType(), item.getErrorMessage(), item.isResponseStarted()); }
     }
 }

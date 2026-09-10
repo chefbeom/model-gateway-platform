@@ -4,6 +4,7 @@ import com.aiconnect.llmgateway.domain.RetryPolicy;
 import com.aiconnect.llmgateway.runtime.RuntimeUnavailableException;
 import org.springframework.stereotype.Component;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Locale;
 
 @Component
@@ -13,11 +14,24 @@ public class FailoverRetryDecider {
     }
 
     public boolean retryHttp(RetryPolicy policy, int status, JsonNode body) {
-        return isCapacityResponse(status, body) || retryHttp(policy, status);
+        return retryHttp(policy, status, ProviderFailureClassifier.classify(status, body));
     }
 
     public boolean retryHttp(RetryPolicy policy, int status, String body) {
-        return isCapacityResponse(status, body) || retryHttp(policy, status);
+        if (isCapacityResponse(status, body)) return true;
+        JsonNode parsed = null;
+        if (body != null && !body.isBlank()) {
+            try { parsed = new ObjectMapper().readTree(body); } catch (Exception ignored) { }
+        }
+        return retryHttp(policy, status, parsed == null
+                ? ProviderFailureClassifier.classify(status, body)
+                : ProviderFailureClassifier.classify(status, parsed));
+    }
+
+    public boolean retryHttp(RetryPolicy policy, int status, ProviderFailureClassifier.Analysis analysis) {
+        if (analysis != null && (analysis.isSafeToFailover()
+                || analysis.code() == ProviderFailureClassifier.Code.MODEL_AT_CAPACITY)) return true;
+        return retryHttp(policy, status);
     }
 
     public boolean isCapacityResponse(int status, JsonNode body) {

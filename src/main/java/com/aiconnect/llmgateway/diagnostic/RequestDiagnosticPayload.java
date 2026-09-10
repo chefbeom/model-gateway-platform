@@ -13,7 +13,8 @@ public record RequestDiagnosticPayload(
         int attemptedCount,
         String summary,
         List<Target> targets,
-        List<Recommendation> recommendations
+        List<Recommendation> recommendations,
+        Failure failure
 ) {
     public record RequestProfile(
             String logicalModel,
@@ -25,7 +26,9 @@ public record RequestDiagnosticPayload(
             boolean hasResponseFormat,
             String responseFormatType,
             boolean hasMaxTokens,
-            boolean hasMaxCompletionTokens
+            boolean hasMaxCompletionTokens,
+            int estimatedInputTokens,
+            int requestedOutputTokens
     ) { }
 
     public record ServicePolicy(
@@ -57,6 +60,8 @@ public record RequestDiagnosticPayload(
             boolean eligible,
             List<String> reasonCodes
     ) { }
+
+    public record Failure(String code, String message, String providerMessage, boolean failoverAllowed) { }
 
     public record Recommendation(String code, String title, String detail) { }
 }

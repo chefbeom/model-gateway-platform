@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 
-type Attempt = { deploymentId: string; attemptNumber: number; status: string; latencyMs?: number; httpStatus?: number; errorType?: string }
+type Attempt = { deploymentId: string; attemptNumber: number; status: string; latencyMs?: number; httpStatus?: number; errorType?: string; errorMessage?: string }
 type RequestItem = { requestId: string; projectId: string; serviceId: string; finalDeploymentId?: string; status: string; inputTokens?: number; outputTokens?: number; estimatedCost?: number; latencyMs?: number; failoverCount: number; providerType?: string; routingReason?: string; startedAt: string; attempts: Attempt[] }
 type PageResult = { items: RequestItem[]; page: number; size: number; totalElements: number; totalPages: number }
 
@@ -41,7 +41,7 @@ async function search() {
       <div v-if="result?.items.length" class="request-list">
         <details v-for="item in result.items" :key="item.requestId">
           <summary><span class="status" :class="item.status === 'SUCCEEDED' ? 'healthy' : 'unhealthy'">{{ item.status }}</span><span class="mono">{{ item.requestId }}</span><span>{{ new Date(item.startedAt).toLocaleString() }}</span><span>{{ item.inputTokens ?? 0 }} + {{ item.outputTokens ?? 0 }} tokens</span><span>{{ item.latencyMs ?? 0 }} ms</span><span>Failover {{ item.failoverCount }}</span><span>{{ item.providerType ?? 'LOCAL' }} · {{ item.routingReason ?? 'LOCAL_PRIMARY' }}</span></summary>
-          <div class="attempts"><div v-for="attempt in item.attempts" :key="attempt.attemptNumber"><strong>#{{ attempt.attemptNumber }} {{ attempt.status }}</strong><span class="mono">{{ attempt.deploymentId }}</span><span>{{ attempt.latencyMs ?? 0 }} ms · HTTP {{ attempt.httpStatus ?? '-' }} · {{ attempt.errorType ?? '정상' }}</span></div></div>
+          <div class="attempts"><div v-for="attempt in item.attempts" :key="attempt.attemptNumber"><strong>#{{ attempt.attemptNumber }} {{ attempt.status }}</strong><span class="mono">{{ attempt.deploymentId }}</span><span>{{ attempt.latencyMs ?? 0 }} ms · HTTP {{ attempt.httpStatus ?? '-' }} · {{ attempt.errorType ?? '정상' }}<small v-if="attempt.errorMessage" class="attempt-error-message">{{ attempt.errorMessage }}</small></span></div></div>
         </details>
       </div>
     </section>
@@ -54,6 +54,6 @@ async function search() {
 .explorer-heading { display: flex; justify-content: space-between; gap: 2rem; align-items: end; }
 .filters { min-width: min(100%, 420px); display: grid; grid-template-columns: 1fr 130px; gap: .5rem; } select { border: 1px solid #33415f; border-radius: .5rem; padding: .65rem; color: #f7f9ff; background: #121b31; } .filters label { display: flex; align-items: center; gap: .45rem; } .filters label input { width: auto; }
 details { border-bottom: 1px solid #24304a; padding: .75rem 0; } summary { display: grid; grid-template-columns: auto 1fr auto auto auto auto; gap: .75rem; align-items: center; cursor: pointer; font-size: .8rem; } .mono { overflow: hidden; text-overflow: ellipsis; font-family: ui-monospace, monospace; }
-.attempts { margin: .75rem 0 0 2rem; display: grid; gap: .5rem; } .attempts div { display: grid; grid-template-columns: 120px 1fr auto; gap: .75rem; padding: .65rem; background: #151f36; font-size: .78rem; }
+.attempts { margin: .75rem 0 0 2rem; display: grid; gap: .5rem; } .attempts div { display: grid; grid-template-columns: 120px 1fr auto; gap: .75rem; padding: .65rem; background: #151f36; font-size: .78rem; } .attempt-error-message { color: #ff9b9b; overflow-wrap: anywhere; }
 @media (max-width: 900px) { .explorer-heading { display: grid; } summary { grid-template-columns: auto 1fr; } .attempts div { grid-template-columns: 1fr; } }
 </style>

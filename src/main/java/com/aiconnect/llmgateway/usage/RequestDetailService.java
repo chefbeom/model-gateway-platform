@@ -50,7 +50,7 @@ public class RequestDetailService {
         List<Attempt> attemptViews = attempts.findAttempts(request.getId()).stream()
                 .map(item -> new Attempt(item.getDeploymentId(), item.getAttemptNumber(), item.getStatus(),
                         item.getStartedAt(), item.getCompletedAt(), item.getLatencyMs(), item.getHttpStatus(),
-                        item.getErrorType(), item.isResponseStarted()))
+                        item.getErrorType(), item.getErrorMessage(), item.isResponseStarted()))
                 .toList();
         RequestDiagnosticPayload diagnostic = diagnostics == null ? null : diagnostics.view(request.getId()).orElse(null);
 
@@ -149,6 +149,7 @@ public class RequestDetailService {
             Long latencyMs,
             Integer httpStatus,
             String errorType,
+            String errorMessage,
             boolean responseStarted
     ) { }
 }

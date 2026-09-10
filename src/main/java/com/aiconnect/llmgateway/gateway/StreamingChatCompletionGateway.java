@@ -98,12 +98,23 @@ public class StreamingChatCompletionGateway {
         int failures = 0;
         int attemptedCount = 0;
         boolean sawCapacity = false;
+        ProviderFailureClassifier.Analysis lastFailure = null;
+        ProviderFailureClassifier.Analysis capacityFailure = null;
         for (ResolvedTarget candidate : decision.eligibleTargets()) {
             if (!routing.acquire(candidate)) continue;
             Instant started = Instant.now();
             LlmRequestAttempt attempt = attempts.save(new LlmRequestAttempt(audit.getId(), candidate.deployment().getId(), failures + 1));
             attemptedCount++;
             try {
+                java.util.Optional<ProviderFailureClassifier.Analysis> preflight = ProviderFailureClassifier.preflight(request, candidate.deployment());
+                if (preflight.isPresent()) {
+                    lastFailure = preflight.get();
+                    attempt.fail(lastFailure.codeName(), lastFailure.message(), 0, lastFailure.httpStatus());
+                    attempts.save(attempt);
+                    routing.release(candidate);
+                    failures++;
+                    continue;
+                }
                 ObjectNode proxied = request.deepCopy();
                 proxied.put("model", candidate.deployment().getProviderModelId());
                 proxied.withObject("stream_options").put("include_usage", true);
@@ -131,45 +142,62 @@ public class StreamingChatCompletionGateway {
                 }
                 String errorBody = readErrorBody(result.body());
                 closeQuietly(result.body());
-                boolean capacity = retryDecider.isCapacityResponse(result.statusCode(), errorBody);
-                if (capacity) sawCapacity = true;
-                String attemptCode = capacity ? "MODEL_AT_CAPACITY" : "UPSTREAM_HTTP_" + result.statusCode();
-                attempt.fail(attemptCode, "Runtime returned HTTP " + result.statusCode(), elapsed(started), result.statusCode());
+                JsonNode upstreamBody = parseJson(errorBody);
+                ProviderFailureClassifier.Analysis analysis = upstreamBody == null
+                        ? ProviderFailureClassifier.classify(result.statusCode(), errorBody)
+                        : ProviderFailureClassifier.classify(result.statusCode(), upstreamBody);
+                lastFailure = analysis;
+                boolean capacity = analysis.code() == ProviderFailureClassifier.Code.MODEL_AT_CAPACITY;
+                if (capacity) { sawCapacity = true; if (capacityFailure == null) capacityFailure = analysis; }
+                String attemptCode = analysis.codeName();
+                attempt.fail(attemptCode, analysis.message(), elapsed(started), result.statusCode());
                 attempts.save(attempt);
                 routing.release(candidate);
-                if (capacity || result.statusCode() == 408 || result.statusCode() >= 500) {
+                if (capacity || result.statusCode() == 401 || result.statusCode() == 408 || (result.statusCode() >= 500 && !analysis.isModelSpecific())) {
                     recordUnhealthy(candidate);
                 }
-                if (!retryDecider.retryHttp(service.getRetryPolicy(), result.statusCode(), errorBody)) {
-                    audit.fail("UPSTREAM_REJECTED", result.statusCode(), elapsed(audit.getStartedAt()), failures);
+                if (!retryDecider.retryHttp(service.getRetryPolicy(), result.statusCode(), analysis)) {
+                    String finalCode = analysis.isModelSpecific() ? analysis.codeName() : "UPSTREAM_REJECTED";
+                    audit.fail(finalCode, result.statusCode(), elapsed(audit.getStartedAt()), failures);
                     requests.save(audit);
-                    diagnostics.recordFailure(audit.getId(), request, service, decision, "UPSTREAM_REJECTED", result.statusCode(), attemptedCount);
-                    return error(result.statusCode(), requestId, "UPSTREAM_REJECTED",
-                            "The selected runtime rejected the request; the service retry policy did not permit failover.");
+                    diagnostics.recordFailure(audit.getId(), request, service, decision, finalCode, result.statusCode(), attemptedCount,
+                            analysis.codeName(), analysis.message(), analysis.providerMessage(), analysis.isSafeToFailover());
+                    return error(result.statusCode(), requestId, finalCode, analysis.message());
                 }
                 failures++;
             } catch (RuntimeUnavailableException exception) {
                 recordStartFailure(candidate, attempt, started, exception);
                 if (!retryDecider.retryFailure(service.getRetryPolicy(), exception)) {
                     audit.fail("RUNTIME_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), elapsed(audit.getStartedAt()), failures); requests.save(audit);
-                    diagnostics.recordFailure(audit.getId(), request, service, decision, "RUNTIME_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), attemptedCount);
+                    diagnostics.recordFailure(audit.getId(), request, service, decision, "RUNTIME_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), attemptedCount,
+                            exception.getMessage(), null, exception.isSafeToRetry());
                     return error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, "RUNTIME_UNAVAILABLE", "The runtime failed after the request may have started; SAFE policy did not retry it.");
                 }
                 failures++;
             }
         }
+        if (lastFailure != null && lastFailure.isModelSpecific()) {
+            audit.fail(lastFailure.codeName(), lastFailure.httpStatus(), elapsed(audit.getStartedAt()), failures);
+            requests.save(audit);
+            diagnostics.recordFailure(audit.getId(), request, service, decision, lastFailure.codeName(), lastFailure.httpStatus(), attemptedCount,
+                    lastFailure.message(), lastFailure.providerMessage(), lastFailure.isSafeToFailover());
+            return error(lastFailure.httpStatus(), requestId, lastFailure.codeName(), lastFailure.message());
+        }
         if (sawCapacity) {
+            String capacityMessage = capacityFailure == null ? "The selected model is at capacity. Please try a different model." : capacityFailure.message();
             audit.fail("MODEL_AT_CAPACITY", HttpStatus.TOO_MANY_REQUESTS.value(), elapsed(audit.getStartedAt()), failures);
             requests.save(audit);
-            diagnostics.recordFailure(audit.getId(), request, service, decision, "MODEL_AT_CAPACITY", HttpStatus.TOO_MANY_REQUESTS.value(), attemptedCount);
-            return error(HttpStatus.TOO_MANY_REQUESTS.value(), requestId, "MODEL_AT_CAPACITY",
-                    "The selected model is at capacity. Please try a different model.");
+            diagnostics.recordFailure(audit.getId(), request, service, decision, "MODEL_AT_CAPACITY", HttpStatus.TOO_MANY_REQUESTS.value(), attemptedCount,
+                    capacityMessage, capacityFailure == null ? null : capacityFailure.providerMessage(), false);
+            return error(HttpStatus.TOO_MANY_REQUESTS.value(), requestId, "MODEL_AT_CAPACITY", capacityMessage);
         }
         audit.fail("MODEL_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), elapsed(audit.getStartedAt()), failures);
         requests.save(audit);
-        diagnostics.recordFailure(audit.getId(), request, service, decision, "MODEL_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), attemptedCount);
+        diagnostics.recordFailure(audit.getId(), request, service, decision, "MODEL_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), attemptedCount,
+                lastFailure == null ? null : lastFailure.message(), lastFailure == null ? null : lastFailure.providerMessage(), false);
         return error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, "MODEL_UNAVAILABLE",
-                "No compatible deployment could start a stream.");
+                lastFailure == null ? "No compatible deployment could start a stream."
+                        : "No compatible deployment could start a stream. Last failure: " + lastFailure.message());
     }
 
     private void recordStartFailure(ResolvedTarget candidate, LlmRequestAttempt attempt, Instant started,
@@ -233,7 +261,8 @@ public class StreamingChatCompletionGateway {
             finalized = true;
             attempt.fail("STREAM_INTERRUPTED", exception.getMessage(), elapsed(started), null); attempts.save(attempt);
             audit.fail("STREAM_INTERRUPTED", 502, elapsed(audit.getStartedAt()), failures); requests.save(audit);
-            diagnostics.recordFailure(audit.getId(), request, service, decision, "STREAM_INTERRUPTED", 502, failures + 1);
+            diagnostics.recordFailure(audit.getId(), request, service, decision, "STREAM_INTERRUPTED", 502, failures + 1,
+                    exception.getMessage(), null, false);
             recordUnhealthy(target);
             routing.release(target);
         }
@@ -308,8 +337,18 @@ public class StreamingChatCompletionGateway {
             return "";
         }
     }
+    private JsonNode parseJson(String body) {
+        if (body == null || body.isBlank()) return null;
+        try { return objectMapper.readTree(body); }
+        catch (Exception ignored) { return null; }
+    }
     private void closeQuietly(InputStream stream) { try { stream.close(); } catch (IOException ignored) { } }
+    private String errorType(String code) {
+        if ("MODEL_AT_CAPACITY".equals(code) || "RATE_LIMITED".equals(code)) return "rate_limit_error";
+        if ("REQUEST_TIMEOUT".equals(code) || "UPSTREAM_UNAVAILABLE".equals(code)) return "server_error";
+        return "invalid_request_error";
+    }
     private StreamingGatewayResult error(int status, String requestId, String code, String message) {
-        return new StreamingGatewayResult(status, requestId, null, objectMapper.valueToTree(OpenAiError.of(message, "MODEL_AT_CAPACITY".equals(code) ? "rate_limit_error" : "model_unavailable", code, requestId)));
+        return new StreamingGatewayResult(status, requestId, null, objectMapper.valueToTree(OpenAiError.of(message, errorType(code), code, requestId)));
     }
 }

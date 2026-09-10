@@ -23,7 +23,8 @@ function reasonLabel(code: string) {
     TARGET_DISABLED: 'Target 비활성', DEGRADED_NOT_ALLOWED: 'Degraded 제외', COMPATIBILITY_MISMATCH: '호환성 불일치', CONCURRENCY_LIMIT_REACHED: '동시성 한도',
     EXTERNAL_AUTO_FAILOVER_NOT_ALLOWED: '자동 Failover 미승인', EXTERNAL_MANUAL_ACCESS_NOT_ALLOWED: '수동 사용 미승인', EXTERNAL_PROVIDER_UNHEALTHY: 'Provider 비정상',
     EXTERNAL_PROVIDER_DISABLED: 'Provider 비활성', EXTERNAL_PROVIDER_MISSING: 'Provider 없음', EXTERNAL_ACCESS_UNAVAILABLE: '외부 권한 확인 불가', EXTERNAL_PROJECT_REQUIRED: '프로젝트 정보 없음',
-    UPSTREAM_REJECTED: 'Provider 요청 거부', RUNTIME_UNAVAILABLE: 'Runtime 응답 없음', STREAM_START_FAILED: '스트림 시작 실패', MODEL_AT_CAPACITY: '모델 처리 한도', DATA_POLICY_BLOCKED: '데이터 보호 정책 차단', DATA_PROTECTION_EXTERNAL_BLOCKED: '외부 전송 차단', DATA_PROTECTION_EXTERNAL_FAILOVER_BLOCKED: '외부 Failover 차단'
+    UPSTREAM_REJECTED: 'Provider 요청 거부', RUNTIME_UNAVAILABLE: 'Runtime 응답 없음', STREAM_START_FAILED: '스트림 시작 실패', MODEL_AT_CAPACITY: '모델 처리 한도', DATA_POLICY_BLOCKED: '데이터 보호 정책 차단', DATA_PROTECTION_EXTERNAL_BLOCKED: '외부 전송 차단', DATA_PROTECTION_EXTERNAL_FAILOVER_BLOCKED: '외부 Failover 차단',
+    CONTEXT_LENGTH_EXCEEDED: '컨텍스트 한도 초과', INPUT_TOKEN_LIMIT_EXCEEDED: '입력 토큰 한도 초과', OUTPUT_TOKEN_LIMIT_EXCEEDED: '출력 토큰 한도 초과', REQUEST_FORMAT_UNSUPPORTED: '요청 형식 미지원', AUTHENTICATION_FAILED: 'Provider 인증 실패', MODEL_NOT_FOUND: 'Provider 모델 없음', RATE_LIMITED: 'Provider 사용량 한도', REQUEST_TIMEOUT: 'Provider 응답 시간 초과', UPSTREAM_UNAVAILABLE: 'Provider 일시 장애'
   }
   return labels[code] ?? code
 }
@@ -62,6 +63,14 @@ function targetState(target: NonNullable<RequestDetail['diagnostic']>['targets']
             <strong>{{ detail.diagnostic.summary }}</strong>
             <span>최종 코드 {{ detail.diagnostic.finalCode }} · HTTP {{ detail.diagnostic.httpStatus ?? detail.httpStatus ?? '-' }} · 시도 {{ detail.diagnostic.attemptedCount }}회</span>
           </div>
+          <div v-if="detail.diagnostic.failure?.message || detail.diagnostic.failure?.providerMessage" class="diagnostic-failure">
+            <strong>실패 원인: {{ reasonLabel(detail.diagnostic.failure?.code ?? detail.diagnostic.finalCode) }}</strong>
+            <p v-if="detail.diagnostic.failure?.message">{{ detail.diagnostic.failure.message }}</p>
+            <small v-if="detail.diagnostic.failure?.providerMessage">Provider 원문 요약: {{ detail.diagnostic.failure.providerMessage }}</small>
+            <small>다음 Target 전환: {{ detail.diagnostic.failure?.failoverAllowed ? '허용됨' : '정책상 허용되지 않음' }}</small>
+          </div>
+          <div class="diagnostic-profile-token"><small>예상 입력 토큰</small><strong>{{ (detail.diagnostic.request.estimatedInputTokens ?? 0).toLocaleString('ko-KR') }}</strong></div>
+          <div class="diagnostic-profile-token"><small>요청 출력 한도</small><strong>{{ (detail.diagnostic.request.requestedOutputTokens ?? 0).toLocaleString('ko-KR') }}</strong></div>
           <div class="diagnostic-profile">
             <div><small>요청 모델</small><strong class="mono">{{ detail.diagnostic.request.logicalModel ?? detail.serviceKey ?? '-' }}</strong></div>
             <div><small>요청 기능</small><strong>{{ detail.diagnostic.request.capabilities.join(' · ') || 'TEXT' }}</strong></div>
@@ -136,7 +145,8 @@ function targetState(target: NonNullable<RequestDetail['diagnostic']>['targets']
             <span>{{ formatRequestDuration(attempt.latencyMs) }}</span>
             <span>HTTP {{ attempt.httpStatus ?? '-' }}</span>
             <span v-if="attempt.errorType" class="request-attempt-error">{{ attempt.errorType }}</span>
-            <span v-else>{{ attempt.responseStarted ? '응답 시작' : '응답 없음' }}</span>
+            <span v-if="attempt.errorMessage" class="request-attempt-message">{{ attempt.errorMessage }}</span>
+            <span v-if="!attempt.errorType && !attempt.errorMessage">{{ attempt.responseStarted ? '응답 시작' : '응답 없음' }}</span>
           </div>
         </div>
       </section>
@@ -183,11 +193,15 @@ function targetState(target: NonNullable<RequestDetail['diagnostic']>['targets']
 .request-attempt strong, .request-attempt small { display: block; }
 .request-attempt strong { color: var(--text); font-size: 10px; }
 .request-attempt small { margin-top: 3px; color: var(--faint); }
-.request-attempt-error { color: var(--danger); }
+.request-attempt-error, .request-attempt-message { color: var(--danger); overflow-wrap: anywhere; }
 .request-detail-privacy { padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
 .request-detail-privacy strong { font-size: 10px; }
 .request-detail-privacy p { margin: 5px 0 0; color: var(--muted); font-size: 9px; line-height: 1.6; }
 .request-detail-error { margin: 0; color: var(--danger); font-size: 10px; }
+.diagnostic-failure { display: grid; gap: 5px; padding: 10px; border: 1px solid color-mix(in srgb,var(--danger) 45%,var(--border)); border-radius: 9px; background: color-mix(in srgb,var(--danger) 10%,var(--surface-2)); }
+.diagnostic-failure strong { color: var(--danger); font-size: 10px; }
+.diagnostic-failure p, .diagnostic-failure small { margin: 0; color: var(--muted); font-size: 9px; line-height: 1.5; overflow-wrap: anywhere; }
+.diagnostic-profile-token { display: grid; gap: 4px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
 .diagnostic-panel { display: grid; gap: 10px; padding: 12px; border: 1px solid color-mix(in srgb,var(--danger) 30%,var(--border)); border-radius: 11px; background: color-mix(in srgb,var(--danger) 5%,var(--surface)); }
 .diagnostic-summary { display: grid; gap: 4px; }
 .diagnostic-summary strong { color: var(--text); font-size: 11px; line-height: 1.5; }
