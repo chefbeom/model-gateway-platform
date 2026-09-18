@@ -669,7 +669,7 @@ components:
       required: [nodeId, runtimeType, baseUrl]
       properties:
         nodeId: { type: string, format: uuid }
-        runtimeType: { const: LM_STUDIO }
+        runtimeType: { type: string, enum: [LM_STUDIO, OLLAMA, LLAMA_CPP, OPENAI_COMPATIBLE] }
         baseUrl: { type: string, format: uri, examples: ['http://gpu-node-01:1234'] }
         apiToken: { type: [string, 'null'], writeOnly: true }
     CreateModelDeployment:

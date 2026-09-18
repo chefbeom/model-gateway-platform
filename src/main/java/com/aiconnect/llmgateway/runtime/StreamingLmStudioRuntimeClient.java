@@ -36,7 +36,7 @@ public class StreamingLmStudioRuntimeClient {
 
     public StreamingRuntimeResult chatCompletion(RuntimeEndpoint endpoint, JsonNode requestBody) {
         try {
-            HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(endpoint.getBaseUrl() + "/v1/chat/completions"))
+            HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(RuntimeUrl.openAi(endpoint.getBaseUrl(), "/chat/completions")))
                     .timeout(Duration.ofMillis(properties.responseTimeoutMs()))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(requestBody)));

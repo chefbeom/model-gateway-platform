@@ -43,13 +43,13 @@ public class RuntimeEndpoint {
 
     public RuntimeEndpoint(UUID nodeId, String displayName, RuntimeType runtimeType, String baseUrl, String apiToken) {
         this.nodeId = nodeId;
-        this.displayName = displayName == null || displayName.isBlank() ? "LM Studio Runtime" : displayName.trim();
+        this.displayName = displayName == null || displayName.isBlank() ? (runtimeType == null ? "AI Runtime" : runtimeType.displayName() + " Runtime") : displayName.trim();
         this.runtimeType = runtimeType;
         this.baseUrl = stripTrailingSlash(baseUrl);
         this.encryptedApiToken = apiToken;
     }
     public RuntimeEndpoint(UUID nodeId, RuntimeType runtimeType, String baseUrl, String apiToken) {
-        this(nodeId, "LM Studio Runtime", runtimeType, baseUrl, apiToken);
+        this(nodeId, null, runtimeType, baseUrl, apiToken);
     }
 
     public RuntimeEndpoint(UUID nodeId, String displayName, RuntimeType runtimeType, String baseUrl, String apiToken,
@@ -89,6 +89,13 @@ public class RuntimeEndpoint {
         }
     }
 
+    public void configure(String displayName, String baseUrl, RuntimeType runtimeType, String encryptedApiToken,
+                          boolean replaceApiToken, boolean clearApiToken, Boolean enabled, boolean clearPricing,
+                          BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Currency currency) {
+        configure(displayName, baseUrl, encryptedApiToken, replaceApiToken, clearApiToken, enabled,
+                clearPricing, inputPricePerMillion, outputPricePerMillion, currency);
+        if (runtimeType != null) this.runtimeType = runtimeType;
+    }
     public void configurePricing(BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Currency currency) {
         if (inputPricePerMillion != null) this.inputPricePerMillion = inputPricePerMillion;
         if (outputPricePerMillion != null) this.outputPricePerMillion = outputPricePerMillion;

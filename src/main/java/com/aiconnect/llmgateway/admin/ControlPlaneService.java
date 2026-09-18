@@ -157,7 +157,7 @@ public class ControlPlaneService {
             return healthy
                     ? new ProbeResult(true, result.statusCode(), modelIds(discovered), null)
                     : new ProbeResult(false, result.statusCode(), modelIds(discovered),
-                    "LM Studio returned HTTP " + result.statusCode() + ".");
+                    runtimeLabel(endpoint) + " returned HTTP " + result.statusCode() + ".");
         } catch (RuntimeUnavailableException exception) {
             endpoint.recordHealth(false);
             endpoints.save(endpoint);
@@ -277,6 +277,10 @@ public class ControlPlaneService {
         for (ModelDeployment deployment : deployments.findByRuntimeEndpointId(endpoint.getId())) {
             deployment.recordHealth(healthy && loaded.contains(deployment.getProviderModelId()));
         }
+    }
+
+    private String runtimeLabel(RuntimeEndpoint endpoint) {
+        return endpoint.getRuntimeType() == null ? "Runtime" : endpoint.getRuntimeType().displayName();
     }
 
     private List<String> modelIds(List<DiscoveredRuntimeModel> discovered) {

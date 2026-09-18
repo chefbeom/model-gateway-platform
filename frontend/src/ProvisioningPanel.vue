@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { adminFetch, type AdminAuth, type Deployment } from './api'
+import { adminFetch, type AdminAuth, type Deployment, type RuntimeType } from './api'
 
 type OrganizationOption = { id: string; name: string; status: string }
 type ProjectOption = { id: string; organizationId: string; name: string; status: string }
@@ -13,6 +13,7 @@ const projectId = ref(sessionStorage.getItem('aiconnect.setup.projectId') ?? '')
 const projects = ref<ProjectOption[]>([])
 const nodeName = ref('gpu-node-01')
 const nodeId = ref(sessionStorage.getItem('aiconnect.setup.nodeId') ?? '')
+const runtimeType = ref<RuntimeType>('LM_STUDIO')
 const baseUrl = ref('http://gpu-node-01:1234')
 const runtimeToken = ref('')
 const endpointId = ref(sessionStorage.getItem('aiconnect.setup.endpointId') ?? '')
@@ -87,12 +88,12 @@ async function createNode() {
   await run(async () => { const created = await adminFetch<{ id: string }>('/api/admin/nodes', auth(), { method: 'POST', body: JSON.stringify({ organizationId: organizationId.value, name: nodeName.value, connectionMode: 'DIRECT' }) }); nodeId.value = created.id; save('nodeId', created.id) }, '추론 노드를 생성했습니다.')
 }
 async function createEndpoint() {
-  await run(async () => { const created = await adminFetch<{ id: string }>('/api/admin/runtime-endpoints', auth(), { method: 'POST', body: JSON.stringify({ nodeId: nodeId.value, runtimeType: 'LM_STUDIO', baseUrl: baseUrl.value, apiToken: runtimeToken.value || null }) }); endpointId.value = created.id; runtimeToken.value = ''; save('endpointId', created.id) }, 'LM Studio Runtime Endpoint를 등록했습니다.')
+  await run(async () => { const created = await adminFetch<{ id: string }>('/api/admin/runtime-endpoints', auth(), { method: 'POST', body: JSON.stringify({ nodeId: nodeId.value, runtimeType: runtimeType.value, baseUrl: baseUrl.value, apiToken: runtimeToken.value || null }) }); endpointId.value = created.id; runtimeToken.value = ''; save('endpointId', created.id) }, 'Runtime Endpoint를 등록했습니다.')
 }
 async function synchronizeModels() {
   await run(async () => {
     const probe = await adminFetch<{ reachable: boolean }>(`/api/admin/runtime-endpoints/${endpointId.value}/probe`, auth(), { method: 'POST' })
-    if (!probe.reachable) throw new Error('LM Studio에 연결할 수 없습니다. Tailscale 주소와 토큰을 확인하세요.')
+    if (!probe.reachable) throw new Error(runtimeType.value + ' endpoint is unreachable. Check the address and token.')
     await adminFetch(`/api/admin/runtime-endpoints/${endpointId.value}/sync-models`, auth(), { method: 'POST' })
     deployments.value = await adminFetch<Deployment[]>(`/api/admin/runtime-endpoints/${endpointId.value}/deployments`, auth())
     if (deployments.value.length && !deploymentId.value) { deploymentId.value = deployments.value[0].id; save('deploymentId', deploymentId.value) }
@@ -121,13 +122,13 @@ async function issueKey() {
 <template>
   <main class="setup-main">
     <section class="setup-shell">
-      <div><p class="eyebrow">CONTROL PLANE</p><h2>초기 구성</h2><p>GPU 종류를 선택하지 않고 LM Studio Runtime과 발견된 모델을 논리 서비스에 연결합니다.</p></div>
+      <div><p class="eyebrow">CONTROL PLANE</p><h2>초기 구성</h2><p>GPU 종류를 선택하지 않고 AI Runtime과 발견된 모델을 논리 서비스에 연결합니다.</p></div>
       <p class="notice">{{ message }}</p>
       <div class="steps">
         <article><span>1</span><h3>조직</h3><input v-model="organizationName" placeholder="조직 이름" /><select v-model="organizationId" @change="selectOrganization"><option value="">조직 선택</option><option v-for="item in organizations" :key="item.id" :value="item.id">{{ item.name }} · {{ item.status }}</option></select><input v-model="organizationId" placeholder="Organization UUID" /><div class="inline-actions"><button :disabled="busy" @click="loadOrganizations">목록 조회</button><button :disabled="busy || !organizationName" @click="createOrganization">조직 생성</button></div></article>
         <article><span>2</span><h3>프로젝트</h3><input v-model="projectName" placeholder="프로젝트 이름" /><select v-model="projectId" @change="selectProject"><option value="">프로젝트 선택</option><option v-for="item in projects" :key="item.id" :value="item.id">{{ item.name }} · {{ item.status }}</option></select><input v-model="projectId" placeholder="Project UUID" /><div class="inline-actions"><button :disabled="busy || !organizationId" @click="loadProjects">목록 조회</button><button :disabled="busy || !organizationId" @click="createProject">프로젝트 생성</button></div></article>
         <article><span>3</span><h3>추론 노드</h3><input v-model="nodeName" placeholder="노드 이름" /><input v-model="nodeId" placeholder="Node UUID" /><button :disabled="busy || !organizationId" @click="createNode">노드 생성</button></article>
-        <article><span>4</span><h3>LM Studio</h3><input v-model="baseUrl" placeholder="Tailscale URL :1234" /><input v-model="runtimeToken" type="password" placeholder="LM Studio API Token" /><input v-model="endpointId" placeholder="Endpoint UUID" /><button :disabled="busy || !nodeId || !baseUrl" @click="createEndpoint">Endpoint 등록</button></article>
+        <article><span>4</span><h3>AI Runtime</h3><select v-model="runtimeType"><option value="LM_STUDIO">LM Studio</option><option value="OLLAMA">Ollama</option><option value="LLAMA_CPP">llama.cpp</option><option value="OPENAI_COMPATIBLE">OpenAI compatible</option></select><input v-model="baseUrl" placeholder="Runtime URL" /><input v-model="runtimeToken" type="password" placeholder="Runtime API Token" /><input v-model="endpointId" placeholder="Endpoint UUID" /><button :disabled="busy || !nodeId || !baseUrl" @click="createEndpoint">Endpoint 등록</button></article>
         <article><span>5</span><h3>모델 발견</h3><select v-model="deploymentId"><option value="">Deployment 선택</option><option v-for="item in deployments" :key="item.id" :value="item.id">{{ item.displayName }}</option></select><input v-model="deploymentId" placeholder="Deployment UUID" /><button :disabled="busy || !endpointId" @click="synchronizeModels">Probe + 동기화</button></article>
         <article><span>6</span><h3>논리 서비스</h3><input v-model="serviceKey" placeholder="model 값 (text-pro)" /><input v-model="serviceName" placeholder="표시 이름" /><select v-model="failoverPolicy"><option value="STRICT">STRICT · 동일 호환 그룹만</option><option value="COMPATIBLE">COMPATIBLE · 승인된 모델</option><option value="DEGRADED">DEGRADED · 저성능 대상 포함</option></select><select v-model="retryPolicy"><option value="SAFE">SAFE · 연결 전 실패만 재시도</option><option value="AGGRESSIVE">AGGRESSIVE · 5xx/타임아웃도 재시도</option></select><label><input v-model="allowDegraded" type="checkbox" /> 성능 저하 대체 대상 허용</label><div class="prices"><select v-model="currency"><option value="KRW">원화 (KRW)</option><option value="USD">달러 (USD)</option></select><input v-model.number="inputPrice" type="number" min="0" step="0.000001" :placeholder="`입력 / 1M 토큰 (${currency === 'USD' ? '$' : '₩'})`" /><input v-model.number="outputPrice" type="number" min="0" step="0.000001" :placeholder="`출력 / 1M 토큰 (${currency === 'USD' ? '$' : '₩'})`" /></div><input v-model="serviceId" placeholder="Service UUID" /><button :disabled="busy || !organizationId" @click="createService">서비스 생성</button></article>
         <article><span>7</span><h3>라우팅·권한</h3><p>선택한 배포를 Priority 1로 연결하고 프로젝트에 사용 권한을 부여합니다.</p><button :disabled="busy || !serviceId || !deploymentId || !projectId" @click="connectService">Target + Access 연결</button></article>

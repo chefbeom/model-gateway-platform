@@ -4,6 +4,7 @@ import com.aiconnect.llmgateway.domain.InferenceNode;
 import com.aiconnect.llmgateway.domain.ModelDeployment;
 import com.aiconnect.llmgateway.domain.Currency;
 import com.aiconnect.llmgateway.domain.RuntimeEndpoint;
+import com.aiconnect.llmgateway.domain.RuntimeType;
 import com.aiconnect.llmgateway.identity.AuditService;
 import com.aiconnect.llmgateway.identity.CurrentActor;
 import com.aiconnect.llmgateway.repository.InferenceNodeRepository;
@@ -60,7 +61,7 @@ public class EndpointAdministrationService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "RUNTIME_TOKEN_UPDATE_INVALID", "Set a new token or clear the existing token, not both.");
         }
         boolean replaceToken = command.apiToken() != null && !command.apiToken().isBlank();
-        endpoint.configure(command.displayName(), baseUrl, replaceToken ? cipher.encrypt(command.apiToken()) : null, replaceToken,
+        endpoint.configure(command.displayName(), baseUrl, command.runtimeType(), replaceToken ? cipher.encrypt(command.apiToken()) : null, replaceToken,
                 command.clearApiToken(), command.enabled(), command.clearPricing(), command.inputPricePerMillion(), command.outputPricePerMillion(), command.currency());
         RuntimeEndpoint saved = endpoints.save(endpoint);
         InferenceNode node = node(saved.getNodeId());
@@ -111,7 +112,7 @@ public class EndpointAdministrationService {
         }
     }
 
-    public record UpdateCommand(String displayName, String baseUrl, String apiToken, boolean clearApiToken, Boolean enabled, boolean clearPricing, BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Currency currency) { }
+    public record UpdateCommand(String displayName, String baseUrl, RuntimeType runtimeType, String apiToken, boolean clearApiToken, Boolean enabled, boolean clearPricing, BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Currency currency) { }
 
     public record EndpointDetail(UUID id, UUID nodeId, String displayName, String nodeName, String nodeDescription, String runtimeType,
                                  String baseUrl, boolean enabled, String healthStatus, String lastCheckedAt,

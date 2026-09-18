@@ -145,6 +145,7 @@ const availableVariants = computed(() => variantsFor(selectedDeployment.value))
 const activeVariant = computed(() => selectedVariantFor(selectedDeployment.value))
 const variantMismatch = computed(() => availableVariants.value.length > 1 && Boolean(command.value.variantKey) && Boolean(activeVariant.value) && command.value.variantKey !== activeVariant.value)
 const selectedCapabilities = computed(() => capabilityList(selectedDeployment.value))
+const nativeModelManagement = computed(() => props.endpoint.runtimeType === 'LM_STUDIO')
 
 function bytes(value: number) {
   if (!value) return '확인 불가'
@@ -229,21 +230,21 @@ onMounted(refresh)
 
 <template>
   <section class="model-operations">
-    <div class="section-divider"><span>MODEL OPERATIONS</span><div class="operation-actions"><button class="secondary-button" :disabled="busy" @click="openLoad()">모델 로드 설정</button><button class="text-button" :disabled="busy" @click="downloadOpen = true">다운로드 요청</button></div></div>
+    <div class="section-divider"><span>MODEL OPERATIONS</span><div class="operation-actions"><button class="secondary-button" :disabled="busy || !nativeModelManagement" @click="openLoad()">모델 로드 설정</button><button class="text-button" :disabled="busy || !nativeModelManagement" @click="downloadOpen = true">다운로드 요청</button></div></div>
     <p v-if="message" class="inline-alert">{{ message }}</p>
     <div class="operation-grid">
       <article class="operation-card">
         <header><div><span class="card-kicker">SAFE CONTROL</span><h3>메모리 모델 상태</h3></div><button class="text-button" :disabled="busy" @click="refresh">새로고침</button></header>
-        <div v-if="deployments.length" class="model-state-list"><div v-for="deployment in deployments" :key="deployment.id" class="model-state-row"><div><strong>{{ deployment.displayName }}</strong><small class="mono">{{ deployment.providerModelId }}</small><small class="variant-summary">{{ deploymentVariants(deployment) }}</small></div><div class="state-actions"><span class="status-chip tiny" :class="deployment.loaded ? 'healthy' : 'unknown'">{{ deployment.loaded ? 'LOADED' : 'NOT LOADED' }}</span><button class="text-button" :disabled="busy" @click="deployment.loaded ? unload(deployment.providerModelId) : openLoad(deployment.providerModelId)">{{ deployment.loaded ? '언로드' : '로드' }}</button></div></div></div>
+        <div v-if="deployments.length" class="model-state-list"><div v-for="deployment in deployments" :key="deployment.id" class="model-state-row"><div><strong>{{ deployment.displayName }}</strong><small class="mono">{{ deployment.providerModelId }}</small><small class="variant-summary">{{ deploymentVariants(deployment) }}</small></div><div class="state-actions"><span class="status-chip tiny" :class="deployment.loaded ? 'healthy' : 'unknown'">{{ deployment.loaded ? 'LOADED' : 'NOT LOADED' }}</span><button class="text-button" :disabled="busy || !nativeModelManagement" @click="deployment.loaded ? unload(deployment.providerModelId) : openLoad(deployment.providerModelId)">{{ deployment.loaded ? '언로드' : '로드' }}</button></div></div></div>
         <p v-else class="field-help">먼저 ‘모델 동기화’를 실행하면 이 Runtime에서 발견된 모델을 선택할 수 있습니다.</p>
       </article>
       <article class="operation-card">
         <header><div><span class="card-kicker">CONFIGURATION PROFILES</span><h3>저장된 로드 프로필</h3></div><span class="count-badge">{{ profiles.length }}</span></header>
-        <div v-if="profiles.length" class="profile-list"><div v-for="profile in profiles" :key="profile.id"><div><strong>{{ profile.name }}</strong><small class="mono">{{ profile.modelKey }}</small></div><button class="text-button" :disabled="busy" @click="applyProfile(profile)">적용</button></div></div>
+        <div v-if="profiles.length" class="profile-list"><div v-for="profile in profiles" :key="profile.id"><div><strong>{{ profile.name }}</strong><small class="mono">{{ profile.modelKey }}</small></div><button class="text-button" :disabled="busy || !nativeModelManagement" @click="applyProfile(profile)">적용</button></div></div>
         <p v-else class="field-help">모델 변형과 로딩 설정을 프로필로 저장할 수 있습니다.</p>
       </article>
     </div>
-    <article class="agentless-note"><strong>네이티브 REST 적용 범위</strong><span>Context Length, Evaluation Batch Size, Flash Attention, MoE Expert 수, KV Cache GPU Offload는 LM Studio native v1 API로 적용합니다. GPU 비율, TTL과 나머지 고급 항목은 프로필에 저장하고 Node Agent·CLI·SDK 연결이 준비되면 적용할 수 있도록 상태를 표시합니다.</span></article>
+    <article class="agentless-note"><strong>네이티브 REST 적용 범위</strong><span v-if="nativeModelManagement">Context Length, Evaluation Batch Size, Flash Attention, MoE Expert 수, KV Cache GPU Offload는 LM Studio native v1 API로 적용합니다. GPU 비율, TTL과 나머지 고급 항목은 프로필에 저장하고 Node Agent·CLI·SDK 연결이 준비되면 적용할 수 있도록 상태를 표시합니다.</span><span v-if="!nativeModelManagement">This Runtime manages model loading in its own server process. Prepare the model there, then run model synchronization.</span></article>
     <article class="operation-card operation-history"><header><div><span class="card-kicker">AUDIT TRAIL</span><h3>최근 모델 작업</h3></div></header><div v-if="operations.length" class="history-list"><div v-for="operation in operations.slice(0, 6)" :key="operation.id"><span class="status-chip tiny" :class="operation.status === 'SUCCEEDED' ? 'healthy' : operation.status === 'FAILED' ? 'unhealthy' : 'suspect'">{{ operation.status }}</span><strong>{{ operation.operationType }} · {{ operation.modelKey }}</strong><small>{{ operation.message || '처리 중' }} · {{ new Date(operation.createdAt).toLocaleString() }}</small></div></div><p v-else class="field-help">아직 기록된 모델 작업이 없습니다.</p></article>
 
     <BaseModal :open="loadOpen" title="LM Studio 모델 로드 설정" description="모델 파일 변형과 LM Studio 로딩 옵션을 한 곳에서 관리합니다. 적용되지 않는 항목은 사전 점검에서 명확히 안내합니다." size="lg" @close="loadOpen = false">

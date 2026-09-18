@@ -1,6 +1,7 @@
 package com.aiconnect.llmgateway.admin;
 
 import com.aiconnect.llmgateway.domain.Currency;
+import com.aiconnect.llmgateway.domain.RuntimeType;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Size;
@@ -34,7 +35,7 @@ public class EndpointAdministrationController {
     @PatchMapping
     public AdminController.EndpointView update(@PathVariable UUID endpointId, @Valid @RequestBody UpdateEndpoint request) {
         return AdminController.EndpointView.from(service.update(endpointId,
-                new EndpointAdministrationService.UpdateCommand(request.displayName(), request.baseUrl(), request.apiToken(), request.clearApiToken(), request.enabled(), request.clearPricing(), request.inputPricePerMillion(), request.outputPricePerMillion(), request.currency())));
+                new EndpointAdministrationService.UpdateCommand(request.displayName(), request.baseUrl(), request.runtimeType(), request.apiToken(), request.clearApiToken(), request.enabled(), request.clearPricing(), request.inputPricePerMillion(), request.outputPricePerMillion(), request.currency())));
     }
 
     @DeleteMapping
@@ -43,6 +44,6 @@ public class EndpointAdministrationController {
         service.archive(endpointId);
     }
 
-    public record UpdateEndpoint(@Size(max = 160) String displayName, @Size(max = 500) String baseUrl, @Size(max = 2000) String apiToken,
+    public record UpdateEndpoint(@Size(max = 160) String displayName, @Size(max = 500) String baseUrl, RuntimeType runtimeType, @Size(max = 2000) String apiToken,
                                  boolean clearApiToken, Boolean enabled, boolean clearPricing, @DecimalMin("0") BigDecimal inputPricePerMillion, @DecimalMin("0") BigDecimal outputPricePerMillion, Currency currency) { }
 }

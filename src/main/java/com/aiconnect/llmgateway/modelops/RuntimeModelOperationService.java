@@ -3,6 +3,7 @@ package com.aiconnect.llmgateway.modelops;
 import com.aiconnect.llmgateway.admin.ControlPlaneService;
 import com.aiconnect.llmgateway.domain.ModelDeployment;
 import com.aiconnect.llmgateway.domain.RuntimeEndpoint;
+import com.aiconnect.llmgateway.domain.RuntimeType;
 import com.aiconnect.llmgateway.repository.ModelDeploymentRepository;
 import com.aiconnect.llmgateway.repository.RuntimeEndpointRepository;
 import com.aiconnect.llmgateway.routing.ActiveRequestRegistry;
@@ -51,8 +52,9 @@ public class RuntimeModelOperationService {
     @Transactional(readOnly = true)
     public PreflightResult preflight(UUID endpointId, LoadCommand command) {
         RuntimeEndpoint endpoint = endpoint(endpointId);
+        requireNativeManagement(endpoint);
         RuntimeResult result = models.list(endpoint);
-        if (!result.isSuccessful()) throw rejected("MODEL_LIST_FAILED", "LM Studio rejected the model list request.");
+        if (!result.isSuccessful()) throw rejected("MODEL_LIST_FAILED", runtimeLabel(endpoint) + " rejected the model list request.");
         JsonNode model = findModel(result.body().path("models"), command.modelKey(), command.variantKey());
         if (model == null) throw rejected("MODEL_NOT_AVAILABLE", "The requested model is not downloaded on this runtime.");
 
@@ -134,12 +136,13 @@ public class RuntimeModelOperationService {
     @Transactional
     public RuntimeModelOperation download(UUID endpointId, String modelKey, String quantization) {
         RuntimeEndpoint endpoint = endpoint(endpointId);
+        requireNativeManagement(endpoint);
         ObjectNode request = mapper.createObjectNode().put("model", modelKey);
         if (quantization != null && !quantization.isBlank()) request.put("quantization", quantization);
         RuntimeModelOperation operation = operations.save(new RuntimeModelOperation(endpointId, null, modelKey, "DOWNLOAD", json(request)));
         try {
             RuntimeResult result = models.download(endpoint, request);
-            if (!result.isSuccessful()) operation.fail(failureMessage(result));
+            if (!result.isSuccessful()) operation.fail(failureMessage(endpoint, result));
             else operation.complete(json(result.body()), result.body().path("status").asText("Download requested."));
         } catch (RuntimeException exception) {
             operation.fail(exception.getMessage());
@@ -149,11 +152,14 @@ public class RuntimeModelOperationService {
 
     @Transactional(readOnly = true)
     public RuntimeResult downloadStatus(UUID endpointId, String jobId) {
-        return models.downloadStatus(endpoint(endpointId), jobId);
+        RuntimeEndpoint endpoint = endpoint(endpointId);
+        requireNativeManagement(endpoint);
+        return models.downloadStatus(endpoint, jobId);
     }
 
     private RuntimeModelOperation apply(UUID endpointId, LoadCommand command, UUID profileId, String type, boolean safe) {
         RuntimeEndpoint endpoint = endpoint(endpointId);
+        requireNativeManagement(endpoint);
         JsonNode model = null;
         String warmupModelKey = command.modelKey();
         List<String> preflightWarnings = List.of();
@@ -165,7 +171,7 @@ public class RuntimeModelOperationService {
                 throw rejected("MODEL_CONFIGURATION_INCOMPATIBLE", detail);
             }
             RuntimeResult listing = models.list(endpoint);
-            if (!listing.isSuccessful()) throw rejected("MODEL_LIST_FAILED", "LM Studio rejected the model list request.");
+            if (!listing.isSuccessful()) throw rejected("MODEL_LIST_FAILED", runtimeLabel(endpoint) + " rejected the model list request.");
             model = findModel(listing.body().path("models"), command.modelKey(), command.variantKey());
             if (model == null) throw rejected("MODEL_NOT_AVAILABLE", "The requested model is not downloaded on this runtime.");
             warmupModelKey = text(model, "key", command.modelKey());
@@ -185,7 +191,7 @@ public class RuntimeModelOperationService {
             }
             RuntimeResult result = "LOAD".equals(type) ? models.load(endpoint, request) : models.unload(endpoint, request);
             if (!result.isSuccessful()) {
-                operation.fail(failureMessage(result));
+                operation.fail(failureMessage(endpoint, result));
                 return operations.save(operation);
             }
             // The runtime response may assign a new loaded instance ID. Pass the
@@ -250,10 +256,10 @@ public class RuntimeModelOperationService {
         return combined.length() <= 1000 ? combined : combined.substring(0, 997) + "...";
     }
 
-    private String failureMessage(RuntimeResult result) {
+    private String failureMessage(RuntimeEndpoint endpoint, RuntimeResult result) {
         String detail = result.body().path("error").path("message").asText("");
         if (detail.isBlank()) detail = result.body().path("message").asText("");
-        return "LM Studio returned HTTP " + result.statusCode() + (detail.isBlank() ? "" : ": " + detail);
+        return runtimeLabel(endpoint) + " returned HTTP " + result.statusCode() + (detail.isBlank() ? "" : ": " + detail);
     }
 
     private void put(ObjectNode node, String key, Integer value) {
@@ -298,6 +304,16 @@ public class RuntimeModelOperationService {
 
     private RuntimeEndpoint endpoint(UUID id) {
         return endpoints.findById(id).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ENDPOINT_NOT_FOUND", "The runtime endpoint does not exist."));
+    }
+
+    private String runtimeLabel(RuntimeEndpoint endpoint) {
+        return endpoint.getRuntimeType() == null ? "Runtime" : endpoint.getRuntimeType().displayName();
+    }
+
+    private void requireNativeManagement(RuntimeEndpoint endpoint) {
+        if ((endpoint.getRuntimeType() == null ? RuntimeType.LM_STUDIO : endpoint.getRuntimeType()) != RuntimeType.LM_STUDIO) {
+            throw rejected("RUNTIME_MODEL_MANAGEMENT_UNSUPPORTED", (endpoint.getRuntimeType() == null ? RuntimeType.LM_STUDIO : endpoint.getRuntimeType()).displayName() + " model loading is managed by its server process, not by the LM Studio management API.");
+        }
     }
 
     private ApiException rejected(String code, String message) {
