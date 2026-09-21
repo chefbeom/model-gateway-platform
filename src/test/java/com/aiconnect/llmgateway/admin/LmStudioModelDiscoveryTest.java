@@ -63,4 +63,24 @@ class LmStudioModelDiscoveryTest {
         assertThat(model.loaded()).isTrue();
         assertThat(model.capabilitiesJson()).contains("VISION", "TOOL_CALLING");
     }
+
+    @Test
+    void prefersOpenAiDataWhenLlamaCppReturnsBothModelsAndDataArrays() throws Exception {
+        String json = """
+                {"models":[{"name":"/opt/llm/models/gemma.gguf","model":"/opt/llm/models/gemma.gguf","type":"model","capabilities":["completion"]}],
+                 "object":"list",
+                 "data":[{"id":"/opt/llm/models/gemma.gguf","object":"model","owned_by":"llamacpp",
+                   "meta":{"n_ctx":8192,"n_ctx_train":262144,"ftype":"Q4_0","families":[""]}}]}
+                """;
+
+        var models = discovery.discover(objectMapper.readTree(json));
+
+        assertThat(models).hasSize(1);
+        DiscoveredRuntimeModel model = models.get(0);
+        assertThat(model.providerModelId()).isEqualTo("/opt/llm/models/gemma.gguf");
+        assertThat(model.loaded()).isTrue();
+        assertThat(model.contextLength()).isEqualTo(8192);
+        assertThat(model.quantization()).isEqualTo("Q4_0");
+        assertThat(model.capabilitiesJson()).contains("CHAT_COMPLETION", "STREAMING");
+    }
 }

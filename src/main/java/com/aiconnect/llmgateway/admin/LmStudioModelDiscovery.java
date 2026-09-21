@@ -19,8 +19,15 @@ public class LmStudioModelDiscovery {
 
     public List<DiscoveredRuntimeModel> discover(JsonNode body) {
         if (body == null) return List.of();
+        // Some OpenAI-compatible servers (including llama.cpp) return both a
+        // provider-specific "models" array and the canonical OpenAI "data"
+        // array. Prefer the canonical list when it contains usable model IDs;
+        // the provider-specific entries may not use LM Studio key fields.
+        if (body.path("data").isArray()) {
+            List<DiscoveredRuntimeModel> compatible = discoverCompatibleList(body.path("data"));
+            if (!compatible.isEmpty() || !body.path("models").isArray()) return compatible;
+        }
         if (body.path("models").isArray()) return discoverNativeV1(body.path("models"));
-        if (body.path("data").isArray()) return discoverCompatibleList(body.path("data"));
         return List.of();
     }
 
@@ -59,14 +66,26 @@ public class LmStudioModelDiscovery {
             String state = text(model, "state", "loaded");
             boolean loaded = !"not-loaded".equalsIgnoreCase(state) && !"unloaded".equalsIgnoreCase(state);
             Set<String> capabilities = compatibleCapabilities(model);
+            JsonNode metadata = model.path("meta");
+            String family = text(model, "arch", firstNonBlank(metadata.path("families")));
+            String quantization = text(model, "quantization", text(metadata, "ftype", null));
+            Integer contextLength = positiveInt(model.path("max_context_length"),
+                    positiveInt(model.path("context_length"), positiveInt(metadata.path("n_ctx"), null)));
             discovered.add(new DiscoveredRuntimeModel(id, id, text(model, "display_name", id),
-                    text(model, "arch", null), text(model, "quantization", null),
-                    positiveInt(model.path("max_context_length"), null), loaded, 1,
+                    family, quantization, contextLength, loaded, 1,
                     json(capabilities), json(model)));
         }
         return discovered;
     }
 
+    private String firstNonBlank(JsonNode values) {
+        if (!values.isArray()) return null;
+        for (JsonNode value : values) {
+            String text = value.asText("").trim();
+            if (!text.isBlank()) return text;
+        }
+        return null;
+    }
     private Set<String> nativeCapabilities(JsonNode model) {
         Set<String> result = new LinkedHashSet<>();
         if ("embedding".equalsIgnoreCase(text(model, "type", ""))) {
@@ -109,7 +128,8 @@ public class LmStudioModelDiscovery {
 
     private Integer positiveInt(JsonNode node, Integer fallback) {
         int value = node.asInt(0);
-        return value > 0 ? value : fallback;
+        if (value > 0) return value;
+        return fallback;
     }
 
     private String json(Object value) {
