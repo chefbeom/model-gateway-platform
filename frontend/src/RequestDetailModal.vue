@@ -137,16 +137,26 @@ function targetState(target: NonNullable<RequestDetail['diagnostic']>['targets']
         <header><span>ATTEMPTS</span><h4>실행 시도 이력</h4></header>
         <div class="request-attempts">
           <div v-for="attempt in detail.attempts" :key="attempt.attemptNumber" class="request-attempt">
-            <span class="request-attempt-number">#{{ attempt.attemptNumber }}</span>
-            <div>
-              <strong>{{ attempt.status }}</strong>
-              <small class="mono">{{ attempt.deploymentId }}</small>
+            <div class="request-attempt-header">
+              <span class="request-attempt-number">#{{ attempt.attemptNumber }}</span>
+              <div class="request-attempt-deployment">
+                <strong>{{ attempt.status }}</strong>
+                <small class="mono">{{ attempt.deploymentId }}</small>
+              </div>
+              <span class="request-attempt-meta">{{ formatRequestDuration(attempt.latencyMs) }}</span>
+              <span class="request-attempt-meta">HTTP {{ attempt.httpStatus ?? '-' }}</span>
+              <span v-if="attempt.errorType" class="request-attempt-error">
+                <strong>{{ reasonLabel(attempt.errorType) }}</strong>
+                <small class="mono">{{ attempt.errorType }}</small>
+              </span>
+              <span v-if="!attempt.errorType && !attempt.errorMessage" class="request-attempt-outcome">
+                {{ attempt.responseStarted ? '응답 시작' : '응답 없음' }}
+              </span>
             </div>
-            <span>{{ formatRequestDuration(attempt.latencyMs) }}</span>
-            <span>HTTP {{ attempt.httpStatus ?? '-' }}</span>
-            <span v-if="attempt.errorType" class="request-attempt-error">{{ attempt.errorType }}</span>
-            <span v-if="attempt.errorMessage" class="request-attempt-message">{{ attempt.errorMessage }}</span>
-            <span v-if="!attempt.errorType && !attempt.errorMessage">{{ attempt.responseStarted ? '응답 시작' : '응답 없음' }}</span>
+            <div v-if="attempt.errorMessage" class="request-attempt-message">
+              <strong>실패 사유</strong>
+              <p>{{ attempt.errorMessage }}</p>
+            </div>
           </div>
         </div>
       </section>
@@ -188,12 +198,21 @@ function targetState(target: NonNullable<RequestDetail['diagnostic']>['targets']
 .request-detail-route strong { font-size: 10px; }
 .request-detail-route i { color: var(--accent-strong); font-style: normal; }
 .request-attempts { display: grid; gap: 7px; }
-.request-attempt { display: grid; grid-template-columns: 36px minmax(130px,1fr) auto auto minmax(100px,auto); gap: 9px; align-items: center; padding: 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--muted); font-size: 9px; }
+.request-attempt { display: grid; gap: 10px; min-width: 0; padding: 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--muted); font-size: 10px; }
+.request-attempt-header { display: grid; grid-template-columns: 36px minmax(130px,1fr) auto auto minmax(110px,auto); gap: 9px; align-items: center; min-width: 0; }
 .request-attempt-number { color: var(--accent-strong); font-weight: 900; }
-.request-attempt strong, .request-attempt small { display: block; }
-.request-attempt strong { color: var(--text); font-size: 10px; }
-.request-attempt small { margin-top: 3px; color: var(--faint); }
-.request-attempt-error, .request-attempt-message { color: var(--danger); overflow-wrap: anywhere; }
+.request-attempt-deployment { min-width: 0; }
+.request-attempt-header strong, .request-attempt-header small { display: block; }
+.request-attempt-header strong { color: var(--text); font-size: 11px; }
+.request-attempt-header small { margin-top: 3px; color: var(--faint); }
+.request-attempt-meta { white-space: nowrap; }
+.request-attempt-error { display: grid; gap: 3px; justify-self: start; max-width: 100%; padding: 5px 8px; border: 1px solid color-mix(in srgb,var(--danger) 35%,var(--border)); border-radius: 7px; background: color-mix(in srgb,var(--danger) 8%,var(--surface-2)); color: var(--danger); }
+.request-attempt-error strong { color: var(--danger); font-size: 10px; }
+.request-attempt-error small { color: var(--muted); font-size: 8px; overflow-wrap: anywhere; }
+.request-attempt-outcome { color: var(--accent-strong); }
+.request-attempt-message { display: grid; gap: 5px; min-width: 0; padding: 10px 12px; border-left: 3px solid var(--danger); border-radius: 0 8px 8px 0; background: color-mix(in srgb,var(--danger) 7%,var(--surface-2)); }
+.request-attempt-message strong { color: var(--danger); font-size: 10px; }
+.request-attempt-message p { margin: 0; color: var(--text); font-size: 12px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; word-break: keep-all; }
 .request-detail-privacy { padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
 .request-detail-privacy strong { font-size: 10px; }
 .request-detail-privacy p { margin: 5px 0 0; color: var(--muted); font-size: 9px; line-height: 1.6; }
@@ -225,5 +244,5 @@ function targetState(target: NonNullable<RequestDetail['diagnostic']>['targets']
 .diagnostic-recommendation strong { font-size: 9px; }
 .diagnostic-recommendation p { margin: 3px 0 0; color: var(--muted); font-size: 9px; line-height: 1.5; }
 .diagnostic-empty { padding: 12px; border: 1px dashed var(--border); border-radius: 9px; color: var(--muted); font-size: 10px; }
-@media (max-width: 720px) { .request-detail-grid, .request-detail-grid.four { grid-template-columns: repeat(2,minmax(0,1fr)); } .request-detail-route { grid-template-columns: 1fr; } .request-detail-route > i { justify-self: center; transform: rotate(90deg); } .request-attempt { grid-template-columns: 30px 1fr auto; } .request-attempt > span:nth-last-child(-n+2) { display: none; } }
+@media (max-width: 720px) { .request-detail-grid, .request-detail-grid.four { grid-template-columns: repeat(2,minmax(0,1fr)); } .request-detail-route { grid-template-columns: 1fr; } .request-detail-route > i { justify-self: center; transform: rotate(90deg); } .request-attempt-header { grid-template-columns: 28px minmax(0,1fr) auto auto; gap: 7px; } .request-attempt-error, .request-attempt-outcome { grid-column: 2 / -1; } .request-attempt-message { padding: 9px 10px; } .request-attempt-message p { font-size: 12px; } }
 </style>
