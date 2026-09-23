@@ -481,6 +481,39 @@ paths:
       security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
       parameters: [{ name: providerId, in: path, required: true, schema: { type: string, format: uuid } }]
       responses: { '200': { description: Registered external model deployment } }
+  /api/admin/external-providers/{providerId}/models/batch:
+    post:
+      tags: [Control plane]
+      summary: Register selected models from one external provider in one atomic operation
+      description: The provider credential remains stored once on the provider and is reused by all registered models. Duplicate model IDs reject the entire batch.
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ name: providerId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [models]
+              properties:
+                models:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items:
+                    type: object
+                    required: [providerModelId, displayName]
+                    properties:
+                      providerModelId: { type: string, maxLength: 500 }
+                      displayName: { type: string, maxLength: 200 }
+                      compatibilityKey: { type: string }
+                      contextLength: { type: integer, minimum: 1, nullable: true }
+                      maxConcurrency: { type: integer, minimum: 1, nullable: true }
+                      capabilitiesJson: { type: string, description: JSON-encoded string array }
+                      inputPricePerMillion: { type: number, minimum: 0, nullable: true }
+                      outputPricePerMillion: { type: number, minimum: 0, nullable: true }
+                      currency: { type: string, enum: [KRW, USD] }
+      responses: { '200': { description: Registered external model deployments } }
   /api/portal/projects/{projectId}/external-access:
     get:
       tags: [Control plane]

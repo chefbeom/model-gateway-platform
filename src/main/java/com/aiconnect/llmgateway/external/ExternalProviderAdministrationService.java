@@ -215,6 +215,45 @@ public class ExternalProviderAdministrationService {
     }
 
     @Transactional
+    public List<ProviderModelView> addModels(UUID providerId, List<ModelRegistration> registrations) {
+        ExternalProvider provider = requireProvider(providerId);
+        if (registrations == null || registrations.isEmpty()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "EXTERNAL_MODELS_REQUIRED", "Select at least one provider model to register.");
+        }
+
+        Set<String> existingIds = deployments.findByExternalProviderId(providerId).stream()
+                .map(ModelDeployment::getProviderModelId).collect(Collectors.toSet());
+        Set<String> submittedIds = new HashSet<>();
+        for (ModelRegistration registration : registrations) {
+            if (registration == null) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "EXTERNAL_MODEL_REQUIRED", "Each selected model must contain model details.");
+            }
+            String modelId = requireText(registration.providerModelId(), "EXTERNAL_MODEL_ID_REQUIRED", "Provider model ID is required.");
+            requireText(registration.displayName(), "EXTERNAL_MODEL_NAME_REQUIRED", "Provider model display name is required.");
+            if (!submittedIds.add(modelId)) {
+                throw new ApiException(HttpStatus.CONFLICT, "EXTERNAL_MODEL_DUPLICATE_IN_BATCH", "The selected model list contains the same provider model more than once: " + modelId);
+            }
+            if (existingIds.contains(modelId)) {
+                throw new ApiException(HttpStatus.CONFLICT, "EXTERNAL_MODEL_EXISTS", "This provider model is already registered: " + modelId);
+            }
+            validateCapabilities(registration.capabilitiesJson());
+        }
+
+        List<ProviderModelView> saved = new ArrayList<>(registrations.size());
+        for (ModelRegistration registration : registrations) {
+            ModelDeployment deployment = deployments.save(ModelDeployment.external(providerId,
+                    registration.providerModelId().trim(), registration.compatibilityKey(), registration.displayName().trim(),
+                    registration.contextLength(), registration.maxConcurrency() == null ? 20 : registration.maxConcurrency(),
+                    registration.capabilitiesJson(), registration.inputPricePerMillion(), registration.outputPricePerMillion(),
+                    registration.currency() == null ? Currency.KRW : registration.currency()));
+            audit.record(provider.getOrganizationId(), CurrentActor.userIdOrNull(), "EXTERNAL_MODEL_REGISTERED", "MODEL_DEPLOYMENT",
+                    deployment.getId(), Map.of("providerModelId", deployment.getProviderModelId(), "providerId", providerId));
+            saved.add(ProviderModelView.from(deployment));
+        }
+        return saved;
+    }
+
+    @Transactional
     public ProviderModelView updateModel(UUID providerId, UUID modelId, String displayName,
                                          String compatibilityKey, Integer contextLength, Integer maxConcurrency,
                                          String capabilitiesJson, BigDecimal inputPrice, BigDecimal outputPrice,
@@ -269,6 +308,9 @@ public class ExternalProviderAdministrationService {
                                  List<String> capabilities, String capabilitySource, boolean registeredInAiconnect, String registeredHealthStatus) { }
     public record ProbeView(boolean reachable, int httpStatus, long latencyMs, String providerName, ApiInfoView api,
                             List<ModelProbeView> models, String capabilityNote) { }
+    public record ModelRegistration(String providerModelId, String displayName, String compatibilityKey,
+                                    Integer contextLength, Integer maxConcurrency, String capabilitiesJson,
+                                    BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Currency currency) { }
     public record ProviderModelView(UUID id, UUID externalProviderId, String providerModelId, String compatibilityKey,
                                     String displayName, Integer contextLength, boolean enabled, String healthStatus,
                                     int maxConcurrency, String capabilitiesJson, BigDecimal inputPricePerMillion,

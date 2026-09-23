@@ -53,6 +53,15 @@ public class ExternalProviderAdministrationController {
         return service.addModel(providerId, request.providerModelId(), request.displayName(), request.compatibilityKey(), request.contextLength(), request.maxConcurrency(), request.capabilitiesJson(), request.inputPricePerMillion(), request.outputPricePerMillion(), request.currency());
     }
 
+    @PostMapping("/external-providers/{providerId}/models/batch")
+    public List<ExternalProviderAdministrationService.ProviderModelView> addModels(@PathVariable UUID providerId,
+                                                                                    @Valid @RequestBody BatchAddModels request) {
+        return service.addModels(providerId, request.models().stream()
+                .map(item -> new ExternalProviderAdministrationService.ModelRegistration(item.providerModelId(), item.displayName(),
+                        item.compatibilityKey(), item.contextLength(), item.maxConcurrency(), item.capabilitiesJson(),
+                        item.inputPricePerMillion(), item.outputPricePerMillion(), item.currency()))
+                .toList());
+    }
     @PatchMapping("/external-providers/{providerId}/models/{modelId}")
     public ExternalProviderAdministrationService.ProviderModelView updateModel(@PathVariable UUID providerId,
                                                                                 @PathVariable UUID modelId,
@@ -74,6 +83,7 @@ public class ExternalProviderAdministrationController {
                            String compatibilityKey, @Positive Integer contextLength, @Positive Integer maxConcurrency,
                            String capabilitiesJson, @PositiveOrZero BigDecimal inputPricePerMillion,
                            @PositiveOrZero BigDecimal outputPricePerMillion, Currency currency) { }
+    public record BatchAddModels(@NotEmpty @Size(max = 100) List<@NotNull @Valid AddModel> models) { }
     public record UpdateModel(@Size(max = 200) String displayName, @Size(max = 500) String compatibilityKey,
                               @Positive Integer contextLength, @Positive Integer maxConcurrency,
                               String capabilitiesJson, @PositiveOrZero BigDecimal inputPricePerMillion,
