@@ -7,6 +7,7 @@ import com.aiconnect.llmgateway.identity.CurrentActor;
 import com.aiconnect.llmgateway.repository.*;
 import com.aiconnect.llmgateway.runtime.OpenAiRuntimeClient;
 import com.aiconnect.llmgateway.runtime.RuntimeResult;
+import com.aiconnect.llmgateway.runtime.RuntimeUnavailableException;
 import com.aiconnect.llmgateway.service.SecretCipher;
 import com.aiconnect.llmgateway.web.ApiException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -136,11 +137,21 @@ public class ExternalProviderAdministrationService {
                         "deletedModelCount", preview.modelCount(), "removedProjectAccessCount", preview.projectAccessCount()));
     }
 
-    @Transactional
     public ProbeView probe(UUID providerId) {
         ExternalProvider provider = requireProvider(providerId);
         long started = System.nanoTime();
-        RuntimeResult result = client.listModels(provider);
+        RuntimeResult result;
+        try {
+            result = client.listModels(provider);
+        } catch (RuntimeUnavailableException exception) {
+            long latency = (System.nanoTime() - started) / 1_000_000;
+            provider.recordHealth(false);
+            providers.save(provider);
+            audit.record(provider.getOrganizationId(), CurrentActor.userIdOrNull(), "EXTERNAL_PROVIDER_PROBED", "EXTERNAL_PROVIDER",
+                    provider.getId(), Map.of("healthy", false, "httpStatus", 0, "latencyMs", latency, "failureCode", "PROVIDER_UNREACHABLE"));
+            throw new ApiException(HttpStatus.BAD_GATEWAY, "EXTERNAL_PROVIDER_UNREACHABLE",
+                    "The provider could not be reached. Check the base URL, network route, TLS certificate, and provider availability.");
+        }
         long latency = (System.nanoTime() - started) / 1_000_000;
         boolean healthy = result.isSuccessful();
         provider.recordHealth(healthy);
@@ -160,8 +171,15 @@ public class ExternalProviderAdministrationService {
             ModelDeployment registeredModel = registered.get(id);
             List<String> capabilities = registeredModel == null ? readCapabilities(model.path("capabilities")) : readCapabilities(registeredModel.getCapabilitiesJson());
             String source = registeredModel == null ? "PROVIDER_METADATA_OR_UNDECLARED" : "REGISTERED_MODEL_POLICY";
-            Integer context = registeredModel == null ? intOrNull(model, "context_length") : registeredModel.getContextLength();
-            Integer concurrency = registeredModel == null ? intOrNull(model, "max_concurrent_requests") : registeredModel.getMaxConcurrency();
+            Integer context;
+            Integer concurrency;
+            if (registeredModel == null) {
+                context = intOrNull(model, "context_length");
+                concurrency = intOrNull(model, "max_concurrent_requests");
+            } else {
+                context = registeredModel.getContextLength();
+                concurrency = registeredModel.getMaxConcurrency();
+            }
             modelViews.add(new ModelProbeView(id, model.path("owned_by").asText(null), model.path("object").asText(null),
                     context, concurrency, capabilities, source, registeredModel != null, registeredModel == null ? null : registeredModel.getHealthStatus().name()));
         }
