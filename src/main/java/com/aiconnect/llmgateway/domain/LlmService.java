@@ -1,5 +1,6 @@
 package com.aiconnect.llmgateway.domain;
 
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.persistence.*;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -19,6 +20,8 @@ public class LlmService {
     @Column(nullable = false, precision = 18, scale = 6) private BigDecimal inputPricePerMillion = BigDecimal.ZERO;
     @Column(nullable = false, precision = 18, scale = 6) private BigDecimal outputPricePerMillion = BigDecimal.ZERO;
     @Enumerated(EnumType.STRING) @Column(nullable = false, length = 3) private Currency currency = Currency.KRW;
+    @Enumerated(EnumType.STRING) @Column(nullable = false, length = 24) private TemperaturePolicy temperaturePolicy = TemperaturePolicy.REQUEST;
+    @Column(precision = 4, scale = 3) private BigDecimal temperatureValue;
     @Column(nullable = false) private boolean enabled = true;
     /** Tombstones keep the service identity available to request history and usage aggregation. */
     @Column private Instant deletedAt;
@@ -71,6 +74,25 @@ public class LlmService {
         if (enabled != null && !isDeleted()) this.enabled = enabled;
     }
 
+    public void configureTemperaturePolicy(TemperaturePolicy policy, BigDecimal value) {
+        if (policy == null) return;
+        if (policy == TemperaturePolicy.FIXED && value == null) {
+            throw new IllegalArgumentException("A fixed temperature value is required when the temperature policy is FIXED.");
+        }
+        this.temperaturePolicy = policy;
+        this.temperatureValue = policy == TemperaturePolicy.FIXED ? value : null;
+    }
+
+    /** Applies this logical service's parameter policy to a per-target request copy. */
+    public void applyTemperaturePolicy(ObjectNode request) {
+        if (request == null) return;
+        switch (getTemperaturePolicy()) {
+            case REQUEST -> { }
+            case FIXED -> { if (temperatureValue != null) request.put("temperature", temperatureValue); }
+            case OMIT -> request.remove("temperature");
+        }
+    }
+
     public void markDeleted() {
         this.enabled = false;
         if (this.deletedAt == null) this.deletedAt = Instant.now();
@@ -88,6 +110,8 @@ public class LlmService {
     public BigDecimal getInputPricePerMillion() { return inputPricePerMillion; }
     public BigDecimal getOutputPricePerMillion() { return outputPricePerMillion; }
     public Currency getCurrency() { return currency; }
+    public TemperaturePolicy getTemperaturePolicy() { return temperaturePolicy == null ? TemperaturePolicy.REQUEST : temperaturePolicy; }
+    public BigDecimal getTemperatureValue() { return temperatureValue; }
     public boolean isEnabled() { return enabled; }
     public Instant getDeletedAt() { return deletedAt; }
     public boolean isDeleted() { return deletedAt != null; }

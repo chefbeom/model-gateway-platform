@@ -80,6 +80,18 @@ class OpenAiRequestNormalizerTest {
     }
 
     @Test
+    void preservesExplicitlyConfiguredTemperatureForReasoningModels() throws Exception {
+        ObjectNode request = (ObjectNode) objectMapper.readTree("""
+                {"model":"gpt-5.6-luna","temperature":1,"top_p":0.9}
+                """);
+
+        JsonNode normalized = OpenAiRequestNormalizer.forExternalProvider(request, true);
+
+        assertThat(normalized.path("temperature").asDouble()).isEqualTo(1.0);
+        assertThat(normalized.has("top_p")).isFalse();
+    }
+
+    @Test
     void leavesNonObjectRequestsUntouched() throws Exception {
         JsonNode request = objectMapper.readTree("[1,2,3]");
 

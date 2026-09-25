@@ -3,6 +3,7 @@ package com.aiconnect.llmgateway.admin;
 import com.aiconnect.llmgateway.domain.Currency;
 import com.aiconnect.llmgateway.domain.LlmService;
 import com.aiconnect.llmgateway.domain.ServiceTarget;
+import com.aiconnect.llmgateway.domain.TemperaturePolicy;
 import com.aiconnect.llmgateway.repository.LlmServiceRepository;
 import com.aiconnect.llmgateway.repository.ServiceTargetRepository;
 import com.aiconnect.llmgateway.web.ApiException;
@@ -37,6 +38,10 @@ public class RoutingPolicyService {
         service.configure(request.displayName(), request.failoverPolicy(), request.retryPolicy(), request.allowDegraded(),
                 request.requiredCapabilitiesJson(), request.inputPricePerMillion(), request.outputPricePerMillion(),
                 request.currency() == null ? Currency.KRW : request.currency(), request.enabled());
+        if (request.temperaturePolicy() == TemperaturePolicy.FIXED && request.temperatureValue() == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "TEMPERATURE_VALUE_REQUIRED", "A temperature value is required for the FIXED policy.");
+        }
+        service.configureTemperaturePolicy(request.temperaturePolicy(), request.temperatureValue());
         return services.save(service);
     }
 

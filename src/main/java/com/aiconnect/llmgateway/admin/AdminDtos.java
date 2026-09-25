@@ -4,7 +4,10 @@ import com.aiconnect.llmgateway.domain.Currency;
 import com.aiconnect.llmgateway.domain.FailoverPolicy;
 import com.aiconnect.llmgateway.domain.RetryPolicy;
 import com.aiconnect.llmgateway.domain.RuntimeType;
+import com.aiconnect.llmgateway.domain.TemperaturePolicy;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.DecimalMax;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -36,7 +39,9 @@ public final class AdminDtos {
                                 @NotBlank @Size(max = 200) String displayName, FailoverPolicy failoverPolicy,
                                 RetryPolicy retryPolicy, boolean allowDegraded, String requiredCapabilitiesJson,
                                 @DecimalMin("0") BigDecimal inputPricePerMillion,
-                                @DecimalMin("0") BigDecimal outputPricePerMillion, Currency currency) { }
+                                @DecimalMin("0") BigDecimal outputPricePerMillion, Currency currency,
+                                TemperaturePolicy temperaturePolicy,
+                                @DecimalMin("0.0") @DecimalMax("2.0") @Digits(integer = 1, fraction = 3) BigDecimal temperatureValue) { }
     public record GrantServiceAccess(@NotNull UUID serviceId) { }
     public record CreateTarget(@NotNull UUID deploymentId, @Min(1) int priority, @Min(1) Integer weight,
                                boolean degraded, @Min(1) Integer maxConcurrencyOverride,

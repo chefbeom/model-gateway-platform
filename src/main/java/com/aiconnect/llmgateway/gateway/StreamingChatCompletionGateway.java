@@ -5,6 +5,7 @@ import com.aiconnect.llmgateway.billing.TokenPricingResolver;
 import com.aiconnect.llmgateway.domain.LlmRequest;
 import com.aiconnect.llmgateway.domain.LlmRequestAttempt;
 import com.aiconnect.llmgateway.domain.LlmService;
+import com.aiconnect.llmgateway.domain.TemperaturePolicy;
 import com.aiconnect.llmgateway.repository.LlmRequestAttemptRepository;
 import com.aiconnect.llmgateway.repository.LlmRequestRepository;
 import com.aiconnect.llmgateway.repository.LlmServiceRepository;
@@ -117,9 +118,11 @@ public class StreamingChatCompletionGateway {
                 }
                 ObjectNode proxied = request.deepCopy();
                 proxied.put("model", candidate.deployment().getProviderModelId());
+                service.applyTemperaturePolicy(proxied);
                 proxied.withObject("stream_options").put("include_usage", true);
                 StreamingRuntimeResult result = candidate.external()
-                        ? openAiClient.chatCompletion(candidate.externalProvider(), proxied)
+                        ? openAiClient.chatCompletion(candidate.externalProvider(), proxied,
+                                service.getTemperaturePolicy() == TemperaturePolicy.FIXED)
                         : runtimeClient.chatCompletion(candidate.endpoint(), proxied);
                 if (result.statusCode() >= 200 && result.statusCode() < 300) {
                     try {

@@ -32,13 +32,17 @@ public class StreamingOpenAiRuntimeClient {
     }
 
     public StreamingRuntimeResult chatCompletion(ExternalProvider provider, JsonNode requestBody) {
+        return chatCompletion(provider, requestBody, false);
+    }
+
+    public StreamingRuntimeResult chatCompletion(ExternalProvider provider, JsonNode requestBody, boolean preserveTemperature) {
         try {
             String key = secretCipher.decrypt(provider.getEncryptedApiKey());
             HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(provider.getBaseUrl() + "/chat/completions"))
                     .timeout(Duration.ofMillis(properties.responseTimeoutMs()))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(
-                            OpenAiRequestNormalizer.forExternalProvider(requestBody))));
+                            OpenAiRequestNormalizer.forExternalProvider(requestBody, preserveTemperature))));
             if (key != null && !key.isBlank()) request.header("Authorization", "Bearer " + key);
             HttpResponse<java.io.InputStream> response = client.send(request.build(), HttpResponse.BodyHandlers.ofInputStream());
             return new StreamingRuntimeResult(response.statusCode(), response.body());

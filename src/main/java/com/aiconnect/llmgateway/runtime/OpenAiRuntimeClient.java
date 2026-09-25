@@ -37,11 +37,15 @@ public class OpenAiRuntimeClient {
     }
 
     public RuntimeResult chatCompletion(ExternalProvider provider, JsonNode request) {
+        return chatCompletion(provider, request, false);
+    }
+
+    public RuntimeResult chatCompletion(ExternalProvider provider, JsonNode request, boolean preserveTemperature) {
         try {
             return client.post().uri(provider.getBaseUrl() + "/chat/completions")
                     .contentType(MediaType.APPLICATION_JSON)
                     .headers(headers -> applyAuthorization(headers, provider))
-                    .body(OpenAiRequestNormalizer.forExternalProvider(request))
+                    .body(OpenAiRequestNormalizer.forExternalProvider(request, preserveTemperature))
                     .exchange((clientRequest, response) -> toResult(response.getStatusCode().value(), response.getBody()));
         } catch (RestClientException exception) {
             throw new RuntimeUnavailableException("The external OpenAI provider is unreachable.", exception);

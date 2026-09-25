@@ -25,6 +25,11 @@ public final class OpenAiRequestNormalizer {
      * {@code max_completion_tokens} value wins.
      */
     public static JsonNode forExternalProvider(JsonNode request) {
+        return forExternalProvider(request, false);
+    }
+
+    /** Keeps an explicitly configured temperature while still removing other unsupported sampling controls. */
+    public static JsonNode forExternalProvider(JsonNode request, boolean preserveTemperature) {
         if (!(request instanceof ObjectNode object)) {
             return request;
         }
@@ -40,8 +45,9 @@ public final class OpenAiRequestNormalizer {
         // the public API contract for local runtimes.
         String model = normalized.path("model").asText("").toLowerCase(Locale.ROOT);
         if (isReasoningModel(model) || normalized.has("reasoning_effort")) {
+            if (!preserveTemperature) normalized.remove("temperature");
             normalized.remove(Set.of(
-                    "temperature", "top_p", "presence_penalty", "frequency_penalty",
+                    "top_p", "presence_penalty", "frequency_penalty",
                     "stop", "logprobs", "top_logprobs"
             ));
         }

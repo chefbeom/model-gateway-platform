@@ -105,11 +105,20 @@ public class ControlPlaneService {
     @Transactional
     public LlmService create(AdminDtos.CreateService request) {
         requireOrganization(request.organizationId());
-        return services.save(new LlmService(request.organizationId(), request.serviceKey(), request.displayName(),
+        LlmService service = new LlmService(request.organizationId(), request.serviceKey(), request.displayName(),
                 request.failoverPolicy() == null ? FailoverPolicy.STRICT : request.failoverPolicy(),
                 request.retryPolicy() == null ? RetryPolicy.SAFE : request.retryPolicy(), request.allowDegraded(),
                 request.requiredCapabilitiesJson(), zeroIfNull(request.inputPricePerMillion()), zeroIfNull(request.outputPricePerMillion()),
-                request.currency() == null ? Currency.KRW : request.currency()));
+                request.currency() == null ? Currency.KRW : request.currency());
+        configureTemperaturePolicy(service, request.temperaturePolicy(), request.temperatureValue());
+        return services.save(service);
+    }
+
+    private void configureTemperaturePolicy(LlmService service, TemperaturePolicy policy, BigDecimal value) {
+        if (policy == TemperaturePolicy.FIXED && value == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "TEMPERATURE_VALUE_REQUIRED", "A temperature value is required for the FIXED policy.");
+        }
+        service.configureTemperaturePolicy(policy, value);
     }
 
     @Transactional

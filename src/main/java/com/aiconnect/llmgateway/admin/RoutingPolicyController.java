@@ -5,8 +5,11 @@ import com.aiconnect.llmgateway.domain.FailoverPolicy;
 import com.aiconnect.llmgateway.domain.LlmService;
 import com.aiconnect.llmgateway.domain.RetryPolicy;
 import com.aiconnect.llmgateway.domain.ServiceTarget;
+import com.aiconnect.llmgateway.domain.TemperaturePolicy;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.DecimalMax;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
 import org.springframework.http.HttpStatus;
@@ -69,13 +72,15 @@ public class RoutingPolicyController {
             @DecimalMin("0") BigDecimal inputPricePerMillion,
             @DecimalMin("0") BigDecimal outputPricePerMillion,
             Currency currency,
-            Boolean enabled
+            Boolean enabled,
+            TemperaturePolicy temperaturePolicy,
+            @DecimalMin("0.0") @DecimalMax("2.0") @Digits(integer = 1, fraction = 3) BigDecimal temperatureValue
     ) {
         public UpdateService(String displayName, FailoverPolicy failoverPolicy, RetryPolicy retryPolicy,
                              Boolean allowDegraded, String requiredCapabilitiesJson,
                              BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Boolean enabled) {
             this(displayName, failoverPolicy, retryPolicy, allowDegraded, requiredCapabilitiesJson,
-                    inputPricePerMillion, outputPricePerMillion, Currency.KRW, enabled);
+                    inputPricePerMillion, outputPricePerMillion, Currency.KRW, enabled, null, null);
         }
     }
     public record UpdateTarget(
@@ -95,11 +100,13 @@ public class RoutingPolicyController {
     public record ServicePolicyView(UUID id, UUID organizationId, String serviceKey, String displayName,
                                     FailoverPolicy failoverPolicy, RetryPolicy retryPolicy, boolean allowDegraded,
                                     String requiredCapabilitiesJson, BigDecimal inputPricePerMillion,
-                                    BigDecimal outputPricePerMillion, Currency currency, boolean enabled) {
+                                    BigDecimal outputPricePerMillion, Currency currency, boolean enabled,
+                                    TemperaturePolicy temperaturePolicy, BigDecimal temperatureValue) {
         static ServicePolicyView from(LlmService service) {
             return new ServicePolicyView(service.getId(), service.getOrganizationId(), service.getServiceKey(), service.getDisplayName(),
                     service.getFailoverPolicy(), service.getRetryPolicy(), service.isAllowDegraded(), service.getRequiredCapabilitiesJson(),
-                    service.getInputPricePerMillion(), service.getOutputPricePerMillion(), service.getCurrency(), service.isEnabled());
+                    service.getInputPricePerMillion(), service.getOutputPricePerMillion(), service.getCurrency(), service.isEnabled(),
+                    service.getTemperaturePolicy(), service.getTemperatureValue());
         }
     }
 

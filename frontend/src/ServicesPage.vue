@@ -5,7 +5,7 @@ import BaseModal from './BaseModal.vue'
 import { adminFetch, type AdminAuth, type Deployment, type Endpoint } from './api'
 
 const props = defineProps<{ organizationId: string; auth: AdminAuth }>()
-type Service = { id: string; organizationId: string; serviceKey: string; displayName: string; failoverPolicy: 'STRICT' | 'COMPATIBLE' | 'DEGRADED'; retryPolicy: 'SAFE' | 'AGGRESSIVE'; allowDegraded: boolean; requiredCapabilitiesJson: string; inputPricePerMillion: number; outputPricePerMillion: number; currency?: 'KRW' | 'USD'; enabled: boolean }
+type Service = { id: string; organizationId: string; serviceKey: string; displayName: string; failoverPolicy: 'STRICT' | 'COMPATIBLE' | 'DEGRADED'; retryPolicy: 'SAFE' | 'AGGRESSIVE'; allowDegraded: boolean; requiredCapabilitiesJson: string; inputPricePerMillion: number; outputPricePerMillion: number; currency?: 'KRW' | 'USD'; enabled: boolean; temperaturePolicy?: 'REQUEST' | 'FIXED' | 'OMIT'; temperatureValue?: number | null }
 type Target = { id: string; deploymentId: string; priority: number; weight: number; degraded: boolean; enabled: boolean; maxConcurrencyOverride?: number | null; followModelChanges?: boolean }
 type ServiceDeletionCheck = { serviceId: string; serviceKey: string; displayName: string; projectAccessCount: number; targetCount: number; requestHistoryCount: number; linkedProjectNames: string[]; canDelete: boolean }
 
@@ -21,7 +21,7 @@ const deleteServiceModal = ref(false)
 const editingService = ref<Service | null>(null)
 const editingTarget = ref<Target | null>(null)
 const deletionCheck = ref<ServiceDeletionCheck | null>(null)
-const serviceForm = ref({ serviceKey: '', displayName: '', failoverPolicy: 'STRICT' as Service['failoverPolicy'], retryPolicy: 'SAFE' as Service['retryPolicy'], allowDegraded: false, requiredCapabilitiesJson: '[]', inputPricePerMillion: 0, outputPricePerMillion: 0, currency: 'KRW' as 'KRW' | 'USD', enabled: true })
+const serviceForm = ref({ serviceKey: '', displayName: '', failoverPolicy: 'STRICT' as Service['failoverPolicy'], retryPolicy: 'SAFE' as Service['retryPolicy'], allowDegraded: false, requiredCapabilitiesJson: '[]', inputPricePerMillion: 0, outputPricePerMillion: 0, currency: 'KRW' as 'KRW' | 'USD', enabled: true, temperaturePolicy: 'REQUEST' as NonNullable<Service['temperaturePolicy']>, temperatureValue: 1 })
 const targetForm = ref({ deploymentId: '', priority: 1, weight: 100, degraded: false, enabled: true, maxConcurrencyOverride: null as number | null, followModelChanges: true })
 
 async function load() {
@@ -58,14 +58,14 @@ async function loadDeployments() {
 
 function openCreateService() {
   editingService.value = null
-  serviceForm.value = { serviceKey: '', displayName: '', failoverPolicy: 'STRICT', retryPolicy: 'SAFE', allowDegraded: false, requiredCapabilitiesJson: '[]', inputPricePerMillion: 0, outputPricePerMillion: 0, currency: 'KRW' as 'KRW' | 'USD', enabled: true }
+  serviceForm.value = { serviceKey: '', displayName: '', failoverPolicy: 'STRICT', retryPolicy: 'SAFE', allowDegraded: false, requiredCapabilitiesJson: '[]', inputPricePerMillion: 0, outputPricePerMillion: 0, currency: 'KRW' as 'KRW' | 'USD', enabled: true, temperaturePolicy: 'REQUEST', temperatureValue: 1 }
   serviceModal.value = true
 }
 
 function openEditService() {
   if (!selected.value) return
   editingService.value = selected.value
-  serviceForm.value = { ...selected.value, currency: selected.value.currency ?? 'KRW' }
+  serviceForm.value = { ...selected.value, currency: selected.value.currency ?? 'KRW', temperaturePolicy: selected.value.temperaturePolicy ?? 'REQUEST', temperatureValue: selected.value.temperatureValue ?? 1 }
   serviceModal.value = true
 }
 
@@ -161,6 +161,12 @@ function deploymentName(id: string) {
   return item ? `${item.externalProviderId ? 'CLOUD · ' : ''}${item.displayName}` : id
 }
 
+function temperaturePolicyLabel(service: Service) {
+  if (service.temperaturePolicy === 'OMIT') return '모델 기본값'
+  if (service.temperaturePolicy === 'FIXED') return `고정 ${service.temperatureValue ?? 1}`
+  return '요청값 기준'
+}
+
 watch(() => props.organizationId, () => { void load() })
 onMounted(() => { void load() })
 </script>
@@ -175,7 +181,7 @@ onMounted(() => { void load() })
       <article class="surface-card detail-panel">
         <template v-if="selected">
           <header class="detail-header"><div><span class="status-chip" :class="selected.enabled ? 'healthy' : 'unknown'"><i></i>{{ selected.enabled ? 'ACTIVE' : 'DISABLED' }}</span><h2>{{ selected.displayName }}</h2><p class="mono">model: {{ selected.serviceKey }}</p></div><div class="detail-actions"><button class="secondary-button" @click="openEditService">정책 편집</button><button class="secondary-button danger-text" :disabled="busy" @click="openServiceDeletion">서비스 삭제</button></div></header>
-          <div class="policy-summary"><div><span>Failover</span><strong>{{ selected.failoverPolicy }}</strong></div><div><span>Retry</span><strong>{{ selected.retryPolicy }}</strong></div><div><span>입력 단가 / 1M ({{ selected.currency ?? 'KRW' }})</span><strong>{{ selected.currency === 'USD' ? '$' : '₩' }}{{ selected.inputPricePerMillion }}</strong></div><div><span>출력 단가 / 1M ({{ selected.currency ?? 'KRW' }})</span><strong>{{ selected.currency === 'USD' ? '$' : '₩' }}{{ selected.outputPricePerMillion }}</strong></div></div>
+          <div class="policy-summary"><div><span>Failover</span><strong>{{ selected.failoverPolicy }}</strong></div><div><span>Retry</span><strong>{{ selected.retryPolicy }}</strong></div><div><span>Temperature</span><strong>{{ temperaturePolicyLabel(selected) }}</strong></div><div><span>입력 단가 / 1M ({{ selected.currency ?? 'KRW' }})</span><strong>{{ selected.currency === 'USD' ? '$' : '₩' }}{{ selected.inputPricePerMillion }}</strong></div><div><span>출력 단가 / 1M ({{ selected.currency ?? 'KRW' }})</span><strong>{{ selected.currency === 'USD' ? '$' : '₩' }}{{ selected.outputPricePerMillion }}</strong></div></div>
           <div class="section-divider"><span>SERVICE TARGETS</span><button class="text-button" :disabled="!availableDeployments.length" @click="openCreateTarget">+ Target 추가</button></div>
           <div v-if="targets.length" class="route-stack"><div v-for="target in targets" :key="target.id" class="route-row"><span class="priority-badge">P{{ target.priority }}</span><div class="route-line"><i></i></div><span class="model-cube small">◇</span><div class="route-info"><strong>{{ deploymentName(target.deploymentId) }}</strong><small class="mono">{{ target.deploymentId }}</small></div><div class="route-meta"><span>Weight {{ target.weight }}</span><span v-if="target.degraded">Degraded</span><span>{{ target.followModelChanges === false ? '모델 고정' : '모델 자동 추적' }}</span><span>{{ target.enabled ? '활성' : '중지' }}</span></div><button class="icon-button" @click="openEditTarget(target)">···</button><button class="icon-button danger-text" @click="removeTarget(target)">×</button></div></div>
           <div v-else class="empty-state compact"><span>↝</span><p>연결된 Target이 없습니다.</p><button class="text-button" :disabled="!availableDeployments.length" @click="openCreateTarget">첫 Target 추가</button></div>
@@ -184,7 +190,42 @@ onMounted(() => { void load() })
       </article>
     </div>
 
-    <BaseModal :open="serviceModal" :title="editingService ? '서비스 정책 편집' : '논리 서비스 생성'" description="실제 GPU나 모델 파일과 독립적인 API model 값을 구성합니다." @close="serviceModal = false"><div class="modal-form"><div class="form-grid"><label class="field">Service Key<input v-model.trim="serviceForm.serviceKey" :disabled="!!editingService" placeholder="text-pro" /></label><label class="field">표시 이름<input v-model.trim="serviceForm.displayName" placeholder="Text Pro" /></label></div><div class="form-grid"><label class="field">Failover 정책<select v-model="serviceForm.failoverPolicy"><option>STRICT</option><option>COMPATIBLE</option><option>DEGRADED</option></select></label><label class="field">Retry 정책<select v-model="serviceForm.retryPolicy"><option>SAFE</option><option>AGGRESSIVE</option></select></label></div><CapabilityPicker v-model="serviceForm.requiredCapabilitiesJson" /><div class="form-grid"><label class="field">통화<select v-model="serviceForm.currency"><option value="KRW">원화 (KRW)</option><option value="USD">달러 (USD)</option></select></label><label class="field">입력 단가 / 1M ({{ serviceForm.currency === 'USD' ? '$' : '₩' }})<input v-model.number="serviceForm.inputPricePerMillion" type="number" min="0" step="0.000001" /></label><label class="field">출력 단가 / 1M ({{ serviceForm.currency === 'USD' ? '$' : '₩' }})<input v-model.number="serviceForm.outputPricePerMillion" type="number" min="0" step="0.000001" /></label></div><div class="form-grid"><label class="toggle-field"><span>Degraded 허용<small>마지막 저성능 대체 대상</small></span><input v-model="serviceForm.allowDegraded" type="checkbox" /></label><label class="toggle-field"><span>서비스 활성화<small>외부 모델 목록에 노출</small></span><input v-model="serviceForm.enabled" type="checkbox" /></label></div></div><template #footer><button class="secondary-button" @click="serviceModal = false">취소</button><button class="primary-button" :disabled="busy || !serviceForm.displayName || (!editingService && !serviceForm.serviceKey)" @click="saveService">저장</button></template></BaseModal>
+    <BaseModal :open="serviceModal" :title="editingService ? '서비스 정책 편집' : '논리 서비스 생성'" description="실제 GPU나 모델 파일과 독립적인 API model 값을 구성합니다." @close="serviceModal = false">
+      <div class="modal-form">
+        <div class="form-grid">
+          <label class="field">Service Key<input v-model.trim="serviceForm.serviceKey" :disabled="!!editingService" placeholder="text-pro" /></label>
+          <label class="field">표시 이름<input v-model.trim="serviceForm.displayName" placeholder="Text Pro" /></label>
+        </div>
+        <div class="form-grid">
+          <label class="field">Failover 정책<select v-model="serviceForm.failoverPolicy"><option>STRICT</option><option>COMPATIBLE</option><option>DEGRADED</option></select></label>
+          <label class="field">Retry 정책<select v-model="serviceForm.retryPolicy"><option>SAFE</option><option>AGGRESSIVE</option></select></label>
+        </div>
+        <div class="form-grid">
+          <label class="field">Temperature 처리
+            <select v-model="serviceForm.temperaturePolicy">
+              <option value="REQUEST">요청값 기준 (기본)</option>
+              <option value="FIXED">AICONNECT 고정값 사용</option>
+              <option value="OMIT">요청에서 제거 · 모델 기본값 사용</option>
+            </select>
+          </label>
+          <label v-if="serviceForm.temperaturePolicy === 'FIXED'" class="field">고정 Temperature (0–2)
+            <input v-model.number="serviceForm.temperatureValue" type="number" min="0" max="2" step="0.1" placeholder="1" />
+          </label>
+        </div>
+        <p class="temperature-note">요청값 기준은 기존 동작을 유지합니다. `OMIT`은 모델 기본값을 사용하고, `FIXED`는 실제 프로젝트 요청을 지정한 값으로 덮어씁니다. 현재 오류가 난 모델은 1로 설정하거나 모델 기본값을 선택하세요.</p>
+        <CapabilityPicker v-model="serviceForm.requiredCapabilitiesJson" />
+        <div class="form-grid">
+          <label class="field">통화<select v-model="serviceForm.currency"><option value="KRW">원화 (KRW)</option><option value="USD">달러 (USD)</option></select></label>
+          <label class="field">입력 단가 / 1M ({{ serviceForm.currency === 'USD' ? '$' : '₩' }})<input v-model.number="serviceForm.inputPricePerMillion" type="number" min="0" step="0.000001" /></label>
+          <label class="field">출력 단가 / 1M ({{ serviceForm.currency === 'USD' ? '$' : '₩' }})<input v-model.number="serviceForm.outputPricePerMillion" type="number" min="0" step="0.000001" /></label>
+        </div>
+        <div class="form-grid">
+          <label class="toggle-field"><span>Degraded 허용<small>마지막 저성능 대체 대상</small></span><input v-model="serviceForm.allowDegraded" type="checkbox" /></label>
+          <label class="toggle-field"><span>서비스 활성화<small>외부 모델 목록에 노출</small></span><input v-model="serviceForm.enabled" type="checkbox" /></label>
+        </div>
+      </div>
+      <template #footer><button class="secondary-button" @click="serviceModal = false">취소</button><button class="primary-button" :disabled="busy || !serviceForm.displayName || (!editingService && !serviceForm.serviceKey) || (serviceForm.temperaturePolicy === 'FIXED' && (!Number.isFinite(serviceForm.temperatureValue) || serviceForm.temperatureValue < 0 || serviceForm.temperatureValue > 2))" @click="saveService">저장</button></template>
+    </BaseModal>
 
     <BaseModal :open="targetModal" :title="editingTarget ? 'Target 정책 편집' : 'Service Target 추가'" description="우선순위가 낮은 숫자부터 선택됩니다." @close="targetModal = false"><div class="modal-form"><label class="field">Deployment<select v-model="targetForm.deploymentId" :disabled="!!editingTarget"><option v-for="item in availableDeployments" :key="item.id" :value="item.id">{{ item.displayName }} · {{ item.providerModelId }}</option></select></label><div class="form-grid three"><label class="field">Priority<input v-model.number="targetForm.priority" type="number" min="1" /></label><label class="field">Weight<input v-model.number="targetForm.weight" type="number" min="1" /></label><label class="field">동시성 재정의<input v-model.number="targetForm.maxConcurrencyOverride" type="number" min="1" placeholder="선택" /></label></div><div class="form-grid"><label class="toggle-field"><span>Degraded Target</span><input v-model="targetForm.degraded" type="checkbox" /></label><label class="toggle-field"><span>Target 활성화</span><input v-model="targetForm.enabled" type="checkbox" /></label></div><label class="toggle-field"><span>모델 변경 자동 추적<small>같은 Runtime에서 모델을 변경하면 새 Deployment로 자동 연결합니다. 여러 후보가 모호하면 임의 전환하지 않습니다.</small></span><input v-model="targetForm.followModelChanges" type="checkbox" /></label></div><template #footer><button class="secondary-button" @click="targetModal = false">취소</button><button class="primary-button" :disabled="busy || !targetForm.deploymentId" @click="saveTarget">Target 저장</button></template></BaseModal>
 
@@ -197,6 +238,8 @@ onMounted(() => { void load() })
 
 <style scoped>
 .detail-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.detail-panel > .policy-summary { grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); }
+.temperature-note { margin: -4px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
 .deletion-check { display: grid; gap: 10px; padding: 15px; border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border)); border-radius: 12px; background: var(--danger-dim); }.deletion-check strong { font-size: 15px; }.deletion-check code { padding: 8px; overflow: auto; border-radius: 7px; background: var(--surface); color: var(--text-soft); font-size: 10px; }.deletion-check p { margin: 0; color: var(--text-soft); font-size: 11px; line-height: 1.6; }.deletion-check ul { margin: 0; padding-left: 17px; display: grid; gap: 8px; color: var(--text-soft); font-size: 11px; line-height: 1.5; }.deletion-check li { display: grid; gap: 3px; }.deletion-check li small { color: var(--muted); font-size: 10px; line-height: 1.5; }
 @media (max-width: 620px) { .detail-actions { justify-content: flex-start; } }
 </style>

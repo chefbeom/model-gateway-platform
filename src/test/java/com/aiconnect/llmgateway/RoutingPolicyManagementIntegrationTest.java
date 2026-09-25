@@ -42,7 +42,8 @@ class RoutingPolicyManagementIntegrationTest {
 
         policies.configureService(service.getId(), new RoutingPolicyController.UpdateService(
                 "After", FailoverPolicy.COMPATIBLE, RetryPolicy.AGGRESSIVE, true, "[]",
-                BigDecimal.valueOf(10), BigDecimal.valueOf(20), true));
+                BigDecimal.valueOf(10), BigDecimal.valueOf(20), Currency.USD, true,
+                TemperaturePolicy.FIXED, BigDecimal.ONE));
         policies.configureTarget(service.getId(), target.getId(), new RoutingPolicyController.UpdateTarget(
                 2, 50, true, false, 1));
 
@@ -52,6 +53,8 @@ class RoutingPolicyManagementIntegrationTest {
         assertThat(changedService.getFailoverPolicy()).isEqualTo(FailoverPolicy.COMPATIBLE);
         assertThat(changedService.getRetryPolicy()).isEqualTo(RetryPolicy.AGGRESSIVE);
         assertThat(changedService.getInputPricePerMillion()).isEqualByComparingTo("10");
+        assertThat(changedService.getTemperaturePolicy()).isEqualTo(TemperaturePolicy.FIXED);
+        assertThat(changedService.getTemperatureValue()).isEqualByComparingTo("1");
         assertThat(changedTarget.getPriority()).isEqualTo(2);
         assertThat(changedTarget.getWeight()).isEqualTo(50);
         assertThat(changedTarget.isEnabled()).isFalse();

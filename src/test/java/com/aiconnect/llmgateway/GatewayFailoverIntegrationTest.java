@@ -6,7 +6,6 @@ import com.aiconnect.llmgateway.service.ApiKeyService;
 import com.aiconnect.llmgateway.service.IssuedApiKey;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,6 +20,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -88,22 +88,59 @@ class GatewayFailoverIntegrationTest {
         }
     }
 
+    @Test
+    void logicalServiceFixedTemperatureOverridesActualProjectRequest() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+        AtomicReference<JsonNode> received = new AtomicReference<>();
+        HttpServer provider = server(200, "{\"id\":\"chatcmpl-temperature\",\"model\":\"physical-temperature\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"ok\"}}],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":1}}", calls, received);
+        try {
+            Organization organization = organizations.save(new Organization("Temperature Policy Org"));
+            Project project = projects.save(new Project(organization.getId(), "temperature-client"));
+            IssuedApiKey issued = apiKeyService.issue(project.getId(), "temperature-test", null);
+            InferenceNode node = nodes.save(new InferenceNode(organization.getId(), "temperature-node", null, "DIRECT", null));
+            RuntimeEndpoint endpoint = healthyEndpoint(node.getId(), provider.getAddress().getPort());
+            ModelDeployment deployment = deployments.save(new ModelDeployment(endpoint.getId(), "physical-temperature", "Temperature Target", null, null, 8192, true, 4, "[]"));
+            LlmService logical = new LlmService(organization.getId(), "temperature-service", "Temperature Service",
+                    FailoverPolicy.STRICT, false, "[]", java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO);
+            logical.configureTemperaturePolicy(TemperaturePolicy.FIXED, java.math.BigDecimal.ONE);
+            logical = services.save(logical);
+            targets.save(new ServiceTarget(logical.getId(), deployment.getId(), 1, 100, false, null));
+            access.save(new ProjectServiceAccess(project.getId(), logical.getId()));
+
+            mvc.perform(post("/v1/chat/completions").header("Authorization", "Bearer " + issued.secret())
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"model\":\"temperature-service\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}],\"temperature\":0.2,\"stream\":false}"))
+                    .andExpect(status().isOk());
+
+            assertThat(calls).hasValue(1);
+            assertThat(received.get().path("model").asText()).isEqualTo("physical-temperature");
+            assertThat(received.get().path("temperature").asDouble()).isEqualTo(1.0);
+        } finally {
+            provider.stop(0);
+        }
+    }
+
     private RuntimeEndpoint healthyEndpoint(UUID nodeId, int port) {
         RuntimeEndpoint endpoint = new RuntimeEndpoint(nodeId, RuntimeType.LM_STUDIO, "http://127.0.0.1:" + port, null);
         endpoint.recordHealth(true);
         return endpoints.save(endpoint);
     }
     private HttpServer server(int status, String response, AtomicInteger calls) throws IOException {
+        return server(status, response, calls, null);
+    }
+    private HttpServer server(int status, String response, AtomicInteger calls, AtomicReference<JsonNode> received) throws IOException {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        server.createContext("/v1/chat/completions", exchange -> respond(exchange, status, response, calls));
+        server.createContext("/v1/chat/completions", exchange -> {
+            calls.incrementAndGet();
+            byte[] request = exchange.getRequestBody().readAllBytes();
+            if (received != null) received.set(objectMapper.readTree(request));
+            byte[] body = response.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(status, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
         server.start();
         return server;
-    }
-    private void respond(HttpExchange exchange, int status, String response, AtomicInteger calls) throws IOException {
-        calls.incrementAndGet(); exchange.getRequestBody().readAllBytes();
-        byte[] body = response.getBytes(StandardCharsets.UTF_8);
-        exchange.getResponseHeaders().set("Content-Type", "application/json");
-        exchange.sendResponseHeaders(status, body.length);
-        exchange.getResponseBody().write(body); exchange.close();
     }
 }

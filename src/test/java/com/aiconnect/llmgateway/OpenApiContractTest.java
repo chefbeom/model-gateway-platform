@@ -24,6 +24,7 @@ class OpenApiContractTest {
                     "/api/auth/login",
                     "/api/admin/runtime-endpoints",
                     "/api/admin/model-deployments",
+                    "/api/admin/services/{serviceId}",
                     "/api/admin/services/{serviceId}/targets",
                     "/api/admin/organizations/{organizationId}/requests",
                     "/api/me/usage");
@@ -35,6 +36,9 @@ class OpenApiContractTest {
             Map<String, Object> serviceProperties = (Map<String, Object>) logicalService.get("properties");
             Map<String, Object> retryPolicy = (Map<String, Object>) serviceProperties.get("retryPolicy");
             assertThat((List<String>) retryPolicy.get("enum")).containsExactly("SAFE", "AGGRESSIVE");
+            Map<String, Object> temperaturePolicy = (Map<String, Object>) serviceProperties.get("temperaturePolicy");
+            assertThat((List<String>) temperaturePolicy.get("enum")).containsExactly("REQUEST", "FIXED", "OMIT");
+            assertThat(serviceProperties).containsKey("temperatureValue");
 
             Map<String, Object> deployment = (Map<String, Object>) schemas.get("CreateModelDeployment");
             assertThat((Map<String, Object>) deployment.get("properties")).containsKey("compatibilityKey");

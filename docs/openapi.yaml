@@ -230,6 +230,16 @@ paths:
         required: true
         content: { application/json: { schema: { $ref: '#/components/schemas/CreateLogicalService' } } }
       responses: { '200': { $ref: '#/components/responses/EntityCreated' } }
+  /api/admin/services/{serviceId}:
+    patch:
+      tags: [Control plane]
+      summary: Update logical service and request parameter policies
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/ServiceId' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/UpdateLogicalService' } } }
+      responses: { '200': { description: Updated service policy } }
   /api/admin/services/{serviceId}/targets:
     post:
       tags: [Control plane]
@@ -742,6 +752,29 @@ components:
         requiredCapabilitiesJson: { type: string, default: '[]' }
         inputPricePerMillion: { type: number, minimum: 0 }
         outputPricePerMillion: { type: number, minimum: 0 }
+        temperaturePolicy:
+          type: string
+          enum: [REQUEST, FIXED, OMIT]
+          default: REQUEST
+          description: Preserve the incoming value, override it with temperatureValue, or omit it so each target uses its default.
+        temperatureValue: { type: [number, 'null'], minimum: 0, maximum: 2, description: Required when temperaturePolicy is FIXED. }
+    UpdateLogicalService:
+      type: object
+      properties:
+        displayName: { type: string, maxLength: 200 }
+        failoverPolicy: { type: string, enum: [STRICT, COMPATIBLE, DEGRADED] }
+        retryPolicy: { type: string, enum: [SAFE, AGGRESSIVE] }
+        allowDegraded: { type: boolean }
+        requiredCapabilitiesJson: { type: string }
+        inputPricePerMillion: { type: number, minimum: 0 }
+        outputPricePerMillion: { type: number, minimum: 0 }
+        currency: { type: string, enum: [KRW, USD] }
+        enabled: { type: boolean }
+        temperaturePolicy:
+          type: string
+          enum: [REQUEST, FIXED, OMIT]
+          description: REQUEST preserves existing behavior; FIXED overwrites caller input; OMIT uses the target model default.
+        temperatureValue: { type: [number, 'null'], minimum: 0, maximum: 2, description: Required when temperaturePolicy is FIXED. }
     CreateServiceTarget:
       type: object
       required: [deploymentId, priority]
