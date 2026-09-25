@@ -120,10 +120,14 @@ public class StreamingChatCompletionGateway {
                 proxied.put("model", candidate.deployment().getProviderModelId());
                 service.applyTemperaturePolicy(proxied);
                 proxied.withObject("stream_options").put("include_usage", true);
-                StreamingRuntimeResult result = candidate.external()
-                        ? openAiClient.chatCompletion(candidate.externalProvider(), proxied,
-                                service.getTemperaturePolicy() == TemperaturePolicy.FIXED)
-                        : runtimeClient.chatCompletion(candidate.endpoint(), proxied);
+                StreamingRuntimeResult result;
+                if (candidate.external()) {
+                    service.applyOpenAiRequestPolicy(proxied);
+                    result = openAiClient.chatCompletion(candidate.externalProvider(), proxied,
+                            service.getTemperaturePolicy() == TemperaturePolicy.FIXED);
+                } else {
+                    result = runtimeClient.chatCompletion(candidate.endpoint(), proxied);
+                }
                 if (result.statusCode() >= 200 && result.statusCode() < 300) {
                     try {
                         InputStream prefetched = StreamingResponsePrefetcher.requireFirstByte(result.body());

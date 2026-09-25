@@ -1,0 +1,5 @@
+ALTER TABLE llm_service
+    ADD COLUMN reasoning_effort VARCHAR(24) NOT NULL DEFAULT 'REQUEST';
+
+ALTER TABLE llm_service
+    ADD COLUMN open_ai_fast_mode BOOLEAN NOT NULL DEFAULT FALSE;

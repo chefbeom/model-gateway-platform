@@ -50,6 +50,32 @@ class LlmServiceTemperaturePolicyTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    void openAiRequestDefaultsPreserveIncomingReasoningAndServiceTier() throws Exception {
+        ObjectNode request = (ObjectNode) objectMapper.readTree("""
+                {"reasoning_effort":"low","service_tier":"default"}
+                """);
+
+        service().applyOpenAiRequestPolicy(request);
+
+        assertThat(request.path("reasoning_effort").asText()).isEqualTo("low");
+        assertThat(request.path("service_tier").asText()).isEqualTo("default");
+    }
+
+    @Test
+    void openAiRequestPolicyOverridesReasoningAndEnablesFastMode() throws Exception {
+        ObjectNode request = (ObjectNode) objectMapper.readTree("""
+                {"reasoning_effort":"low","service_tier":"default"}
+                """);
+        LlmService service = service();
+        service.configureOpenAiRequestPolicy(ReasoningEffort.HIGH, true);
+
+        service.applyOpenAiRequestPolicy(request);
+
+        assertThat(request.path("reasoning_effort").asText()).isEqualTo("high");
+        assertThat(request.path("service_tier").asText()).isEqualTo("fast");
+    }
+
     private LlmService service() {
         return new LlmService(UUID.randomUUID(), "temperature-test", "Temperature Test",
                 FailoverPolicy.STRICT, false, "[]", BigDecimal.ZERO, BigDecimal.ZERO);

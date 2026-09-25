@@ -112,10 +112,14 @@ public class ChatCompletionGateway {
                 ObjectNode proxiedRequest = request.deepCopy();
                 proxiedRequest.put("model", candidate.deployment().getProviderModelId());
                 service.applyTemperaturePolicy(proxiedRequest);
-                RuntimeResult runtimeResult = candidate.external()
-                        ? openAiClient.chatCompletion(candidate.externalProvider(), proxiedRequest,
-                                service.getTemperaturePolicy() == TemperaturePolicy.FIXED)
-                        : runtimeClient.chatCompletion(candidate.endpoint(), proxiedRequest);
+                RuntimeResult runtimeResult;
+                if (candidate.external()) {
+                    service.applyOpenAiRequestPolicy(proxiedRequest);
+                    runtimeResult = openAiClient.chatCompletion(candidate.externalProvider(), proxiedRequest,
+                            service.getTemperaturePolicy() == TemperaturePolicy.FIXED);
+                } else {
+                    runtimeResult = runtimeClient.chatCompletion(candidate.endpoint(), proxiedRequest);
+                }
                 long attemptLatency = Duration.between(attemptStarted, Instant.now()).toMillis();
                 if (runtimeResult.isSuccessful()) {
                     attempt.succeed(attemptLatency, runtimeResult.statusCode()); attempts.save(attempt);

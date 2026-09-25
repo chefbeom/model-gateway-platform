@@ -4,6 +4,7 @@ import com.aiconnect.llmgateway.domain.Currency;
 import com.aiconnect.llmgateway.domain.FailoverPolicy;
 import com.aiconnect.llmgateway.domain.RetryPolicy;
 import com.aiconnect.llmgateway.domain.RuntimeType;
+import com.aiconnect.llmgateway.domain.ReasoningEffort;
 import com.aiconnect.llmgateway.domain.TemperaturePolicy;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.DecimalMax;
@@ -41,7 +42,18 @@ public final class AdminDtos {
                                 @DecimalMin("0") BigDecimal inputPricePerMillion,
                                 @DecimalMin("0") BigDecimal outputPricePerMillion, Currency currency,
                                 TemperaturePolicy temperaturePolicy,
-                                @DecimalMin("0.0") @DecimalMax("2.0") @Digits(integer = 1, fraction = 3) BigDecimal temperatureValue) { }
+                                @DecimalMin("0.0") @DecimalMax("2.0") @Digits(integer = 1, fraction = 3) BigDecimal temperatureValue,
+                                ReasoningEffort reasoningEffort,
+                                Boolean openAiFastMode) {
+        public CreateService(UUID organizationId, String serviceKey, String displayName, FailoverPolicy failoverPolicy,
+                             RetryPolicy retryPolicy, boolean allowDegraded, String requiredCapabilitiesJson,
+                             BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Currency currency,
+                             TemperaturePolicy temperaturePolicy, BigDecimal temperatureValue) {
+            this(organizationId, serviceKey, displayName, failoverPolicy, retryPolicy, allowDegraded,
+                    requiredCapabilitiesJson, inputPricePerMillion, outputPricePerMillion, currency,
+                    temperaturePolicy, temperatureValue, null, null);
+        }
+    }
     public record GrantServiceAccess(@NotNull UUID serviceId) { }
     public record CreateTarget(@NotNull UUID deploymentId, @Min(1) int priority, @Min(1) Integer weight,
                                boolean degraded, @Min(1) Integer maxConcurrencyOverride,

@@ -92,6 +92,32 @@ class OpenAiRequestNormalizerTest {
     }
 
     @Test
+    void removesSamplingControlsForGpt6WhenReasoningIsEnabledEvenIfTemperatureWasFixed() throws Exception {
+        ObjectNode request = (ObjectNode) objectMapper.readTree("""
+                {"model":"gpt-6-sol","reasoning_effort":"medium","temperature":0.2,"top_p":0.9,"top_logprobs":2}
+                """);
+
+        JsonNode normalized = OpenAiRequestNormalizer.forExternalProvider(request, true);
+
+        assertThat(normalized.has("temperature")).isFalse();
+        assertThat(normalized.has("top_p")).isFalse();
+        assertThat(normalized.has("top_logprobs")).isFalse();
+        assertThat(normalized.path("reasoning_effort").asText()).isEqualTo("medium");
+    }
+
+    @Test
+    void keepsSamplingControlsForGpt6WhenReasoningIsExplicitlyDisabled() throws Exception {
+        ObjectNode request = (ObjectNode) objectMapper.readTree("""
+                {"model":"gpt-6-sol","reasoning_effort":"none","temperature":0.2,"top_p":0.9}
+                """);
+
+        JsonNode normalized = OpenAiRequestNormalizer.forExternalProvider(request);
+
+        assertThat(normalized.path("temperature").asDouble()).isEqualTo(0.2);
+        assertThat(normalized.path("top_p").asDouble()).isEqualTo(0.9);
+    }
+
+    @Test
     void leavesNonObjectRequestsUntouched() throws Exception {
         JsonNode request = objectMapper.readTree("[1,2,3]");
 

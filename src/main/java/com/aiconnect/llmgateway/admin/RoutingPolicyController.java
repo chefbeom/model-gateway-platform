@@ -4,6 +4,7 @@ import com.aiconnect.llmgateway.domain.Currency;
 import com.aiconnect.llmgateway.domain.FailoverPolicy;
 import com.aiconnect.llmgateway.domain.LlmService;
 import com.aiconnect.llmgateway.domain.RetryPolicy;
+import com.aiconnect.llmgateway.domain.ReasoningEffort;
 import com.aiconnect.llmgateway.domain.ServiceTarget;
 import com.aiconnect.llmgateway.domain.TemperaturePolicy;
 import jakarta.validation.Valid;
@@ -74,13 +75,24 @@ public class RoutingPolicyController {
             Currency currency,
             Boolean enabled,
             TemperaturePolicy temperaturePolicy,
-            @DecimalMin("0.0") @DecimalMax("2.0") @Digits(integer = 1, fraction = 3) BigDecimal temperatureValue
+            @DecimalMin("0.0") @DecimalMax("2.0") @Digits(integer = 1, fraction = 3) BigDecimal temperatureValue,
+            ReasoningEffort reasoningEffort,
+            Boolean openAiFastMode
     ) {
+        public UpdateService(String displayName, FailoverPolicy failoverPolicy, RetryPolicy retryPolicy,
+                             Boolean allowDegraded, String requiredCapabilitiesJson,
+                             BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Currency currency,
+                             Boolean enabled, TemperaturePolicy temperaturePolicy, BigDecimal temperatureValue) {
+            this(displayName, failoverPolicy, retryPolicy, allowDegraded, requiredCapabilitiesJson,
+                    inputPricePerMillion, outputPricePerMillion, currency, enabled, temperaturePolicy,
+                    temperatureValue, null, null);
+        }
+
         public UpdateService(String displayName, FailoverPolicy failoverPolicy, RetryPolicy retryPolicy,
                              Boolean allowDegraded, String requiredCapabilitiesJson,
                              BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Boolean enabled) {
             this(displayName, failoverPolicy, retryPolicy, allowDegraded, requiredCapabilitiesJson,
-                    inputPricePerMillion, outputPricePerMillion, Currency.KRW, enabled, null, null);
+                    inputPricePerMillion, outputPricePerMillion, Currency.KRW, enabled, null, null, null, null);
         }
     }
     public record UpdateTarget(
@@ -101,12 +113,14 @@ public class RoutingPolicyController {
                                     FailoverPolicy failoverPolicy, RetryPolicy retryPolicy, boolean allowDegraded,
                                     String requiredCapabilitiesJson, BigDecimal inputPricePerMillion,
                                     BigDecimal outputPricePerMillion, Currency currency, boolean enabled,
-                                    TemperaturePolicy temperaturePolicy, BigDecimal temperatureValue) {
+                                    TemperaturePolicy temperaturePolicy, BigDecimal temperatureValue,
+                                    ReasoningEffort reasoningEffort, boolean openAiFastMode) {
         static ServicePolicyView from(LlmService service) {
             return new ServicePolicyView(service.getId(), service.getOrganizationId(), service.getServiceKey(), service.getDisplayName(),
                     service.getFailoverPolicy(), service.getRetryPolicy(), service.isAllowDegraded(), service.getRequiredCapabilitiesJson(),
                     service.getInputPricePerMillion(), service.getOutputPricePerMillion(), service.getCurrency(), service.isEnabled(),
-                    service.getTemperaturePolicy(), service.getTemperatureValue());
+                    service.getTemperaturePolicy(), service.getTemperatureValue(),
+                    service.getReasoningEffort(), service.isOpenAiFastMode());
         }
     }
 

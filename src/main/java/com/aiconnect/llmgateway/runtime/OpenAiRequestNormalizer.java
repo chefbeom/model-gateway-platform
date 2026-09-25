@@ -41,11 +41,14 @@ public final class OpenAiRequestNormalizer {
         }
 
         // GPT-5/o-series models reject sampling controls that LM Studio accepts.
-        // Omit these fields only at the external-provider boundary and retain
-        // the public API contract for local runtimes.
+        // GPT-6 accepts those controls only when reasoning effort is explicitly
+        // disabled; an omitted effort uses the model's reasoning default.
         String model = normalized.path("model").asText("").toLowerCase(Locale.ROOT);
-        if (isReasoningModel(model) || normalized.has("reasoning_effort")) {
-            if (!preserveTemperature) normalized.remove("temperature");
+        String reasoningEffort = normalized.path("reasoning_effort").asText("");
+        boolean reasoningEnabled = !reasoningEffort.isBlank() && !"none".equalsIgnoreCase(reasoningEffort);
+        boolean gpt6UsesReasoning = model.startsWith("gpt-6") && !"none".equalsIgnoreCase(reasoningEffort);
+        if (isReasoningModel(model) || reasoningEnabled || gpt6UsesReasoning) {
+            if (!preserveTemperature || gpt6UsesReasoning) normalized.remove("temperature");
             normalized.remove(Set.of(
                     "top_p", "presence_penalty", "frequency_penalty",
                     "stop", "logprobs", "top_logprobs"

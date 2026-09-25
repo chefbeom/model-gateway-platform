@@ -103,6 +103,7 @@ class GatewayFailoverIntegrationTest {
             LlmService logical = new LlmService(organization.getId(), "temperature-service", "Temperature Service",
                     FailoverPolicy.STRICT, false, "[]", java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO);
             logical.configureTemperaturePolicy(TemperaturePolicy.FIXED, java.math.BigDecimal.ONE);
+            logical.configureOpenAiRequestPolicy(ReasoningEffort.HIGH, true);
             logical = services.save(logical);
             targets.save(new ServiceTarget(logical.getId(), deployment.getId(), 1, 100, false, null));
             access.save(new ProjectServiceAccess(project.getId(), logical.getId()));
@@ -115,6 +116,8 @@ class GatewayFailoverIntegrationTest {
             assertThat(calls).hasValue(1);
             assertThat(received.get().path("model").asText()).isEqualTo("physical-temperature");
             assertThat(received.get().path("temperature").asDouble()).isEqualTo(1.0);
+            assertThat(received.get().has("reasoning_effort")).isFalse();
+            assertThat(received.get().has("service_tier")).isFalse();
         } finally {
             provider.stop(0);
         }

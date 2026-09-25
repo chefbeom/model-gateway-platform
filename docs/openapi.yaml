@@ -758,6 +758,15 @@ components:
           default: REQUEST
           description: Preserve the incoming value, override it with temperatureValue, or omit it so each target uses its default.
         temperatureValue: { type: [number, 'null'], minimum: 0, maximum: 2, description: Required when temperaturePolicy is FIXED. }
+        reasoningEffort:
+          type: string
+          enum: [REQUEST, NONE, MINIMAL, LOW, MEDIUM, HIGH, XHIGH, MAX]
+          default: REQUEST
+          description: For external OpenAI-compatible Targets, REQUEST preserves the incoming value/model default; other values are sent as Chat Completions reasoning_effort. Support is model-dependent.
+        openAiFastMode:
+          type: boolean
+          default: false
+          description: When true, external OpenAI-compatible Target requests include service_tier=fast. Availability and pricing depend on the provider, model, and project.
     UpdateLogicalService:
       type: object
       properties:
@@ -775,6 +784,13 @@ components:
           enum: [REQUEST, FIXED, OMIT]
           description: REQUEST preserves existing behavior; FIXED overwrites caller input; OMIT uses the target model default.
         temperatureValue: { type: [number, 'null'], minimum: 0, maximum: 2, description: Required when temperaturePolicy is FIXED. }
+        reasoningEffort:
+          type: string
+          enum: [REQUEST, NONE, MINIMAL, LOW, MEDIUM, HIGH, XHIGH, MAX]
+          description: For external OpenAI-compatible Targets, REQUEST preserves the incoming value/model default; other values are sent as Chat Completions reasoning_effort. Support is model-dependent.
+        openAiFastMode:
+          type: boolean
+          description: When true, external OpenAI-compatible Target requests include service_tier=fast. When false, incoming/provider defaults are preserved.
     CreateServiceTarget:
       type: object
       required: [deploymentId, priority]

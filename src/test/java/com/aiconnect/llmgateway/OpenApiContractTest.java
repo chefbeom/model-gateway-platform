@@ -39,6 +39,10 @@ class OpenApiContractTest {
             Map<String, Object> temperaturePolicy = (Map<String, Object>) serviceProperties.get("temperaturePolicy");
             assertThat((List<String>) temperaturePolicy.get("enum")).containsExactly("REQUEST", "FIXED", "OMIT");
             assertThat(serviceProperties).containsKey("temperatureValue");
+            Map<String, Object> reasoningEffort = (Map<String, Object>) serviceProperties.get("reasoningEffort");
+            assertThat((List<String>) reasoningEffort.get("enum"))
+                    .containsExactly("REQUEST", "NONE", "MINIMAL", "LOW", "MEDIUM", "HIGH", "XHIGH", "MAX");
+            assertThat(serviceProperties).containsKey("openAiFastMode");
 
             Map<String, Object> deployment = (Map<String, Object>) schemas.get("CreateModelDeployment");
             assertThat((Map<String, Object>) deployment.get("properties")).containsKey("compatibilityKey");

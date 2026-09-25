@@ -42,6 +42,7 @@ public class RoutingPolicyService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "TEMPERATURE_VALUE_REQUIRED", "A temperature value is required for the FIXED policy.");
         }
         service.configureTemperaturePolicy(request.temperaturePolicy(), request.temperatureValue());
+        service.configureOpenAiRequestPolicy(request.reasoningEffort(), request.openAiFastMode());
         return services.save(service);
     }
 

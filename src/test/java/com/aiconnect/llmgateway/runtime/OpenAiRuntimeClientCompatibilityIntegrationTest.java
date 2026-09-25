@@ -93,4 +93,41 @@ class OpenAiRuntimeClientCompatibilityIntegrationTest {
             providerServer.stop(0);
         }
     }
+
+    @Test
+    void sendsReasoningEffortAndFastTierToExternalOpenAiProvider() throws Exception {
+        ObjectMapper objectMapper = new ObjectMapper();
+        AtomicReference<JsonNode> received = new AtomicReference<>();
+        HttpServer providerServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        providerServer.createContext("/v1/chat/completions", exchange -> {
+            received.set(objectMapper.readTree(exchange.getRequestBody()));
+            byte[] response = "{\"id\":\"test\",\"choices\":[],\"usage\":{}}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        providerServer.start();
+
+        try {
+            GatewayProperties properties = new GatewayProperties("admin", "pepper", "encryption-key",
+                    0, 5_000, 5_000);
+            SecretCipher cipher = new SecretCipher(properties);
+            ExternalProvider provider = new ExternalProvider(UUID.randomUUID(), ExternalProviderType.OPENAI,
+                    "Test provider", "http://127.0.0.1:" + providerServer.getAddress().getPort() + "/v1",
+                    cipher.encrypt("provider-secret"));
+            OpenAiRuntimeClient client = new OpenAiRuntimeClient(RestClient.builder().build(), objectMapper, cipher);
+            ObjectNode request = (ObjectNode) objectMapper.readTree("""
+                    {"model":"gpt-5.6-sol","messages":[],"reasoning_effort":"high","service_tier":"fast"}
+                    """);
+
+            RuntimeResult result = client.chatCompletion(provider, request);
+
+            assertThat(result.statusCode()).isEqualTo(200);
+            assertThat(received.get().path("reasoning_effort").asText()).isEqualTo("high");
+            assertThat(received.get().path("service_tier").asText()).isEqualTo("fast");
+        } finally {
+            providerServer.stop(0);
+        }
+    }
 }

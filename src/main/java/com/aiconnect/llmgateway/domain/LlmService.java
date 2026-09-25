@@ -22,6 +22,8 @@ public class LlmService {
     @Enumerated(EnumType.STRING) @Column(nullable = false, length = 3) private Currency currency = Currency.KRW;
     @Enumerated(EnumType.STRING) @Column(nullable = false, length = 24) private TemperaturePolicy temperaturePolicy = TemperaturePolicy.REQUEST;
     @Column(precision = 4, scale = 3) private BigDecimal temperatureValue;
+    @Enumerated(EnumType.STRING) @Column(nullable = false, length = 24) private ReasoningEffort reasoningEffort = ReasoningEffort.REQUEST;
+    @Column(nullable = false) private boolean openAiFastMode;
     @Column(nullable = false) private boolean enabled = true;
     /** Tombstones keep the service identity available to request history and usage aggregation. */
     @Column private Instant deletedAt;
@@ -93,6 +95,19 @@ public class LlmService {
         }
     }
 
+    /** Applies OpenAI Chat Completions controls to a per-target request copy. */
+    public void configureOpenAiRequestPolicy(ReasoningEffort effort, Boolean fastMode) {
+        if (effort != null) this.reasoningEffort = effort;
+        if (fastMode != null) this.openAiFastMode = fastMode;
+    }
+
+    public void applyOpenAiRequestPolicy(ObjectNode request) {
+        if (request == null) return;
+        String effort = getReasoningEffort().requestValue();
+        if (effort != null) request.put("reasoning_effort", effort);
+        if (openAiFastMode) request.put("service_tier", "fast");
+    }
+
     public void markDeleted() {
         this.enabled = false;
         if (this.deletedAt == null) this.deletedAt = Instant.now();
@@ -112,6 +127,8 @@ public class LlmService {
     public Currency getCurrency() { return currency; }
     public TemperaturePolicy getTemperaturePolicy() { return temperaturePolicy == null ? TemperaturePolicy.REQUEST : temperaturePolicy; }
     public BigDecimal getTemperatureValue() { return temperatureValue; }
+    public ReasoningEffort getReasoningEffort() { return reasoningEffort == null ? ReasoningEffort.REQUEST : reasoningEffort; }
+    public boolean isOpenAiFastMode() { return openAiFastMode; }
     public boolean isEnabled() { return enabled; }
     public Instant getDeletedAt() { return deletedAt; }
     public boolean isDeleted() { return deletedAt != null; }

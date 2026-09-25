@@ -111,6 +111,7 @@ public class ControlPlaneService {
                 request.requiredCapabilitiesJson(), zeroIfNull(request.inputPricePerMillion()), zeroIfNull(request.outputPricePerMillion()),
                 request.currency() == null ? Currency.KRW : request.currency());
         configureTemperaturePolicy(service, request.temperaturePolicy(), request.temperatureValue());
+        service.configureOpenAiRequestPolicy(request.reasoningEffort(), request.openAiFastMode());
         return services.save(service);
     }
 
