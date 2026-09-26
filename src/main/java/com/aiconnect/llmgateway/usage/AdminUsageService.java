@@ -232,7 +232,8 @@ public class AdminUsageService {
                         infrastructure.title(), apiKey == null ? "삭제된 API 키" : apiKey.getKeyPrefix(),
                         row.getStatus().name(), tokens(row.getInputTokens()), tokens(row.getOutputTokens()),
                         cost(row.getEstimatedCost()), row.getCostCurrency() == null ? Currency.KRW.name() : row.getCostCurrency().name(),                         row.getLatencyMs(), row.getFailoverCount(),
-                        row.getErrorCode(), row.getStartedAt()));
+                        row.getErrorCode(), row.getStartedAt(), row.getReasoningEffort(),
+                        row.getRequestedServiceTier(), row.getActualServiceTier()));
             }
         }
 
@@ -378,6 +379,6 @@ public class AdminUsageService {
                                 String infrastructure, String apiKeyLabel, String status,
                                 long inputTokens, long outputTokens, BigDecimal estimatedCost,
                                 String costCurrency, Long latencyMs, int failoverCount,
-                                String errorCode, Instant startedAt) { }
+                                String errorCode, Instant startedAt, String reasoningEffort,
+                                String requestedServiceTier, String actualServiceTier) { }
 }
-

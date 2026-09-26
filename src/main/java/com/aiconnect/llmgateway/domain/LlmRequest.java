@@ -33,7 +33,8 @@ public class LlmRequest {
     @Enumerated(EnumType.STRING) @Column(nullable = false, length = 24) private RequestStatus status = RequestStatus.IN_PROGRESS;
     private Integer inputTokens;
     private Integer outputTokens;
-    @Column(precision = 18, scale = 6) private BigDecimal estimatedCost;
+    @Column(precision = 24, scale = 12) private BigDecimal estimatedCost;
+    @Column(precision = 18, scale = 6) private BigDecimal cachedInputUnitPrice;
     @Enumerated(EnumType.STRING) @Column(nullable = false, length = 3) private Currency costCurrency = Currency.KRW;
     @Column(nullable = false, precision = 18, scale = 6) private BigDecimal inputUnitPrice;
     @Column(nullable = false, precision = 18, scale = 6) private BigDecimal outputUnitPrice;
@@ -46,6 +47,13 @@ public class LlmRequest {
     @Column(length = 16) private String dataProtectionAction;
     @Column(columnDefinition = "text") private String dataClassificationsJson;
     private Boolean dataExternalAllowed;
+    @Column(length = 24) private String reasoningEffort;
+    @Column(length = 24) private String requestedServiceTier;
+    @Column(length = 24) private String actualServiceTier;
+    private Integer reasoningTokens;
+    private Integer cachedInputTokens;
+    @Column(length = 24) private String costPricingTier;
+    @Column(length = 32) private String costCalculationStatus;
     @Column(nullable = false) private Instant startedAt = Instant.now();
     private Instant completedAt;
 
@@ -89,12 +97,31 @@ public class LlmRequest {
     public void succeed(UUID deploymentId, int inputTokens, int outputTokens, long latencyMs, int httpStatus,
                         int failoverCount, String providerType, String routingReason,
                         BigDecimal providerInputPrice, BigDecimal providerOutputPrice, Currency providerCurrency) {
+        succeed(deploymentId, inputTokens, outputTokens, latencyMs, httpStatus, failoverCount, providerType,
+                routingReason, providerInputPrice, providerOutputPrice, providerCurrency, null, null, null,
+                null, null, null, "STANDARD", "ESTIMATED");
+    }
+
+    public void succeed(UUID deploymentId, int inputTokens, int outputTokens, long latencyMs, int httpStatus,
+                        int failoverCount, String providerType, String routingReason,
+                        BigDecimal providerInputPrice, BigDecimal providerOutputPrice, Currency providerCurrency,
+                        String appliedReasoningEffort, String requestedTier, String actualTier,
+                        Integer reasoningTokens, Integer cachedInputTokens, BigDecimal cachedInputPrice,
+                        String pricingTier, String costStatus) {
         this.finalDeploymentId = deploymentId;
         this.finalProviderType = providerType;
         this.routingReason = routingReason;
         if (providerInputPrice != null) this.inputUnitPrice = providerInputPrice;
         if (providerOutputPrice != null) this.outputUnitPrice = providerOutputPrice;
         if (providerCurrency != null) this.costCurrency = providerCurrency;
+        if (appliedReasoningEffort != null && !appliedReasoningEffort.isBlank()) this.reasoningEffort = appliedReasoningEffort;
+        if (requestedTier != null && !requestedTier.isBlank()) this.requestedServiceTier = requestedTier;
+        this.actualServiceTier = actualTier;
+        this.reasoningTokens = reasoningTokens;
+        this.cachedInputTokens = cachedInputTokens == null ? null : Math.min(inputTokens, Math.max(0, cachedInputTokens));
+        this.cachedInputUnitPrice = cachedInputPrice;
+        this.costPricingTier = pricingTier;
+        this.costCalculationStatus = costStatus;
         this.inputTokens = inputTokens;
         this.outputTokens = outputTokens;
         this.latencyMs = latencyMs;
@@ -102,8 +129,20 @@ public class LlmRequest {
         this.failoverCount = failoverCount;
         this.status = RequestStatus.SUCCEEDED;
         this.completedAt = Instant.now();
-        this.estimatedCost = inputUnitPrice.multiply(BigDecimal.valueOf(inputTokens))
-                .add(outputUnitPrice.multiply(BigDecimal.valueOf(outputTokens))).movePointLeft(6);
+        this.estimatedCost = ("FAST_PRICE_MISSING".equals(costStatus) || "SERVICE_TIER_UNKNOWN".equals(costStatus)
+                || inputUnitPrice == null || outputUnitPrice == null)
+                ? null
+                : inputUnitPrice.multiply(BigDecimal.valueOf(Math.max(0, inputTokens - (this.cachedInputTokens == null ? 0 : this.cachedInputTokens))))
+                    .add((cachedInputUnitPrice == null ? inputUnitPrice : cachedInputUnitPrice)
+                            .multiply(BigDecimal.valueOf(this.cachedInputTokens == null ? 0 : this.cachedInputTokens)))
+                    .add(outputUnitPrice.multiply(BigDecimal.valueOf(outputTokens))).movePointLeft(6);
+    }
+
+    public void recordExecutionOptions(com.fasterxml.jackson.databind.JsonNode request) {
+        String effort = request == null ? null : request.path("reasoning_effort").asText(null);
+        String tier = request == null ? null : request.path("service_tier").asText(null);
+        this.reasoningEffort = effort == null || effort.isBlank() ? null : effort;
+        this.requestedServiceTier = tier == null || tier.isBlank() ? null : tier;
     }
     public void fail(String errorCode, int httpStatus, long latencyMs, int failoverCount) {
         this.errorCode = errorCode;
@@ -153,4 +192,12 @@ public class LlmRequest {
     public String getDataProtectionAction() { return dataProtectionAction; }
     public String getDataClassificationsJson() { return dataClassificationsJson; }
     public Boolean getDataExternalAllowed() { return dataExternalAllowed; }
+    public String getReasoningEffort() { return reasoningEffort; }
+    public String getRequestedServiceTier() { return requestedServiceTier; }
+    public String getActualServiceTier() { return actualServiceTier; }
+    public Integer getReasoningTokens() { return reasoningTokens; }
+    public Integer getCachedInputTokens() { return cachedInputTokens; }
+    public BigDecimal getCachedInputUnitPrice() { return cachedInputUnitPrice; }
+    public String getCostPricingTier() { return costPricingTier; }
+    public String getCostCalculationStatus() { return costCalculationStatus; }
 }

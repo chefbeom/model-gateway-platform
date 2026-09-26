@@ -123,9 +123,12 @@ public class StreamingChatCompletionGateway {
                 StreamingRuntimeResult result;
                 if (candidate.external()) {
                     service.applyOpenAiRequestPolicy(proxied);
+                    candidate.deployment().applyOpenAiDefaults(proxied);
+                    audit.recordExecutionOptions(proxied);
                     result = openAiClient.chatCompletion(candidate.externalProvider(), proxied,
                             service.getTemperaturePolicy() == TemperaturePolicy.FIXED);
                 } else {
+                    audit.recordExecutionOptions(null);
                     result = runtimeClient.chatCompletion(candidate.endpoint(), proxied);
                 }
                 if (result.statusCode() >= 200 && result.statusCode() < 300) {
@@ -255,10 +258,21 @@ public class StreamingChatCompletionGateway {
             finalized = true;
             attempt.succeed(elapsed(started), statusCode); attempts.save(attempt);
             int failoverCount = "AUTO_FAILOVER".equals(target.routingReason()) && failures == 0 ? 1 : failures;
-            TokenPricingResolver.EffectivePricing pricing = TokenPricingResolver.forLocal(service, target.deployment(), target.endpoint());
+            String actualTier = target.external() ? usage.actualServiceTier() : "LOCAL";
+            TokenPricingResolver.EffectivePricing pricing = TokenPricingResolver.forRequest(service, target.deployment(), target.endpoint(), actualTier, audit.getRequestedServiceTier());
+            String costStatus = !target.external() ? "ESTIMATED"
+                    : "UNKNOWN".equals(pricing.pricingTier()) ? "SERVICE_TIER_UNKNOWN"
+                    : !pricing.rateConfigured() ? "FAST_PRICE_MISSING"
+                    : usage.cachedInputTokens() > 0 && !pricing.cachedInputRateConfigured() ? "CACHED_PRICE_FALLBACK"
+                    : actualTier == null || actualTier.isBlank() ? "REQUEST_TIER_FALLBACK" : "ESTIMATED";
             audit.succeed(target.deployment().getId(), usage.inputTokens(), usage.outputTokens(),
                     elapsed(audit.getStartedAt()), statusCode, failoverCount, target.providerType(), target.routingReason(),
-                    pricing.inputPricePerMillion(), pricing.outputPricePerMillion(), pricing.currency());
+                    pricing.inputPricePerMillion(), pricing.outputPricePerMillion(), pricing.currency(),
+                    audit.getReasoningEffort(), audit.getRequestedServiceTier(), actualTier,
+                    usage.reasoningTokens() > 0 ? usage.reasoningTokens() : null,
+                    usage.cachedInputTokens() > 0 ? usage.cachedInputTokens() : null,
+                    pricing.cachedInputRateConfigured() ? pricing.cachedInputPricePerMillion() : null,
+                    pricing.pricingTier(), costStatus);
             requests.save(audit);
             if (target.external()) { target.externalProvider().recordHealth(true); providers.save(target.externalProvider()); }
             routing.release(target);
@@ -281,6 +295,9 @@ public class StreamingChatCompletionGateway {
         private final StringBuilder generatedText = new StringBuilder();
         private int inputTokens;
         private int outputTokens;
+        private int reasoningTokens;
+        private int cachedInputTokens;
+        private String actualServiceTier;
 
         private UsageCollector(JsonNode request) {
             this.request = request;
@@ -311,6 +328,12 @@ public class StreamingChatCompletionGateway {
                 JsonNode usage = payload.path("usage");
                 inputTokens = Math.max(inputTokens, usage.path("prompt_tokens").asInt(usage.path("input_tokens").asInt(0)));
                 outputTokens = Math.max(outputTokens, usage.path("completion_tokens").asInt(usage.path("output_tokens").asInt(0)));
+                reasoningTokens = Math.max(reasoningTokens, usage.path("completion_tokens_details").path("reasoning_tokens")
+                        .asInt(usage.path("output_tokens_details").path("reasoning_tokens").asInt(0)));
+                cachedInputTokens = Math.max(cachedInputTokens, usage.path("prompt_tokens_details").path("cached_tokens")
+                        .asInt(usage.path("input_tokens_details").path("cached_tokens").asInt(0)));
+                String tier = payload.path("service_tier").asText(null);
+                if (tier != null && !tier.isBlank()) actualServiceTier = tier;
                 TokenUsageEstimator.appendOutputText(payload, generatedText);
             } catch (Exception ignored) { }
         }
@@ -320,8 +343,11 @@ public class StreamingChatCompletionGateway {
         }
 
         int outputTokens() {
-            return outputTokens > 0 ? outputTokens : TokenUsageEstimator.estimateTextTokens(generatedText.toString());
+            return outputTokens > 0 ? outputTokens : TokenUsageEstimator.estimateTextTokens(generatedText.toString()) + reasoningTokens;
         }
+        int reasoningTokens() { return reasoningTokens; }
+        int cachedInputTokens() { return cachedInputTokens; }
+        String actualServiceTier() { return actualServiceTier; }
         }
 
 

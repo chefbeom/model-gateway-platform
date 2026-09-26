@@ -50,7 +50,7 @@ public class ExternalProviderAdministrationController {
 
     @PostMapping("/external-providers/{providerId}/models")
     public ExternalProviderAdministrationService.ProviderModelView addModel(@PathVariable UUID providerId, @Valid @RequestBody AddModel request) {
-        return service.addModel(providerId, request.providerModelId(), request.displayName(), request.compatibilityKey(), request.contextLength(), request.maxConcurrency(), request.capabilitiesJson(), request.inputPricePerMillion(), request.outputPricePerMillion(), request.currency());
+        return service.addModel(providerId, request.providerModelId(), request.displayName(), request.compatibilityKey(), request.contextLength(), request.maxConcurrency(), request.capabilitiesJson(), request.inputPricePerMillion(), request.outputPricePerMillion(), request.currency(), request.reasoningEffort(), request.serviceTier(), request.cachedInputPricePerMillion(), request.fastInputPricePerMillion(), request.fastCachedInputPricePerMillion(), request.fastOutputPricePerMillion());
     }
 
     @PostMapping("/external-providers/{providerId}/models/batch")
@@ -59,7 +59,9 @@ public class ExternalProviderAdministrationController {
         return service.addModels(providerId, request.models().stream()
                 .map(item -> new ExternalProviderAdministrationService.ModelRegistration(item.providerModelId(), item.displayName(),
                         item.compatibilityKey(), item.contextLength(), item.maxConcurrency(), item.capabilitiesJson(),
-                        item.inputPricePerMillion(), item.outputPricePerMillion(), item.currency()))
+                        item.inputPricePerMillion(), item.outputPricePerMillion(), item.currency(), item.reasoningEffort(),
+                        item.serviceTier(), item.cachedInputPricePerMillion(), item.fastInputPricePerMillion(),
+                        item.fastCachedInputPricePerMillion(), item.fastOutputPricePerMillion()))
                 .toList());
     }
     @PatchMapping("/external-providers/{providerId}/models/{modelId}")
@@ -68,7 +70,10 @@ public class ExternalProviderAdministrationController {
                                                                                 @Valid @RequestBody UpdateModel request) {
         return service.updateModel(providerId, modelId, request.displayName(), request.compatibilityKey(),
                 request.contextLength(), request.maxConcurrency(), request.capabilitiesJson(),
-                request.inputPricePerMillion(), request.outputPricePerMillion(), request.currency(), request.enabled());
+                request.inputPricePerMillion(), request.outputPricePerMillion(), request.currency(), request.enabled(),
+                request.reasoningEffort(), request.serviceTier(), request.cachedInputPricePerMillion(),
+                request.fastInputPricePerMillion(), request.fastCachedInputPricePerMillion(), request.fastOutputPricePerMillion(),
+                request.clearOptionalPrices());
     }
 
     private boolean isPlatformAdmin(HttpServletRequest request) {
@@ -82,10 +87,23 @@ public class ExternalProviderAdministrationController {
     public record AddModel(@NotBlank @Size(max = 500) String providerModelId, @NotBlank @Size(max = 200) String displayName,
                            String compatibilityKey, @Positive Integer contextLength, @Positive Integer maxConcurrency,
                            String capabilitiesJson, @PositiveOrZero BigDecimal inputPricePerMillion,
-                           @PositiveOrZero BigDecimal outputPricePerMillion, Currency currency) { }
+                           @PositiveOrZero BigDecimal outputPricePerMillion, Currency currency,
+                           com.aiconnect.llmgateway.domain.ReasoningEffort reasoningEffort,
+                           com.aiconnect.llmgateway.domain.OpenAiServiceTier serviceTier,
+                           @PositiveOrZero BigDecimal cachedInputPricePerMillion,
+                           @PositiveOrZero BigDecimal fastInputPricePerMillion,
+                           @PositiveOrZero BigDecimal fastCachedInputPricePerMillion,
+                           @PositiveOrZero BigDecimal fastOutputPricePerMillion) { }
     public record BatchAddModels(@NotEmpty @Size(max = 100) List<@NotNull @Valid AddModel> models) { }
     public record UpdateModel(@Size(max = 200) String displayName, @Size(max = 500) String compatibilityKey,
                               @Positive Integer contextLength, @Positive Integer maxConcurrency,
                               String capabilitiesJson, @PositiveOrZero BigDecimal inputPricePerMillion,
-                              @PositiveOrZero BigDecimal outputPricePerMillion, Currency currency, Boolean enabled) { }
+                              @PositiveOrZero BigDecimal outputPricePerMillion, Currency currency, Boolean enabled,
+                              com.aiconnect.llmgateway.domain.ReasoningEffort reasoningEffort,
+                              com.aiconnect.llmgateway.domain.OpenAiServiceTier serviceTier,
+                              @PositiveOrZero BigDecimal cachedInputPricePerMillion,
+                              @PositiveOrZero BigDecimal fastInputPricePerMillion,
+                              @PositiveOrZero BigDecimal fastCachedInputPricePerMillion,
+                              @PositiveOrZero BigDecimal fastOutputPricePerMillion,
+                              boolean clearOptionalPrices) { }
 }

@@ -76,7 +76,8 @@ public class UsageController {
                 service == null ? null : service.getDisplayName(), deployment == null ? null : deployment.getDisplayName(),
                 request.isStream(), request.getStatus().name(), request.getInputTokens(), request.getOutputTokens(),
                 request.getEstimatedCost(), request.getCostCurrency().name(), request.getLatencyMs(), request.getFailoverCount(), request.getFinalProviderType(), request.getRoutingReason(), request.getHttpStatus(),
-                request.getErrorCode(), request.getStartedAt(), request.getCompletedAt());
+                request.getErrorCode(), request.getStartedAt(), request.getCompletedAt(), request.getReasoningEffort(),
+                request.getRequestedServiceTier(), request.getActualServiceTier());
     }
     private Map<String, BigDecimal> costByCurrency(List<LlmRequest> rows) {
         Map<String, BigDecimal> result = new LinkedHashMap<>();
@@ -94,5 +95,6 @@ public class UsageController {
     public record RequestView(String requestId, String serviceKey, String serviceDisplayName, String deploymentDisplayName,
                               boolean stream, String status, Integer inputTokens, Integer outputTokens,
                               BigDecimal estimatedCost, String costCurrency, Long latencyMs, int failoverCount, String providerType, String routingReason, Integer httpStatus,
-                              String errorCode, Instant startedAt, Instant completedAt) { }
+                              String errorCode, Instant startedAt, Instant completedAt, String reasoningEffort,
+                              String requestedServiceTier, String actualServiceTier) { }
 }

@@ -21,8 +21,14 @@ public class ModelDeployment {
     @Enumerated(EnumType.STRING) @Column(nullable = false, length = 24) private HealthStatus healthStatus = HealthStatus.UNKNOWN;
     @Column(nullable = false) private int maxConcurrency = 1;
     @Column(precision = 18, scale = 6) private java.math.BigDecimal providerInputPricePerMillion;
+    @Column(precision = 18, scale = 6) private java.math.BigDecimal providerCachedInputPricePerMillion;
     @Column(precision = 18, scale = 6) private java.math.BigDecimal providerOutputPricePerMillion;
+    @Column(precision = 18, scale = 6) private java.math.BigDecimal fastInputPricePerMillion;
+    @Column(precision = 18, scale = 6) private java.math.BigDecimal fastCachedInputPricePerMillion;
+    @Column(precision = 18, scale = 6) private java.math.BigDecimal fastOutputPricePerMillion;
     @Enumerated(EnumType.STRING) @Column(length = 3) private Currency providerPriceCurrency = Currency.KRW;
+    @Enumerated(EnumType.STRING) @Column(nullable = false, length = 24) private ReasoningEffort defaultReasoningEffort = ReasoningEffort.REQUEST;
+    @Enumerated(EnumType.STRING) @Column(nullable = false, length = 16) private OpenAiServiceTier defaultServiceTier = OpenAiServiceTier.REQUEST;
     @Column(columnDefinition = "text") private String capabilitiesJson = "[]";
     @Column(columnDefinition = "text") private String capabilityOverridesJson;
     @Column(columnDefinition = "text") private String metadataJson;
@@ -60,6 +66,28 @@ public class ModelDeployment {
                                            String displayName, Integer contextLength, int maxConcurrency,
                                            String capabilitiesJson, java.math.BigDecimal inputPrice,
                                            java.math.BigDecimal outputPrice, Currency priceCurrency) {
+        return external(providerId, providerModelId, compatibilityKey, displayName, contextLength, maxConcurrency,
+                capabilitiesJson, inputPrice, outputPrice, priceCurrency, null, null, null, null);
+    }
+
+    public static ModelDeployment external(UUID providerId, String providerModelId, String compatibilityKey,
+                                           String displayName, Integer contextLength, int maxConcurrency,
+                                           String capabilitiesJson, java.math.BigDecimal inputPrice,
+                                           java.math.BigDecimal outputPrice, Currency priceCurrency,
+                                           ReasoningEffort defaultReasoningEffort, OpenAiServiceTier defaultServiceTier,
+                                           java.math.BigDecimal fastInputPrice, java.math.BigDecimal fastOutputPrice) {
+        return external(providerId, providerModelId, compatibilityKey, displayName, contextLength, maxConcurrency,
+                capabilitiesJson, inputPrice, outputPrice, priceCurrency, defaultReasoningEffort, defaultServiceTier,
+                null, null, fastInputPrice, fastOutputPrice);
+    }
+
+    public static ModelDeployment external(UUID providerId, String providerModelId, String compatibilityKey,
+                                           String displayName, Integer contextLength, int maxConcurrency,
+                                           String capabilitiesJson, java.math.BigDecimal inputPrice,
+                                           java.math.BigDecimal outputPrice, Currency priceCurrency,
+                                           ReasoningEffort defaultReasoningEffort, OpenAiServiceTier defaultServiceTier,
+                                           java.math.BigDecimal cachedInputPrice, java.math.BigDecimal fastInputPrice,
+                                           java.math.BigDecimal fastCachedInputPrice, java.math.BigDecimal fastOutputPrice) {
         ModelDeployment deployment = new ModelDeployment();
         deployment.externalProviderId = providerId;
         deployment.providerModelId = providerModelId;
@@ -74,6 +102,8 @@ public class ModelDeployment {
         deployment.providerInputPricePerMillion = inputPrice;
         deployment.providerOutputPricePerMillion = outputPrice;
         deployment.providerPriceCurrency = priceCurrency == null ? Currency.KRW : priceCurrency;
+        deployment.configureOpenAiDefaults(defaultReasoningEffort, defaultServiceTier, cachedInputPrice,
+                fastInputPrice, fastCachedInputPrice, fastOutputPrice, false);
         deployment.lastSyncedAt = Instant.now();
         return deployment;
     }
@@ -121,15 +151,68 @@ public class ModelDeployment {
                                        Integer maxConcurrency, String capabilitiesJson,
                                        java.math.BigDecimal inputPrice, java.math.BigDecimal outputPrice,
                                        Currency priceCurrency) {
+        configureProviderModel(displayName, compatibilityKey, enabled, maxConcurrency, capabilitiesJson,
+                inputPrice, outputPrice, priceCurrency, null, null, null, null);
+    }
+
+    public void configureProviderModel(String displayName, String compatibilityKey, Boolean enabled,
+                                       Integer maxConcurrency, String capabilitiesJson,
+                                       java.math.BigDecimal inputPrice, java.math.BigDecimal outputPrice,
+                                       Currency priceCurrency, ReasoningEffort defaultReasoningEffort,
+                                       OpenAiServiceTier defaultServiceTier,
+                                       java.math.BigDecimal fastInputPrice, java.math.BigDecimal fastOutputPrice) {
+        configureProviderModel(displayName, compatibilityKey, enabled, maxConcurrency, capabilitiesJson,
+                inputPrice, outputPrice, priceCurrency, defaultReasoningEffort, defaultServiceTier,
+                null, fastInputPrice, null, fastOutputPrice, false);
+    }
+
+    public void configureProviderModel(String displayName, String compatibilityKey, Boolean enabled,
+                                       Integer maxConcurrency, String capabilitiesJson,
+                                       java.math.BigDecimal inputPrice, java.math.BigDecimal outputPrice,
+                                       Currency priceCurrency, ReasoningEffort defaultReasoningEffort,
+                                       OpenAiServiceTier defaultServiceTier,
+                                       java.math.BigDecimal cachedInputPrice, java.math.BigDecimal fastInputPrice,
+                                       java.math.BigDecimal fastCachedInputPrice, java.math.BigDecimal fastOutputPrice,
+                                       boolean clearOptionalPrices) {
         if (displayName != null && !displayName.isBlank()) this.displayName = displayName;
         if (compatibilityKey != null && !compatibilityKey.isBlank()) this.compatibilityKey = compatibilityKey;
         if (enabled != null) this.enabled = enabled;
         if (maxConcurrency != null) this.maxConcurrency = Math.max(1, maxConcurrency);
         if (capabilitiesJson != null) this.capabilitiesJson = capabilitiesJson;
         configurePricing(inputPrice, outputPrice, priceCurrency);
+        configureOpenAiDefaults(defaultReasoningEffort, defaultServiceTier, cachedInputPrice,
+                fastInputPrice, fastCachedInputPrice, fastOutputPrice, clearOptionalPrices);
         this.loaded = true;
         this.healthStatus = HealthStatus.HEALTHY;
         this.lastSyncedAt = Instant.now();
+    }
+
+    public void configureOpenAiDefaults(ReasoningEffort reasoningEffort, OpenAiServiceTier serviceTier,
+                                        java.math.BigDecimal cachedInputPrice, java.math.BigDecimal fastInputPrice,
+                                        java.math.BigDecimal fastCachedInputPrice, java.math.BigDecimal fastOutputPrice,
+                                        boolean clearOptionalPrices) {
+        if (reasoningEffort != null) this.defaultReasoningEffort = reasoningEffort;
+        if (serviceTier != null) this.defaultServiceTier = serviceTier;
+        if (clearOptionalPrices) {
+            this.providerCachedInputPricePerMillion = null;
+            this.fastInputPricePerMillion = null;
+            this.fastCachedInputPricePerMillion = null;
+            this.fastOutputPricePerMillion = null;
+        } else {
+            if (cachedInputPrice != null) this.providerCachedInputPricePerMillion = cachedInputPrice;
+            if (fastInputPrice != null) this.fastInputPricePerMillion = fastInputPrice;
+            if (fastCachedInputPrice != null) this.fastCachedInputPricePerMillion = fastCachedInputPrice;
+            if (fastOutputPrice != null) this.fastOutputPricePerMillion = fastOutputPrice;
+        }
+    }
+
+    /** Apply explicit provider-model policy after the logical-service defaults. */
+    public void applyOpenAiDefaults(com.fasterxml.jackson.databind.node.ObjectNode request) {
+        if (request == null || !isExternal()) return;
+        String effort = (defaultReasoningEffort == null ? ReasoningEffort.REQUEST : defaultReasoningEffort).requestValue();
+        if (effort != null) request.put("reasoning_effort", effort);
+        String tier = (defaultServiceTier == null ? OpenAiServiceTier.REQUEST : defaultServiceTier).requestValue();
+        if (tier != null) request.put("service_tier", tier);
     }
 
     public void markUnavailable() {
@@ -155,8 +238,14 @@ public class ModelDeployment {
     public HealthStatus getHealthStatus() { return healthStatus; }
     public int getMaxConcurrency() { return maxConcurrency; }
     public java.math.BigDecimal getProviderInputPricePerMillion() { return providerInputPricePerMillion; }
+    public java.math.BigDecimal getProviderCachedInputPricePerMillion() { return providerCachedInputPricePerMillion; }
     public java.math.BigDecimal getProviderOutputPricePerMillion() { return providerOutputPricePerMillion; }
+    public java.math.BigDecimal getFastInputPricePerMillion() { return fastInputPricePerMillion; }
+    public java.math.BigDecimal getFastCachedInputPricePerMillion() { return fastCachedInputPricePerMillion; }
+    public java.math.BigDecimal getFastOutputPricePerMillion() { return fastOutputPricePerMillion; }
     public Currency getProviderPriceCurrency() { return providerPriceCurrency == null ? Currency.KRW : providerPriceCurrency; }
+    public ReasoningEffort getDefaultReasoningEffort() { return defaultReasoningEffort == null ? ReasoningEffort.REQUEST : defaultReasoningEffort; }
+    public OpenAiServiceTier getDefaultServiceTier() { return defaultServiceTier == null ? OpenAiServiceTier.REQUEST : defaultServiceTier; }
     public String getCapabilitiesJson() { return capabilitiesJson; }
     public String getCapabilityOverridesJson() { return capabilityOverridesJson; }
     public String getMetadataJson() { return metadataJson; }

@@ -76,6 +76,8 @@ public class RequestDetailService {
                 request.getCostCurrency(),
                 request.getInputUnitPrice(),
                 request.getOutputUnitPrice(),
+                request.getCachedInputTokens(),
+                request.getCachedInputUnitPrice(),
                 request.getLatencyMs(),
                 request.getFailoverCount(),
                 request.getHttpStatus(),
@@ -88,7 +90,13 @@ public class RequestDetailService {
                 request.getDataProtectionLevel(),
                 request.getDataProtectionAction(),
                 request.getDataClassificationsJson(),
-                request.getDataExternalAllowed()
+                request.getDataExternalAllowed(),
+                request.getReasoningEffort(),
+                request.getRequestedServiceTier(),
+                request.getActualServiceTier(),
+                request.getReasoningTokens(),
+                request.getCostPricingTier(),
+                request.getCostCalculationStatus()
         );
     }
 
@@ -125,6 +133,8 @@ public class RequestDetailService {
             Currency costCurrency,
             BigDecimal inputUnitPrice,
             BigDecimal outputUnitPrice,
+            Integer cachedInputTokens,
+            BigDecimal cachedInputUnitPrice,
             Long latencyMs,
             int failoverCount,
             Integer httpStatus,
@@ -137,7 +147,13 @@ public class RequestDetailService {
             String dataProtectionLevel,
             String dataProtectionAction,
             String dataClassificationsJson,
-            Boolean dataExternalAllowed
+            Boolean dataExternalAllowed,
+            String reasoningEffort,
+            String requestedServiceTier,
+            String actualServiceTier,
+            Integer reasoningTokens,
+            String costPricingTier,
+            String costCalculationStatus
     ) { }
 
     public record Attempt(

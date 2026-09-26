@@ -102,6 +102,14 @@ export type RequestDetail = {
   dataProtectionAction?: string | null
   dataClassificationsJson?: string | null
   dataExternalAllowed?: boolean | null
+  reasoningEffort?: string | null
+  requestedServiceTier?: string | null
+  actualServiceTier?: string | null
+  reasoningTokens?: number | null
+  costPricingTier?: string | null
+  costCalculationStatus?: string | null
+  cachedInputTokens?: number | null
+  cachedInputUnitPrice?: number | null
 }
 
 const requestTypeLabels: Record<string, string> = {

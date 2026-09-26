@@ -2,10 +2,11 @@
 import { ref } from 'vue'
 import RequestDetailModal from './RequestDetailModal.vue'
 import type { RequestDetail } from './requestDetail'
+import { formatExecutionMode } from './requestMode'
 
 type Currency = 'KRW' | 'USD'
 type Usage = { requestCount: number; inputTokens: number; outputTokens: number; estimatedCost: number; estimatedCostByCurrency?: Record<string, number>; failedRequests: number }
-type RequestItem = { requestId: string; serviceKey?: string; serviceDisplayName?: string; deploymentDisplayName?: string; stream: boolean; status: string; inputTokens?: number; outputTokens?: number; estimatedCost?: number; costCurrency?: Currency; latencyMs?: number; failoverCount: number; httpStatus?: number; errorCode?: string; startedAt: string }
+type RequestItem = { requestId: string; serviceKey?: string; serviceDisplayName?: string; deploymentDisplayName?: string; stream: boolean; status: string; inputTokens?: number; outputTokens?: number; estimatedCost?: number; costCurrency?: Currency; latencyMs?: number; failoverCount: number; httpStatus?: number; errorCode?: string; startedAt: string; reasoningEffort?: string | null; requestedServiceTier?: string | null; actualServiceTier?: string | null }
 
 const apiKey = ref(sessionStorage.getItem('aiconnect.consumerApiKey') ?? '')
 const usage = ref<Usage | null>(null)
@@ -74,8 +75,8 @@ function costBreakdown(values?: Record<string, number>) {
       </div>
       <div v-if="requests.length" class="request-table">
         <table>
-          <thead><tr><th>시간</th><th>논리 모델</th><th>실제 배포</th><th>방식</th><th>상태</th><th>토큰</th><th>비용</th><th>지연</th><th>Failover</th><th>요청 ID</th><th>상세</th></tr></thead>
-          <tbody><tr v-for="item in requests" :key="item.requestId"><td>{{ new Date(item.startedAt).toLocaleString() }}</td><td><strong>{{ item.serviceKey ?? '-' }}</strong><small>{{ item.serviceDisplayName }}</small></td><td>{{ item.deploymentDisplayName ?? '-' }}</td><td>{{ item.stream ? 'SSE' : 'JSON' }}</td><td><span class="status" :class="item.status === 'SUCCEEDED' ? 'healthy' : 'unhealthy'">{{ item.status }}</span></td><td>{{ number((item.inputTokens ?? 0) + (item.outputTokens ?? 0)) }}</td><td>{{ formatCost(item.estimatedCost, item.costCurrency) }}</td><td>{{ number(item.latencyMs) }} ms</td><td>{{ item.failoverCount }}</td><td class="mono">{{ item.requestId }}</td><td><button class="text-button" @click="inspectRequest(item)">상세</button></td></tr></tbody>
+          <thead><tr><th>시간</th><th>논리 모델</th><th>실제 배포</th><th>방식</th><th>상태</th><th>추론·tier</th><th>토큰</th><th>비용</th><th>지연</th><th>Failover</th><th>요청 ID</th><th>상세</th></tr></thead>
+          <tbody><tr v-for="item in requests" :key="item.requestId"><td>{{ new Date(item.startedAt).toLocaleString() }}</td><td><strong>{{ item.serviceKey ?? '-' }}</strong><small>{{ item.serviceDisplayName }}</small></td><td>{{ item.deploymentDisplayName ?? '-' }}</td><td>{{ item.stream ? 'SSE' : 'JSON' }}</td><td><span class="status" :class="item.status === 'SUCCEEDED' ? 'healthy' : 'unhealthy'">{{ item.status }}</span></td><td>{{ formatExecutionMode(item.reasoningEffort,item.requestedServiceTier,item.actualServiceTier) }}</td><td>{{ number((item.inputTokens ?? 0) + (item.outputTokens ?? 0)) }}</td><td>{{ formatCost(item.estimatedCost, item.costCurrency) }}</td><td>{{ number(item.latencyMs) }} ms</td><td>{{ item.failoverCount }}</td><td class="mono">{{ item.requestId }}</td><td><button class="text-button" @click="inspectRequest(item)">상세</button></td></tr></tbody>
         </table>
       </div>
     </section>

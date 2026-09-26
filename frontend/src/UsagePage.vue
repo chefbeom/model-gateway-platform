@@ -3,9 +3,10 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { adminFetch, type AdminAuth } from './api'
 import RequestDetailModal from './RequestDetailModal.vue'
 import type { RequestDetail } from './requestDetail'
+import { formatExecutionMode } from './requestMode'
 
 type UsageMetric = { label: string; detail: string; requestCount: number; succeeded: number; failed: number; inputTokens: number; outputTokens: number; estimatedCost: number; estimatedCostByCurrency?: Record<string, number>; failovers: number; averageLatencyMs: number }
-type UsageRequest = { requestId: string; projectName: string; serviceKey: string; infrastructure: string; apiKeyLabel: string; status: string; inputTokens: number; outputTokens: number; estimatedCost: number; costCurrency?: string; latencyMs?: number | null; failoverCount: number; errorCode?: string | null; startedAt: string }
+type UsageRequest = { requestId: string; projectName: string; serviceKey: string; infrastructure: string; apiKeyLabel: string; status: string; inputTokens: number; outputTokens: number; estimatedCost: number; costCurrency?: string; latencyMs?: number | null; failoverCount: number; errorCode?: string | null; startedAt: string; reasoningEffort?: string | null; requestedServiceTier?: string | null; actualServiceTier?: string | null }
 type ProjectScope = { id: string; name: string; access: 'ORGANIZATION_ALL' | 'PROJECT_ALL' | 'OWN_KEYS'; accessLabel: string }
 type UsageOverview = {
   total: UsageMetric
@@ -186,7 +187,7 @@ onMounted(() => { void loadUsage() })
 
       <article class="surface-card">
         <header class="card-header"><div><span class="card-kicker">REQUEST HISTORY</span><h2>최근 요청</h2></div><span class="count-badge">{{ overview.recentRequests.length }}</span></header>
-        <div v-if="overview.recentRequests.length" class="data-table-wrap"><table class="data-table"><thead><tr><th>시간</th><th>프로젝트</th><th>논리 모델·키</th><th>실제 배포</th><th>상태</th><th>토큰</th><th>비용</th><th>지연</th><th>Failover</th><th>상세</th></tr></thead><tbody><tr v-for="item in overview.recentRequests" :key="item.requestId"><td>{{ new Date(item.startedAt).toLocaleString() }}</td><td>{{ item.projectName }}</td><td><strong>{{ item.serviceKey }}</strong><small>{{ item.apiKeyLabel }}</small></td><td>{{ item.infrastructure }}</td><td><span class="status-chip tiny" :class="item.status === 'SUCCEEDED' ? 'healthy' : 'unhealthy'">{{ item.status }}</span><small v-if="item.errorCode" class="danger-text">{{ item.errorCode }}</small></td><td>{{ integer(item.inputTokens + item.outputTokens) }}</td><td>{{ costBreakdown(item) }}</td><td>{{ integer(item.latencyMs ?? 0) }} ms</td><td>{{ item.failoverCount }}</td><td><button class="text-button" @click="inspectRequest(item)">상세</button></td></tr></tbody></table></div>
+        <div v-if="overview.recentRequests.length" class="data-table-wrap"><table class="data-table"><thead><tr><th>시간</th><th>프로젝트</th><th>논리 모델·키</th><th>실제 배포</th><th>상태</th><th>추론·tier</th><th>토큰</th><th>비용</th><th>지연</th><th>Failover</th><th>상세</th></tr></thead><tbody><tr v-for="item in overview.recentRequests" :key="item.requestId"><td>{{ new Date(item.startedAt).toLocaleString() }}</td><td>{{ item.projectName }}</td><td><strong>{{ item.serviceKey }}</strong><small>{{ item.apiKeyLabel }}</small></td><td>{{ item.infrastructure }}</td><td><span class="status-chip tiny" :class="item.status === 'SUCCEEDED' ? 'healthy' : 'unhealthy'">{{ item.status }}</span><small v-if="item.errorCode" class="danger-text">{{ item.errorCode }}</small></td><td>{{ formatExecutionMode(item.reasoningEffort,item.requestedServiceTier,item.actualServiceTier) }}</td><td>{{ integer(item.inputTokens + item.outputTokens) }}</td><td>{{ costBreakdown(item) }}</td><td>{{ integer(item.latencyMs ?? 0) }} ms</td><td>{{ item.failoverCount }}</td><td><button class="text-button" @click="inspectRequest(item)">상세</button></td></tr></tbody></table></div>
         <div v-else class="empty-state"><span>◴</span><p>표시할 요청이 없습니다.</p></div>
       </article>
     </template>

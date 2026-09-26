@@ -115,9 +115,12 @@ public class ChatCompletionGateway {
                 RuntimeResult runtimeResult;
                 if (candidate.external()) {
                     service.applyOpenAiRequestPolicy(proxiedRequest);
+                    candidate.deployment().applyOpenAiDefaults(proxiedRequest);
+                    audit.recordExecutionOptions(proxiedRequest);
                     runtimeResult = openAiClient.chatCompletion(candidate.externalProvider(), proxiedRequest,
                             service.getTemperaturePolicy() == TemperaturePolicy.FIXED);
                 } else {
+                    audit.recordExecutionOptions(null);
                     runtimeResult = runtimeClient.chatCompletion(candidate.endpoint(), proxiedRequest);
                 }
                 long attemptLatency = Duration.between(attemptStarted, Instant.now()).toMillis();
@@ -126,13 +129,26 @@ public class ChatCompletionGateway {
                     recordHealthy(candidate);
                     int inputTokens = readUsage(runtimeResult.body(), "prompt_tokens", "input_tokens");
                     if (inputTokens <= 0) inputTokens = TokenUsageEstimator.estimateInputTokens(request);
+                    int cachedInputTokens = readUsageDetail(runtimeResult.body(), "prompt_tokens_details", "cached_tokens");
+                    if (cachedInputTokens <= 0) cachedInputTokens = readUsageDetail(runtimeResult.body(), "input_tokens_details", "cached_tokens");
+                    int reasoningTokens = readUsageDetail(runtimeResult.body(), "completion_tokens_details", "reasoning_tokens");
+                    if (reasoningTokens <= 0) reasoningTokens = readUsageDetail(runtimeResult.body(), "output_tokens_details", "reasoning_tokens");
                     int outputTokens = readUsage(runtimeResult.body(), "completion_tokens", "output_tokens");
-                    if (outputTokens <= 0) outputTokens = TokenUsageEstimator.estimateOutputTokens(runtimeResult.body());
+                    if (outputTokens <= 0) outputTokens = TokenUsageEstimator.estimateOutputTokens(runtimeResult.body()) + reasoningTokens;
                     int failoverCount = effectiveFailoverCount(candidate, failures);
-                    TokenPricingResolver.EffectivePricing pricing = TokenPricingResolver.forLocal(service, candidate.deployment(), candidate.endpoint());
+                    String actualServiceTier = candidate.external()
+                            ? runtimeResult.body().path("service_tier").asText(null) : "LOCAL";
+                    String requestedServiceTier = candidate.external() ? proxiedRequest.path("service_tier").asText(null) : null;
+                    TokenPricingResolver.EffectivePricing pricing = TokenPricingResolver.forRequest(
+                            service, candidate.deployment(), candidate.endpoint(), actualServiceTier, requestedServiceTier);
+                    String costStatus = candidate.external() ? costStatus(pricing, actualServiceTier, cachedInputTokens) : "ESTIMATED";
                     audit.succeed(candidate.deployment().getId(), inputTokens, outputTokens, elapsed(audit.getStartedAt()),
                             runtimeResult.statusCode(), failoverCount, candidate.providerType(), candidate.routingReason(),
-                            pricing.inputPricePerMillion(), pricing.outputPricePerMillion(), pricing.currency());
+                            pricing.inputPricePerMillion(), pricing.outputPricePerMillion(), pricing.currency(),
+                            proxiedRequest.path("reasoning_effort").asText(null), requestedServiceTier, actualServiceTier,
+                            reasoningTokens > 0 ? reasoningTokens : null, cachedInputTokens > 0 ? cachedInputTokens : null,
+                            pricing.cachedInputRateConfigured() ? pricing.cachedInputPricePerMillion() : null,
+                            pricing.pricingTier(), costStatus);
                     requests.save(audit);
                     ObjectNode response = runtimeResult.body().isObject() ? ((ObjectNode) runtimeResult.body()).deepCopy() : objectMapper.createObjectNode();
                     response.put("model", serviceKey);
@@ -213,6 +229,16 @@ public class ChatCompletionGateway {
         JsonNode usage = body.path("usage");
         if (usage.has(primary)) return usage.path(primary).asInt(0);
         return usage.path(alternative).asInt(0);
+    }
+    private int readUsageDetail(JsonNode body, String section, String field) {
+        return body.path("usage").path(section).path(field).asInt(0);
+    }
+    private String costStatus(TokenPricingResolver.EffectivePricing pricing, String actualTier, int cachedTokens) {
+        if ("UNKNOWN".equals(pricing.pricingTier())) return "SERVICE_TIER_UNKNOWN";
+        if (!pricing.rateConfigured()) return "FAST_PRICE_MISSING";
+        if (cachedTokens > 0 && !pricing.cachedInputRateConfigured()) return "CACHED_PRICE_FALLBACK";
+        if (actualTier == null || actualTier.isBlank()) return "REQUEST_TIER_FALLBACK";
+        return "ESTIMATED";
     }
     private long elapsed(Instant start) { return Duration.between(start, Instant.now()).toMillis(); }
     private String errorType(ProviderFailureClassifier.Analysis failure) {

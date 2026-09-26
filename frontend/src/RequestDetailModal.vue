@@ -110,15 +110,30 @@ function targetState(target: NonNullable<RequestDetail['diagnostic']>['targets']
 
       <section class="request-detail-section">
         <header><span>USAGE & COST</span><h4>토큰·비용</h4></header>
+        <div class="request-detail-grid four request-mode-grid">
+          <div><small>추론 수준 · 요청값</small><strong>{{ detail.reasoningEffort ?? '모델 기본값' }}</strong><em>전송 파라미터 기준</em></div>
+          <div><small>Fast mode · 요청</small><strong>{{ detail.requestedServiceTier === 'fast' || detail.requestedServiceTier === 'priority' ? 'FAST' : detail.requestedServiceTier === 'default' ? 'STANDARD' : '기본값' }}</strong><em>service_tier={{ detail.requestedServiceTier ?? '생략' }}</em></div>
+          <div><small>실제 처리 tier</small><strong>{{ detail.actualServiceTier ?? 'Provider 미응답' }}</strong><em>응답 service_tier 기준</em></div>
+          <div><small>추론 토큰</small><strong>{{ detail.reasoningTokens == null ? '미제공' : detail.reasoningTokens.toLocaleString('ko-KR') }}</strong><em>출력 토큰에 포함 · 별도 중복 과금하지 않음</em></div>
+        </div>
         <div class="request-detail-grid four">
           <div><small>입력 토큰</small><strong>{{ (detail.inputTokens ?? 0).toLocaleString('ko-KR') }}</strong><em>Prompt tokens</em></div>
+          <div><small>캐시 입력 토큰</small><strong>{{ detail.cachedInputTokens == null ? '미제공' : detail.cachedInputTokens.toLocaleString('ko-KR') }}</strong><em>저장 단가가 없으면 일반 입력 단가로 추정</em></div>
           <div><small>출력 토큰</small><strong>{{ (detail.outputTokens ?? 0).toLocaleString('ko-KR') }}</strong><em>Completion tokens</em></div>
           <div><small>총 비용</small><strong>{{ formatRequestCost(detail.estimatedCost, detail.costCurrency) }}</strong><em>{{ detail.costCurrency ?? '통화 없음' }}</em></div>
           <div><small>처리 시간</small><strong>{{ formatRequestDuration(detail.latencyMs) }}</strong><em>Failover {{ detail.failoverCount }}회</em></div>
         </div>
         <div class="request-detail-prices">
-          <span>입력 단가 {{ formatRequestCost(detail.inputUnitPrice, detail.costCurrency) }} / 1M</span>
-          <span>출력 단가 {{ formatRequestCost(detail.outputUnitPrice, detail.costCurrency) }} / 1M</span>
+          <span v-if="detail.costCalculationStatus !== 'FAST_PRICE_MISSING' && detail.costCalculationStatus !== 'SERVICE_TIER_UNKNOWN'">입력 단가 {{ formatRequestCost(detail.inputUnitPrice, detail.costCurrency) }} / 1M</span>
+          <span v-if="(detail.cachedInputTokens ?? 0) > 0">캐시 입력 단가 {{ detail.cachedInputUnitPrice == null ? '일반 입력 단가 대체' : formatRequestCost(detail.cachedInputUnitPrice, detail.costCurrency) + ' / 1M' }}</span>
+          <span v-if="detail.costCalculationStatus !== 'FAST_PRICE_MISSING' && detail.costCalculationStatus !== 'SERVICE_TIER_UNKNOWN'">출력 단가 {{ formatRequestCost(detail.outputUnitPrice, detail.costCurrency) }} / 1M</span>
+          <span>적용 요금표 {{ detail.costPricingTier ?? '미확인' }}</span>
+          <span v-if="detail.costCalculationStatus === 'FAST_PRICE_MISSING'">Fast 단가 미등록 · 비용 미산정</span>
+          <span v-else-if="detail.costCalculationStatus === 'SERVICE_TIER_UNKNOWN'">실제 처리 tier를 요금표와 대응할 수 없어 비용 미산정</span>
+          <span v-else-if="detail.costCalculationStatus === 'CACHED_PRICE_FALLBACK'">캐시 입력 단가 미등록 · 일반 입력 단가로 추정</span>
+          <span v-else-if="detail.costCalculationStatus === 'REQUEST_TIER_FALLBACK'">Provider 응답 tier 미반환 · 요청 tier 기준 추정</span>
+          <span v-else-if="detail.costCalculationStatus == null">{{ detail.status === 'SUCCEEDED' ? '이전 요청 이력 · 처리 tier 정보 없음' : '실패 요청 · 비용 미산정' }}</span>
+          <span v-else>Provider usage · 등록 단가 기준 추정치 (청구서 원본 아님)</span>
         </div>
       </section>
 
