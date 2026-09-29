@@ -16,6 +16,13 @@ public final class RuntimeUrl {
         return base.endsWith("/v1") ? base + suffix : base + "/v1" + suffix;
     }
 
+    /** Build a root-level runtime URL even when the registered base ends in /v1. */
+    public static String root(String baseUrl, String resource) {
+        String base = trimTrailingSlash(baseUrl);
+        if (base.toLowerCase(java.util.Locale.ROOT).endsWith("/v1")) base = base.substring(0, base.length() - 3);
+        return append(base, resource);
+    }
+
     private static String trimTrailingSlash(String value) {
         if (value == null || value.isBlank()) return "";
         int end = value.length();

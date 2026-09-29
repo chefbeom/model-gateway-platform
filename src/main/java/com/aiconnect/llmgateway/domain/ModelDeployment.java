@@ -118,8 +118,22 @@ public class ModelDeployment {
         this.maxConcurrency = Math.max(1, maxConcurrency);
         this.capabilitiesJson = capabilitiesJson == null ? "[]" : capabilitiesJson;
         this.metadataJson = metadataJson;
-        this.healthStatus = loaded ? HealthStatus.HEALTHY : HealthStatus.UNKNOWN;
+        this.healthStatus = loaded ? HealthStatus.HEALTHY
+                : metadataJson != null && metadataJson.contains("\"runtimeState\":\"ERROR\"")
+                ? HealthStatus.UNHEALTHY : HealthStatus.UNKNOWN;
         this.lastSyncedAt = Instant.now();
+    }
+
+    /** Update an automatically discovered runtime ID without changing user compatibility overrides. */
+    public void reidentifyProviderModel(String providerModelId, String discoveredCompatibilityKey) {
+        if (providerModelId == null || providerModelId.isBlank()) return;
+        String previousProviderModelId = this.providerModelId;
+        boolean compatibilityTracksProviderId = this.compatibilityKey == null || this.compatibilityKey.isBlank()
+                || this.compatibilityKey.equals(previousProviderModelId);
+        this.providerModelId = providerModelId;
+        if (compatibilityTracksProviderId && discoveredCompatibilityKey != null && !discoveredCompatibilityKey.isBlank()) {
+            this.compatibilityKey = discoveredCompatibilityKey;
+        }
     }
 
     public void configure(String compatibilityKey, Boolean enabled, Integer maxConcurrency,

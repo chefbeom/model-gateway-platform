@@ -29,6 +29,10 @@ class ModelSynchronizationIntegrationTest {
     @Autowired ModelDeploymentRepository deployments;
     @Autowired LlmServiceRepository services;
     @Autowired ServiceTargetRepository targets;
+    @Autowired ProjectRepository projects;
+    @Autowired LlmRequestRepository requests;
+    @Autowired LlmRequestAttemptRepository attempts;
+    @Autowired PlaygroundRequestRepository playgroundRequests;
     @MockitoBean InferenceRuntimeClient runtimeClient;
 
     @Test
@@ -83,8 +87,7 @@ class ModelSynchronizationIntegrationTest {
         assertThat(rebound.getWeight()).isEqualTo(70);
         assertThat(rebound.isDegraded()).isTrue();
         assertThat(rebound.getMaxConcurrencyOverride()).isEqualTo(4);
-        ModelDeployment oldAfterSync = deployments.findById(oldDeployment.getId()).orElseThrow();
-        assertThat(oldAfterSync.isLoaded()).isFalse();
+        assertThat(deployments.findById(oldDeployment.getId())).isEmpty();
     }
 
     @Test
@@ -107,6 +110,81 @@ class ModelSynchronizationIntegrationTest {
 
         ServiceTarget unchanged = targets.findById(target.getId()).orElseThrow();
         assertThat(unchanged.getDeploymentId()).isEqualTo(oldDeployment.getId());
+    }
+
+    @Test
+    void rekeysLlamaCppPathAliasesWithoutChangingTargetDeploymentIdentity() throws Exception {
+        Organization organization = organizations.save(new Organization("llama alias rekey org"));
+        InferenceNode node = nodes.save(new InferenceNode(organization.getId(), "llama-alias-node", null, "DIRECT", null));
+        RuntimeEndpoint endpoint = endpoints.save(new RuntimeEndpoint(node.getId(), RuntimeType.LLAMA_CPP,
+                "http://llama-alias-node:4040", null));
+        LlmService service = services.save(new LlmService(organization.getId(), "llama-alias-service", "llama alias service",
+                FailoverPolicy.STRICT, RetryPolicy.SAFE, false, "[]", java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO));
+
+        String pathId = "/opt/llm/models/gemma-4-12b-it-qat-q4_0.gguf";
+        when(runtimeClient.listModels(any(RuntimeEndpoint.class))).thenReturn(new RuntimeResult(200, objectMapper.readTree("""
+                {"models":[{"name":"/opt/llm/models/gemma-4-12b-it-qat-q4_0.gguf","model":"/opt/llm/models/gemma-4-12b-it-qat-q4_0.gguf","status":{"value":"unloaded"}}]}
+                """)));
+        controlPlane.syncModels(endpoint.getId());
+        ModelDeployment legacy = deployments.findByRuntimeEndpointId(endpoint.getId()).get(0);
+        assertThat(legacy.getProviderModelId()).isEqualTo(pathId);
+        ServiceTarget target = targets.save(new ServiceTarget(service.getId(), legacy.getId(), 1, 100, false, null, false));
+
+        String alias = "gemma-4-12b-it-qat-q4_0";
+        when(runtimeClient.listModels(any(RuntimeEndpoint.class))).thenReturn(new RuntimeResult(200, objectMapper.readTree("""
+                {"models":[{"name":"/opt/llm/models/gemma-4-12b-it-qat-q4_0.gguf","model":"/opt/llm/models/gemma-4-12b-it-qat-q4_0.gguf","status":{"value":"loaded"}}],
+                 "data":[{"id":"gemma-4-12b-it-qat-q4_0","object":"model"}]}
+                """)));
+        controlPlane.syncModels(endpoint.getId());
+
+        List<ModelDeployment> current = deployments.findByRuntimeEndpointId(endpoint.getId());
+        assertThat(current).hasSize(1);
+        assertThat(current.get(0).getId()).isEqualTo(legacy.getId());
+        assertThat(current.get(0).getProviderModelId()).isEqualTo(alias);
+        assertThat(current.get(0).getCompatibilityKey()).isEqualTo(alias);
+        assertThat(current.get(0).isLoaded()).isTrue();
+        assertThat(targets.findById(target.getId()).orElseThrow().getDeploymentId()).isEqualTo(legacy.getId());
+    }
+
+    @Test
+    void prunesOnlyUnreferencedStaleDiscoveredRowsAndKeepsAuditHistory() throws Exception {
+        Organization organization = organizations.save(new Organization("stale model retention org"));
+        Project project = projects.save(new Project(organization.getId(), "stale model retention project"));
+        InferenceNode node = nodes.save(new InferenceNode(organization.getId(), "stale-retention-node", null, "DIRECT", null));
+        RuntimeEndpoint endpoint = endpoints.save(new RuntimeEndpoint(node.getId(), RuntimeType.LLAMA_CPP,
+                "http://stale-retention-node:4040", null));
+        LlmService service = services.save(new LlmService(organization.getId(), "stale-retention-service", "stale retention service",
+                FailoverPolicy.STRICT, RetryPolicy.SAFE, false, "[]", java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO));
+
+        when(runtimeClient.listModels(any(RuntimeEndpoint.class))).thenReturn(new RuntimeResult(200, objectMapper.readTree("""
+                {"models":[
+                  {"name":"retained-model.gguf","model":"/opt/llm/models/retained-model.gguf","status":{"value":"loaded"}},
+                  {"name":"orphan-model.gguf","model":"/opt/llm/models/orphan-model.gguf","status":{"value":"unloaded"}}
+                ]}
+                """)));
+        controlPlane.syncModels(endpoint.getId());
+        List<ModelDeployment> initial = deployments.findByRuntimeEndpointId(endpoint.getId());
+        ModelDeployment retained = initial.stream().filter(item -> item.getProviderModelId().equals("retained-model.gguf")).findFirst().orElseThrow();
+        ModelDeployment orphan = initial.stream().filter(item -> item.getProviderModelId().equals("orphan-model.gguf")).findFirst().orElseThrow();
+        ServiceTarget target = targets.save(new ServiceTarget(service.getId(), retained.getId(), 1, 100, false, null, false));
+        LlmRequest request = new LlmRequest("stale-history-" + UUID.randomUUID(), project.getId(), null, service, false);
+        request.succeed(retained.getId(), 1, 1, 1, 200, 0);
+        request = requests.save(request);
+        attempts.save(new LlmRequestAttempt(request.getId(), retained.getId(), 1));
+        playgroundRequests.save(new PlaygroundRequest("stale-playground-" + UUID.randomUUID(), organization.getId(),
+                retained.getId(), "RUNTIME", "stale runtime", retained.getProviderModelId(), endpoint.getBaseUrl(), false, null));
+
+        when(runtimeClient.listModels(any(RuntimeEndpoint.class))).thenReturn(new RuntimeResult(200,
+                objectMapper.readTree("{\"models\":[],\"data\":[]}")));
+        controlPlane.syncModels(endpoint.getId());
+
+        assertThat(deployments.findById(retained.getId())).isPresent()
+                .get().extracting(ModelDeployment::getHealthStatus).isEqualTo(HealthStatus.UNHEALTHY);
+        assertThat(targets.findById(target.getId()).orElseThrow().getDeploymentId()).isEqualTo(retained.getId());
+        assertThat(requests.existsByFinalDeploymentIdIn(List.of(retained.getId()))).isTrue();
+        assertThat(attempts.existsByDeploymentIdIn(List.of(retained.getId()))).isTrue();
+        assertThat(playgroundRequests.existsByDeploymentIdIn(List.of(retained.getId()))).isTrue();
+        assertThat(deployments.findById(orphan.getId())).isEmpty();
     }
 
     private String nativeResponse(int contextLength, int parallel) {

@@ -65,7 +65,7 @@ class LmStudioModelDiscoveryTest {
     }
 
     @Test
-    void doesNotTreatStateLessOpenAiCatalogAsLoadedForLlamaCpp() throws Exception {
+    void treatsStandaloneLlamaCppV1ModelAsLoadedWhenRouterStateIsAbsent() throws Exception {
         String json = """
                 {"models":[{"name":"/opt/llm/models/gemma.gguf","model":"/opt/llm/models/gemma.gguf","type":"model","capabilities":["completion"]}],
                  "object":"list",
@@ -78,7 +78,8 @@ class LmStudioModelDiscoveryTest {
         assertThat(models).hasSize(1);
         DiscoveredRuntimeModel model = models.get(0);
         assertThat(model.providerModelId()).isEqualTo("/opt/llm/models/gemma.gguf");
-        assertThat(model.loaded()).isFalse();
+        assertThat(model.loaded()).isTrue();
+        assertThat(model.metadataJson()).contains("\"runtimeState\":\"LOADED\"");
         assertThat(model.contextLength()).isEqualTo(8192);
         assertThat(model.quantization()).isEqualTo("Q4_0");
         assertThat(model.capabilitiesJson()).contains("CHAT_COMPLETION", "STREAMING");
@@ -103,5 +104,25 @@ class LmStudioModelDiscoveryTest {
                 .containsExactly("gemma-4-12b-it-qat-q4_0", "gemma-4-12b-obliterated-Q8_0");
         assertThat(models).extracting(DiscoveredRuntimeModel::loaded).containsExactly(false, true);
         assertThat(models.get(0).metadataJson()).contains("/opt/llm/models/gemma-4-12b-it-qat-q4_0.gguf");
+    }
+
+    @Test
+    void marksMissingOrUnavailableRouterEntriesAsErrorsRatherThanCandidates() throws Exception {
+        String json = """
+                {"models":[
+                  {"name":"/opt/llm/models/missing.gguf","model":"/opt/llm/models/missing.gguf",
+                    "status":{"value":"unavailable"}},
+                  {"name":"/opt/llm/models/failed.gguf","model":"/opt/llm/models/failed.gguf",
+                    "status":{"value":"unloaded","failed":true,"exit_code":1}}
+                ]}
+                """;
+
+        var models = discovery.discover(objectMapper.readTree(json),
+                com.aiconnect.llmgateway.domain.RuntimeType.LLAMA_CPP);
+
+        assertThat(models).hasSize(2).allSatisfy(model -> {
+            assertThat(model.loaded()).isFalse();
+            assertThat(model.metadataJson()).contains("\"runtimeState\":\"ERROR\"");
+        });
     }
 }

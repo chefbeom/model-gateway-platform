@@ -141,6 +141,8 @@ const modelOptions = computed(() => props.deployments.filter(item => item.loaded
   label: `${item.displayName || item.providerModelId}${item.quantization ? ` · ${item.quantization}` : ''}`,
   loaded: item.loaded
 })))
+const loadedDeployments = computed(() => props.deployments.filter(item => item.loaded))
+const candidateDeployments = computed(() => props.deployments.filter(item => !item.loaded))
 const selectedDeployment = computed(() => props.deployments.find(item => item.providerModelId === command.value.modelKey) ?? null)
 const availableVariants = computed(() => variantsFor(selectedDeployment.value))
 const activeVariant = computed(() => selectedVariantFor(selectedDeployment.value))
@@ -250,8 +252,9 @@ onMounted(refresh)
     <div class="operation-grid">
       <article class="operation-card">
         <header><div><span class="card-kicker">SAFE CONTROL</span><h3>메모리 모델 상태</h3></div><button class="text-button" :disabled="busy" @click="refresh">새로고침</button></header>
-        <div v-if="deployments.length" class="model-state-list"><div v-for="deployment in deployments" :key="deployment.id" class="model-state-row"><div><strong>{{ deployment.displayName }}</strong><small class="mono">{{ deployment.providerModelId }}</small><small class="variant-summary">{{ deploymentVariants(deployment) }}</small></div><div class="state-actions"><span class="status-chip tiny" :class="deployment.loaded ? 'healthy' : deployment.healthStatus === 'UNHEALTHY' ? 'unhealthy' : 'unknown'">{{ deploymentState(deployment) }}</span><button v-if="deployment.loaded || canLoad(deployment)" class="text-button" :disabled="busy || !nativeModelManagement" @click="deployment.loaded ? unload(deployment.providerModelId) : openLoad(deployment.providerModelId)">{{ deployment.loaded ? '언로드' : '로드' }}</button><span v-else class="field-help">{{ deployment.healthStatus === 'UNHEALTHY' ? '현재 Runtime 목록에서 확인되지 않음' : '작업 진행 중' }}</span></div></div></div>
-        <p v-else class="field-help">먼저 ‘모델 동기화’를 실행하면 이 Runtime에서 발견된 모델을 선택할 수 있습니다.</p>
+        <div v-if="loadedDeployments.length" class="model-state-list"><div v-for="deployment in loadedDeployments" :key="deployment.id" class="model-state-row"><div><strong>{{ deployment.displayName }}</strong><small class="mono">{{ deployment.providerModelId }}</small><small class="variant-summary">{{ deploymentVariants(deployment) }}</small></div><div class="state-actions"><span class="status-chip tiny healthy">{{ deploymentState(deployment) }}</span><button class="text-button" :disabled="busy || !nativeModelManagement" @click="unload(deployment.providerModelId)">언로드</button></div></div></div>
+        <details v-if="candidateDeployments.length" class="model-state-candidates"><summary>미로드 모델 후보 <span>{{ candidateDeployments.length }}</span></summary><div class="model-state-list"><div v-for="deployment in candidateDeployments" :key="deployment.id" class="model-state-row"><div><strong>{{ deployment.displayName }}</strong><small class="mono">{{ deployment.providerModelId }}</small><small class="variant-summary">{{ deploymentVariants(deployment) }}</small></div><div class="state-actions"><span class="status-chip tiny" :class="deployment.healthStatus === 'UNHEALTHY' ? 'unhealthy' : 'unknown'">{{ deploymentState(deployment) }}</span><button v-if="canLoad(deployment)" class="text-button" :disabled="busy || !nativeModelManagement" @click="openLoad(deployment.providerModelId)">로드</button><span v-else class="field-help">작업 진행 중</span></div></div></div></details>
+        <p v-if="!deployments.length" class="field-help">먼저 ‘모델 동기화’를 실행하면 이 Runtime에서 발견된 모델을 선택할 수 있습니다.</p>
       </article>
       <article class="operation-card">
         <header><div><span class="card-kicker">CONFIGURATION PROFILES</span><h3>저장된 로드 프로필</h3></div><span class="count-badge">{{ profiles.length }}</span></header>
@@ -294,6 +297,7 @@ onMounted(refresh)
 .operation-card > header { display: flex; justify-content: space-between; align-items: start; gap: 12px; margin-bottom: 14px; }
 .operation-card h3 { margin: 3px 0 0; font-size: 15px; }
 .model-state-list, .profile-list, .history-list { display: grid; gap: 8px; }
+.model-state-candidates { margin-top: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); }.model-state-candidates summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--text-soft); font-size: 10px; font-weight: 700; cursor: pointer; }.model-state-candidates summary span { padding: 3px 7px; border: 1px solid var(--border); border-radius: 7px; color: var(--muted); font-size: 9px; }.model-state-candidates[open] .model-state-list { margin-top: 10px; }
 .model-state-row, .profile-list > div { display: flex; min-width: 0; justify-content: space-between; gap: 10px; align-items: center; padding: 10px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); }
 .model-state-row > div:first-child, .profile-list > div > div { display: grid; min-width: 0; gap: 4px; }
 .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

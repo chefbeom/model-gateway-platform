@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import BaseModal from './BaseModal.vue'
 import ModelOperationsPanel from './ModelOperationsPanel.vue'
 import { adminFetch, type AdminAuth, type Deployment, type Endpoint, type RuntimeType } from './api'
@@ -37,12 +37,183 @@ const endpointDeleteOpen = ref(false)
 const acceleratorOpen = ref(false)
 const deploymentOpen = ref(false)
 const deploymentPricingOpen = ref(false)
+const deploymentDetailOpen = ref(false)
+const inspectingDeployment = ref<Deployment | null>(null)
 const editing = ref<Deployment | null>(null)
 const editingAccelerator = ref<Accelerator | null>(null)
 const endpointDetail = ref<EndpointDetail | null>(null)
 const runtime = ref({ nodeName: '', runtimeName: '', runtimeType: 'LM_STUDIO' as RuntimeType, description: '', baseUrl: 'http://gpu-node-01:1234', apiToken: '', inputPricePerMillion: 0, outputPricePerMillion: 0, currency: 'KRW' as 'KRW' | 'USD', clearPricing: true })
 const endpointForm = ref({ displayName: '', runtimeType: 'LM_STUDIO' as RuntimeType, baseUrl: '', enabled: true, apiToken: '', clearApiToken: false, inputPricePerMillion: 0, outputPricePerMillion: 0, currency: 'KRW' as 'KRW' | 'USD', clearPricing: false })
 const accelerator = ref({ vendor: '', productName: '', deviceIndex: 0, deviceUuid: '', memoryTotalMb: null as number | null, driverVersion: '' })
+
+const visibleDeployments = computed(() => deployments.value.filter(item => item.healthStatus !== 'UNHEALTHY'))
+const loadedDeployments = computed(() => visibleDeployments.value.filter(item => item.loaded))
+const candidateDeployments = computed(() => visibleDeployments.value.filter(item => !item.loaded))
+
+type RuntimeSettingField = { label: string; keys: string[]; fallback?: unknown; source?: string }
+type RuntimeSettingSection = { title: string; fields: RuntimeSettingField[] }
+type RuntimeSettingValue = RuntimeSettingField & { value: unknown; reported: boolean }
+type RuntimeSettingSectionValue = { title: string; fields: RuntimeSettingValue[] }
+
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+function normalizedSettingKey(value: string) { return value.replace(/[^a-z0-9]/gi, '').toLowerCase() }
+function modelMetadata(deployment?: Deployment | null): Record<string, unknown> {
+  if (!deployment?.metadataJson) return {}
+  try { return JSON.parse(deployment.metadataJson) as Record<string, unknown> } catch { return {} }
+}
+function runtimeSettingSections(type?: RuntimeType): RuntimeSettingSection[] {
+  const common: RuntimeSettingSection[] = [
+    { title: '모델·컨텍스트', fields: [
+      { label: '컨텍스트 길이', keys: ['context_length', 'contextLength', 'n_ctx', 'n_ctx_per_seq', 'ctx_size', 'max_context_length'] },
+      { label: '양자화', keys: ['quantization', 'quantization_level', 'quantization_type', 'file_type', 'ftype'] },
+      { label: '모델 메모리 크기', keys: ['size', 'model_size', 'size_bytes'] }
+    ] },
+    { title: '실행·메모리 설정', fields: [
+      { label: '동시 처리 / 슬롯', keys: ['parallel', 'parallelSlots', 'n_parallel', 'max_concurrent_predictions', 'n_slots', 'total_slots'] },
+      { label: 'GPU 오프로딩 레이어', keys: ['gpu_offload_layers', 'gpuLayers', 'n_gpu_layers', 'n_gpu_layers_set', 'gpu_layers'] },
+      { label: 'GPU 메모리 사용량', keys: ['size_vram', 'size_vram_bytes', 'vram_bytes'] },
+      { label: 'Flash Attention', keys: ['flash_attention', 'flash_attn'] },
+      { label: 'K 캐시 형식', keys: ['k_cache_quantization_type', 'cache_type_k', 'type_k'] },
+      { label: 'V 캐시 형식', keys: ['v_cache_quantization_type', 'cache_type_v', 'type_v'] }
+    ] }
+  ]
+  if (type === 'LM_STUDIO') {
+    return [
+      { title: '모델·컨텍스트', fields: [
+        { label: '컨텍스트 길이', keys: ['context_length', 'max_context_length', 'n_ctx'] },
+        { label: '평가 배치 크기', keys: ['eval_batch_size'] },
+        { label: '물리 배치 크기', keys: ['physical_batch_size'] },
+        { label: '동시 예측 수', keys: ['parallel', 'max_concurrent_predictions'] },
+        { label: 'MoE Expert 수', keys: ['num_experts'] }
+      ] },
+      { title: 'GPU·캐시·실행 설정', fields: [
+        { label: 'GPU 오프로딩 레이어', keys: ['gpu_offload_layers', 'gpuLayers', 'n_gpu_layers'] },
+        { label: 'KV 캐시 GPU 오프로딩', keys: ['offload_kv_cache_to_gpu'] },
+        { label: '통합 KV 캐시', keys: ['unified_kv_cache'] },
+        { label: 'Flash Attention', keys: ['flash_attention'] },
+        { label: 'K 캐시 형식', keys: ['k_cache_quantization_type', 'kvCacheTypeK'] },
+        { label: 'V 캐시 형식', keys: ['v_cache_quantization_type', 'kvCacheTypeV'] },
+        { label: 'CPU 스레드 풀 크기', keys: ['cpu_thread_pool_size'] },
+        { label: '모델 메모리 유지', keys: ['keep_model_in_memory'] },
+        { label: '메모리 매핑 (mmap)', keys: ['try_mmap'] },
+        { label: 'RoPE 주파수 Base / Scale', keys: ['rope_frequency_base', 'rope_frequency_scale'] }
+      ] }
+    ]
+  }
+  if (type === 'LLAMA_CPP') {
+    return [
+      { title: '모델·컨텍스트', fields: [
+        { label: '컨텍스트 길이', keys: ['n_ctx', 'n_ctx_per_seq', 'ctx_size', 'context_length', 'max_context_length'] },
+        { label: '모델 파일 / 경로', keys: ['model_path', 'modelPath', 'path', 'model'] },
+        { label: '양자화', keys: ['quantization', 'quantization_level', 'ftype'] },
+        { label: '평가 배치 크기', keys: ['eval_batch_size', 'batch_size', 'n_batch'] },
+        { label: '물리 배치 크기', keys: ['physical_batch_size', 'ubatch_size', 'n_ubatch'] }
+      ] },
+      { title: '서버가 보고한 실행 정보', fields: [
+        { label: '동시 처리 / 슬롯', keys: ['n_parallel', 'parallel', 'parallelSlots', 'n_slots', 'total_slots'] },
+        { label: 'CPU 스레드 수', keys: ['cpu_threads', 'n_threads', 'threads'] },
+        { label: 'GPU 오프로딩 레이어', keys: ['n_gpu_layers', 'n_gpu_layers_set', 'gpu_offload_layers', 'gpuLayers'] },
+        { label: 'KV 캐시 GPU 오프로딩', keys: ['offloadKvCacheToGpu', 'kv_offload'] },
+        { label: 'GPU 메모리 사용량', keys: ['size_vram', 'size_vram_bytes', 'vram_bytes'] },
+        { label: 'Flash Attention', keys: ['flash_attn', 'flash_attention'] },
+        { label: 'K 캐시 형식', keys: ['cache_type_k', 'kvCacheTypeK', 'type_k'] },
+        { label: 'V 캐시 형식', keys: ['cache_type_v', 'kvCacheTypeV', 'type_v'] }
+      ] }
+    ]
+  }
+  if (type === 'OLLAMA') {
+    return [
+      { title: '모델·컨텍스트', fields: [
+        { label: '컨텍스트 길이', keys: ['context_length', 'num_ctx', 'n_ctx'] },
+        { label: '모델 메모리 크기', keys: ['size', 'model_size', 'size_bytes', 'sizeBytes'] },
+        { label: '양자화', keys: ['quantization', 'quantization_level'] }
+      ] },
+      { title: '실행·메모리 설정', fields: [
+        { label: 'GPU 메모리 사용량', keys: ['size_vram', 'size_vram_bytes', 'vram_bytes'] },
+        { label: 'GPU 오프로딩 레이어', keys: ['gpu_offload_layers', 'gpuLayers', 'n_gpu_layers'] },
+        { label: 'KV 캐시 K 형식', keys: ['cache_type_k', 'kvCacheTypeK'] },
+        { label: 'KV 캐시 V 형식', keys: ['cache_type_v', 'kvCacheTypeV'] },
+        { label: 'KV 캐시 형식', keys: ['cache_type'] },
+        { label: '병렬 처리 수', keys: ['parallel', 'parallelSlots', 'num_parallel'] }
+      ] }
+    ]
+  }
+  return common
+}
+function deploymentRuntimeSettingSections(deployment: Deployment): RuntimeSettingSectionValue[] {
+  const metadata = modelMetadata(deployment)
+  const metadataRecord = objectValue(metadata.metadata)
+  const normalized = objectValue(metadata.runtimeSettings) ?? objectValue(metadata.runtime_settings)
+    ?? objectValue(metadataRecord?.runtimeSettings) ?? objectValue(metadataRecord?.runtime_settings)
+  const loadedInstances = Array.isArray(metadata.loaded_instances) ? metadata.loaded_instances : []
+  const matchingInstance = loadedInstances.find(value => {
+    const instance = objectValue(value)
+    return instance?.id === deployment.providerModelId
+  })
+  const instance = objectValue(matchingInstance) ?? (loadedInstances.length === 1 ? objectValue(loadedInstances[0]) : null)
+  const instanceConfig = objectValue(instance?.config)
+  const status = objectValue(metadata.status)
+  const statusArgs = objectValue(status?.args)
+  const args = objectValue(metadata.args)
+  const metadataMeta = objectValue(metadata.meta)
+  const details = objectValue(metadata.details)
+  const sources = [normalized, instanceConfig, args, statusArgs, metadata, metadataMeta, details].filter((value): value is Record<string, unknown> => value !== null)
+  return runtimeSettingSections(selected.value?.runtimeType).map(section => ({
+    title: section.title,
+    fields: section.fields.map(field => {
+      let found: unknown
+      for (const source of sources) {
+        const key = Object.keys(source).find(candidate => field.keys.some(expected => normalizedSettingKey(candidate) === normalizedSettingKey(expected)) && source[candidate] !== null && source[candidate] !== '')
+        if (key) { found = source[key]; break }
+      }
+      if (found === undefined && field.label === '컨텍스트 길이' && deployment.contextLength) found = deployment.contextLength
+      if (found === undefined && field.label === '양자화' && deployment.quantization) found = deployment.quantization
+      return { ...field, value: found, reported: found !== undefined }
+    })
+  }))
+}
+const inspectingRuntimeSettings = computed(() => inspectingDeployment.value ? deploymentRuntimeSettingSections(inspectingDeployment.value) : [])
+function runtimeState(deployment: Deployment): string {
+  const metadata = modelMetadata(deployment)
+  const runtimeState = metadata.runtimeState ?? metadata.runtime_state
+  if (typeof runtimeState === 'string' && runtimeState.trim()) return runtimeState.toUpperCase()
+  const runtimeStateObject = objectValue(runtimeState)
+  const normalizedState = runtimeStateObject?.status ?? runtimeStateObject?.value
+  if (typeof normalizedState === 'string' && normalizedState.trim()) return normalizedState.toUpperCase()
+  const status = objectValue(metadata.status)
+  const statusValue = status?.value ?? metadata.state
+  if (typeof statusValue === 'string' && statusValue.trim()) return statusValue.toUpperCase()
+  return deployment.loaded ? 'LOADED' : 'UNLOADED'
+}
+function runtimeStateLabel(deployment: Deployment): string {
+  const labels: Record<string, string> = { SLEEPING: '절전', LOADING: '로딩 중', DOWNLOADING: '다운로드 중', ERROR: '오류', UNKNOWN: '상태 확인 필요', FAILED: '실패' }
+  return labels[runtimeState(deployment)] ?? '미로드'
+}
+function formatRuntimeValue(value: unknown): string {
+  if (typeof value === 'boolean') return value ? '켜짐' : '꺼짐'
+  if (typeof value === 'number') return value.toLocaleString()
+  if (typeof value === 'string') return value
+  if (Array.isArray(value) || objectValue(value)) return JSON.stringify(value)
+  return String(value)
+}
+function formatRuntimeFieldValue(field: RuntimeSettingField, value: unknown): string {
+  if (typeof value === 'number' && (field.label === '모델 메모리 크기' || field.label === 'GPU 메모리 사용량')) {
+    const units = ['B', 'KB', 'MB', 'GB', 'TB']
+    let size = value
+    let unit = 0
+    while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit++ }
+    return `${size.toFixed(unit > 1 ? 1 : 0)} ${units[unit]}`
+  }
+  return formatRuntimeValue(value)
+}
+function runtimeDetailNote(type?: RuntimeType): string {
+  if (type === 'LM_STUDIO') return 'LM Studio가 동기화 시 반환한 loaded instance 설정을 표시합니다. 응답에 포함되지 않은 값은 추정하지 않습니다.'
+  if (type === 'LLAMA_CPP') return 'llama.cpp의 router/API 응답으로 확인 가능한 정보만 표시합니다. 프로세스 시작 인자나 서버 API가 보고하지 않는 캐시·GPU 설정은 여기서 확인할 수 없습니다.'
+  if (type === 'OLLAMA') return 'Ollama가 반환한 실행 모델 정보만 표시합니다. API 응답에 없는 캐시·오프로딩 세부 설정은 추정하지 않습니다.'
+  return 'Runtime 응답에 포함된 정보만 표시합니다. 응답에 포함되지 않은 값은 확인할 수 없습니다.'
+}
 
 function healthClass(value?: string) { return (value ?? 'unknown').toLowerCase() }
 function endpointLabel(endpoint: Endpoint) { return endpoint.displayName || endpoint.baseUrl.replace(/^https?:\/\//, '') }
@@ -193,7 +364,8 @@ function openAccelerator(device?: Accelerator | Event) {
   acceleratorOpen.value = true
 }
 
-function openDeployment(deployment: Deployment) { editing.value = { ...deployment, currency: deployment.currency ?? 'KRW' }; deploymentPricingOpen.value = true }
+function openDeployment(deployment: Deployment) { inspectingDeployment.value = deployment; deploymentDetailOpen.value = true }
+function openDeploymentPricing(deployment: Deployment) { editing.value = { ...deployment, currency: deployment.currency ?? 'KRW' }; deploymentPricingOpen.value = true }
 async function saveDeployment() {
   if (!editing.value) return
   busy.value = true
@@ -228,10 +400,33 @@ onMounted(load)
           <div v-if="accelerators.length" class="hardware-strip"><article v-for="device in accelerators" :key="device.id" class="accelerator-card"><span class="accelerator-index">{{ device.deviceIndex }}</span><div><span class="card-kicker">{{ device.vendor || 'UNKNOWN VENDOR' }}</span><h3>{{ device.productName || '이름 없는 Accelerator' }}</h3><p>{{ device.memoryTotalMb ? `${device.memoryTotalMb.toLocaleString()} MB` : '메모리 정보 없음' }} · {{ device.driverVersion || '드라이버 정보 없음' }}</p></div><small class="mono">{{ device.deviceUuid || device.id }}</small></article></div>
           <div v-if="accelerators.length" class="hardware-actions"><span>Hardware inventory is optional metadata. It does not change routing capacity automatically.</span><div><button v-for="device in accelerators" :key="`${device.id}-actions`" class="text-button" :disabled="busy" @click="openAccelerator(device)">Edit {{ device.deviceIndex }}</button><button v-for="device in accelerators" :key="`${device.id}-delete`" class="danger-text-button" :disabled="busy" @click="deleteAccelerator(device)">Delete {{ device.deviceIndex }}</button></div></div>
           <div v-else class="hardware-empty"><span>GPU 정보는 선택 항목입니다.</span><p>Endpoint와 모델 운영은 GPU 메타데이터 없이도 정상 동작합니다.</p><button class="text-button" @click="openAccelerator">인벤토리 추가</button></div>
-          <div class="section-divider"><span>DISCOVERED MODEL DEPLOYMENTS</span><b>{{ deployments.length }}</b></div>
-          <div v-if="deployments.length" class="deployment-grid"><article v-for="deployment in deployments" :key="deployment.id" class="deployment-card-slot"><button class="deployment-card" @click="openDeployment(deployment)"><div class="deployment-top"><span class="model-cube">◈</span><span class="status-chip tiny" :class="healthClass(deployment.healthStatus)">{{ deployment.loaded ? 'LOADED' : deployment.healthStatus === 'UNHEALTHY' ? 'UNAVAILABLE' : 'UNLOADED' }}</span></div><strong>{{ deployment.displayName }}</strong><small class="mono">{{ deployment.providerModelId }}</small><small class="deployment-variant-summary">{{ deploymentVariantSummary(deployment) }}</small><dl><div><dt>Context</dt><dd>{{ deployment.contextLength?.toLocaleString() ?? '-' }}</dd></div><div><dt>동시 요청</dt><dd>{{ deployment.maxConcurrency }}</dd></div><div><dt>양자화</dt><dd>{{ deployment.quantization ?? '-' }}</dd></div></dl><span class="capability-line">{{ deployment.capabilitiesJson }}</span></button><button v-if="deployment.loaded" class="secondary-button deployment-chat-button" :disabled="busy" @click="emit('openPlayground', deployment.id)">Chat 테스트</button></article></div>
-          <div v-else class="empty-state"><span>◈</span><h3>동기화된 모델이 없습니다</h3><p>Runtime 서버에서 모델을 준비한 뒤 ‘모델 동기화’를 실행하세요.</p></div>
-          <ModelOperationsPanel :endpoint="selected" :deployments="deployments" :auth="auth" @changed="load(selected?.id)" />
+          <div class="section-divider"><span>현재 Runtime 인벤토리</span><b>{{ visibleDeployments.length }}</b></div>
+          <section v-if="loadedDeployments.length" class="runtime-model-section">
+            <header class="runtime-model-heading"><div><span class="card-kicker">ACTIVE IN MEMORY</span><h3>현재 로드된 모델</h3></div><span class="count-badge">{{ loadedDeployments.length }}</span></header>
+            <div class="deployment-grid">
+              <article v-for="deployment in loadedDeployments" :key="deployment.id" class="deployment-card-slot">
+                <button class="deployment-card loaded-model-card" @click="openDeployment(deployment)">
+                  <div class="deployment-top"><span class="model-cube">◈</span><span class="status-chip tiny healthy">LOADED · 상세 보기</span></div>
+                  <strong>{{ deployment.displayName }}</strong><small class="mono">{{ deployment.providerModelId }}</small>
+                  <small class="deployment-variant-summary">{{ deploymentVariantSummary(deployment) }}</small>
+                  <dl><div><dt>컨텍스트</dt><dd>{{ deployment.contextLength?.toLocaleString() ?? '확인 불가' }}</dd></div><div><dt>AIConnect 요청 상한</dt><dd>{{ deployment.maxConcurrency }}</dd></div><div><dt>양자화</dt><dd>{{ deployment.quantization ?? '확인 불가' }}</dd></div></dl>
+                  <span class="capability-line">{{ deployment.capabilitiesJson }}</span>
+                </button>
+                <div class="deployment-card-actions"><button class="secondary-button deployment-chat-button" :disabled="busy" @click="emit('openPlayground', deployment.id)">Chat 테스트</button><button class="text-button" :disabled="busy" @click="openDeploymentPricing(deployment)">요금·라우팅 설정</button></div>
+              </article>
+            </div>
+          </section>
+          <p v-else-if="candidateDeployments.length" class="loaded-model-empty">현재 로드된 모델이 없습니다. Runtime에서 모델을 로드한 뒤 ‘모델 동기화’를 실행하세요.</p>
+          <details v-if="candidateDeployments.length" class="candidate-models">
+            <summary><span><strong>미로드 모델 후보</strong><small>현재 메모리에 로드되지 않은 모델입니다. 펼쳐서 확인할 수 있습니다.</small></span><b>{{ candidateDeployments.length }}</b></summary>
+            <div class="candidate-model-list">
+              <button v-for="deployment in candidateDeployments" :key="deployment.id" class="candidate-model-row" @click="openDeployment(deployment)">
+                <span class="model-cube small">◈</span><span class="candidate-model-name"><strong>{{ deployment.displayName }}</strong><small class="mono">{{ deployment.providerModelId }}</small></span><span class="deployment-variant-summary">{{ deploymentVariantSummary(deployment) }}</span><span class="status-chip tiny" :class="['ERROR', 'FAILED'].includes(runtimeState(deployment)) ? 'unhealthy' : 'unknown'">{{ runtimeStateLabel(deployment) }}</span>
+              </button>
+            </div>
+          </details>
+          <div v-if="!visibleDeployments.length" class="empty-state"><span>◈</span><h3>현재 Runtime에서 확인된 모델이 없습니다</h3><p>Runtime 서버에서 모델을 준비한 뒤 ‘모델 동기화’를 실행하세요.</p></div>
+          <ModelOperationsPanel :endpoint="selected" :deployments="visibleDeployments" :auth="auth" @changed="load(selected?.id)" />
         </template>
         <div v-else class="empty-state centered"><span>◌</span><h3>Runtime을 선택하세요</h3><p>선택한 Runtime의 상태, Endpoint 설정, GPU 인벤토리와 모델 작업을 확인할 수 있습니다.</p></div>
       </article>
@@ -245,6 +440,19 @@ onMounted(load)
 
     <BaseModal :open="acceleratorOpen" title="Accelerator 장치 등록" description="Register an AI runtime with its provider-specific protocol." @close="acceleratorOpen = false"><div class="modal-form"><div class="form-grid three"><label class="field">제조사<input v-model.trim="accelerator.vendor" placeholder="NVIDIA" /></label><label class="field">제품명<input v-model.trim="accelerator.productName" placeholder="RTX 5090" /></label><label class="field">장치 번호<input v-model.number="accelerator.deviceIndex" type="number" min="0" /></label></div><div class="form-grid"><label class="field">VRAM (MB)<input v-model.number="accelerator.memoryTotalMb" type="number" min="1" placeholder="선택" /></label><label class="field">드라이버 버전<input v-model.trim="accelerator.driverVersion" placeholder="선택" /></label></div><label class="field">Device UUID<input v-model.trim="accelerator.deviceUuid" placeholder="GPU-... (선택)" /></label></div><template #footer><button class="secondary-button" @click="acceleratorOpen = false">취소</button><button class="primary-button" :disabled="busy || accelerator.deviceIndex < 0" @click="registerAccelerator">장치 등록</button></template></BaseModal>
 
+    <BaseModal :open="deploymentDetailOpen" :title="inspectingDeployment?.displayName ?? '모델 정보'" :description="`${runtimeLabel(selected?.runtimeType)} · Runtime에서 보고한 정보`" size="lg" @close="deploymentDetailOpen = false">
+      <div v-if="inspectingDeployment" class="runtime-model-detail">
+        <div class="runtime-detail-summary"><div><span>모델 식별자</span><strong class="mono">{{ inspectingDeployment.providerModelId }}</strong></div><div><span>상태</span><strong>{{ inspectingDeployment.loaded ? '현재 로드됨' : runtimeStateLabel(inspectingDeployment) }}</strong></div><div><span>Runtime</span><strong>{{ runtimeLabel(selected?.runtimeType) }}</strong></div><div><span>양자화</span><strong>{{ inspectingDeployment.quantization ?? '런타임 응답에 포함되지 않음' }}</strong></div></div>
+        <p class="runtime-detail-note">{{ runtimeDetailNote(selected?.runtimeType) }}</p>
+        <section v-for="section in inspectingRuntimeSettings" :key="section.title" class="runtime-setting-section">
+          <h3>{{ section.title }}</h3>
+          <dl><div v-for="field in section.fields" :key="field.label" :class="{ unreported: !field.reported }"><dt>{{ field.label }}</dt><dd>{{ field.reported ? formatRuntimeFieldValue(field, field.value) : '런타임 응답에 포함되지 않음' }}</dd></div></dl>
+        </section>
+        <p class="runtime-detail-footnote">표시되지 않은 설정은 기본값이라고 단정할 수 없습니다. 각 Runtime API가 실제 값을 반환하지 않은 경우 ‘응답에 포함되지 않음’으로 표시합니다.</p>
+      </div>
+      <template #footer><button class="secondary-button" @click="deploymentDetailOpen = false">닫기</button><button v-if="inspectingDeployment" class="primary-button" @click="openDeploymentPricing(inspectingDeployment); deploymentDetailOpen = false">요금·라우팅 설정</button></template>
+    </BaseModal>
+
     <BaseModal :open="deploymentOpen" title="Deployment 운영 설정" description="자동으로 발견한 모델 정보는 유지하고, 라우팅에 필요한 운영 설정만 변경합니다." @close="deploymentOpen = false"><div v-if="editing" class="modal-form"><label class="field">호환 키<input v-model="editing.compatibilityKey" /></label><div class="form-grid"><label class="field">최대 동시 요청<input v-model.number="editing.maxConcurrency" type="number" min="1" /></label><label class="toggle-field"><span>라우팅 활성화<small>신규 요청 후보에 포함</small></span><input v-model="editing.enabled" type="checkbox" /></label></div><label class="field">관리자 검증 Capability JSON<textarea v-model="editing.capabilityOverridesJson" rows="4" placeholder='["STRUCTURED_OUTPUT"]'></textarea></label></div><template #footer><button class="secondary-button" @click="deploymentOpen = false">취소</button><button class="primary-button" :disabled="busy" @click="saveDeployment">설정 저장</button></template></BaseModal>
     <BaseModal :open="deploymentPricingOpen" title="Deployment 비용 설정" description="이 모델이 실제로 호출될 때 적용할 입력·출력 단가와 통화를 저장합니다." @close="deploymentPricingOpen = false"><div v-if="editing" class="modal-form"><label class="field">Deployment name<input v-model.trim="editing.displayName" maxlength="200" required /></label><div class="form-grid three"><label class="field">Input price / 1M tokens<input v-model.number="editing.inputPricePerMillion" type="number" min="0" step="0.000001" /></label><label class="field">Output price / 1M tokens<input v-model.number="editing.outputPricePerMillion" type="number" min="0" step="0.000001" /></label><label class="field">Currency<select v-model="editing.currency"><option value="KRW">KRW (원화)</option><option value="USD">USD (달러)</option></select></label></div><p class="field-help">가격은 1M 토큰 기준입니다. Runtime이 usage를 반환하지 않으면 gateway가 요청/응답 텍스트를 기준으로 보수적으로 추정합니다.</p><label class="field">Compatibility key<input v-model="editing.compatibilityKey" /></label><div class="form-grid"><label class="field">Max concurrency<input v-model.number="editing.maxConcurrency" type="number" min="1" /></label><label class="toggle-field"><span>Routing enabled<small>신규 요청 후보에 포함</small></span><input v-model="editing.enabled" type="checkbox" /></label></div><label class="field">Capability overrides JSON<textarea v-model="editing.capabilityOverridesJson" rows="4" placeholder='["STRUCTURED_OUTPUT"]'></textarea></label></div><template #footer><button class="secondary-button" @click="deploymentPricingOpen = false">취소</button><button class="primary-button" :disabled="busy" @click="saveDeployment">단가 저장</button></template></BaseModal>
   </section>
@@ -252,6 +460,7 @@ onMounted(load)
 
 <style scoped>
 .deployment-card-slot{min-width:0;display:grid;align-content:start;gap:7px}.deployment-chat-button{justify-self:end;min-height:30px;padding-inline:10px;font-size:9px}
+.runtime-model-section{padding:10px 0 0}.runtime-model-heading{padding:8px 22px 0;display:flex;align-items:center;justify-content:space-between}.runtime-model-heading h3{margin:5px 0 0;font-size:13px}.loaded-model-empty{margin:13px;padding:13px;border:1px dashed var(--border);border-radius:11px;color:var(--muted);font-size:10px;line-height:1.6}.loaded-model-card{width:100%;cursor:pointer}.deployment-card-actions{display:flex;align-items:center;justify-content:flex-end;gap:12px}.deployment-card-actions .text-button{font-size:9px}.candidate-models{margin:10px 13px 14px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2);overflow:hidden}.candidate-models summary{min-height:58px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;list-style:none}.candidate-models summary::-webkit-details-marker{display:none}.candidate-models summary::after{content:'⌄';color:var(--accent-strong);font-size:15px}.candidate-models[open] summary::after{content:'⌃'}.candidate-models summary>span{display:grid;gap:4px}.candidate-models summary strong{font-size:11px}.candidate-models summary small{color:var(--muted);font-size:9px}.candidate-models summary>b{margin-left:auto;padding:5px 8px;border:1px solid var(--border);border-radius:8px;color:var(--muted);font-size:9px}.candidate-model-list{padding:0 10px 10px;display:grid;gap:6px}.candidate-model-row{min-width:0;padding:9px 11px;display:grid;grid-template-columns:30px minmax(120px,1fr) minmax(70px,auto) auto;align-items:center;gap:9px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);text-align:left;cursor:pointer}.candidate-model-row:hover{border-color:var(--accent-border)}.candidate-model-name{min-width:0;display:grid;gap:4px}.candidate-model-name strong,.candidate-model-name small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.candidate-model-name strong{font-size:10px}.candidate-model-name small{color:var(--muted);font-size:8px}.runtime-model-detail{display:grid;gap:13px}.runtime-detail-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.runtime-detail-summary>div{min-width:0;padding:10px 12px;display:grid;gap:5px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2)}.runtime-detail-summary span,.runtime-setting-section dt{color:var(--muted);font-size:9px}.runtime-detail-summary strong{overflow-wrap:anywhere;font-size:10px}.runtime-detail-note,.runtime-detail-footnote{margin:0;padding:10px 12px;border:1px solid var(--accent-border);border-radius:10px;background:var(--accent-dim);color:var(--text-soft);font-size:10px;line-height:1.6}.runtime-setting-section{padding:12px;border:1px solid var(--border);border-radius:11px;background:var(--surface-2)}.runtime-setting-section h3{margin:0 0 10px;font-size:11px}.runtime-setting-section dl{margin:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.runtime-setting-section dl>div{min-width:0;padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--surface)}.runtime-setting-section dt{margin-bottom:5px}.runtime-setting-section dd{margin:0;overflow-wrap:anywhere;font-size:10px;font-weight:700}.runtime-setting-section .unreported dd{color:var(--muted);font-weight:500}.runtime-detail-footnote{border-color:var(--border);background:transparent;color:var(--muted)}
 .endpoint-list { padding: 8px; display: grid; gap: 4px; }
 .endpoint-list-row { display: grid; grid-template-columns: 1fr 37px; gap: 3px; align-items: stretch; border: 1px solid transparent; border-radius: 11px; }
 .endpoint-list-row:hover, .endpoint-list-row.active { border-color: var(--accent-border); background: var(--accent-dim); }
@@ -265,4 +474,5 @@ onMounted(load)
 .endpoint-info { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }.endpoint-info div { display: grid; gap: 3px; }.endpoint-info span, .endpoint-info small { color: var(--muted); font-size: 9px; }.endpoint-info strong { font-size: 11px; }
 .danger-text-button { justify-self: start; padding: 4px 0; border: 0; background: transparent; color: var(--danger); font-size: 11px; font-weight: 800; }.danger-button { min-height: 40px; padding: 0 15px; border: 1px solid color-mix(in srgb, var(--danger) 42%, transparent); border-radius: 11px; background: var(--danger-dim); color: var(--danger); font-size: 12px; font-weight: 800; }
 .delete-confirm { display: grid; gap: 9px; padding: 14px; border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent); border-radius: 12px; background: var(--danger-dim); }.delete-confirm span { color: var(--danger); font-size: 9px; font-weight: 800; letter-spacing: .12em; }.delete-confirm strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }.delete-confirm p { margin: 0; color: var(--text-soft); font-size: 10px; line-height: 1.6; }
+@media(max-width:700px){.candidate-model-row{grid-template-columns:30px minmax(0,1fr) auto}.candidate-model-row>.deployment-variant-summary{display:none}.runtime-detail-summary,.runtime-setting-section dl{grid-template-columns:1fr}}
 </style>

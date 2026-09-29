@@ -15,4 +15,10 @@ class RuntimeUrlTest {
     void appendRemovesDuplicateTrailingSlash() {
         assertEquals("http://node:11434/api/tags", RuntimeUrl.append("http://node:11434/", "/api/tags"));
     }
+
+    @Test
+    void rootResourceStripsVersionSuffixFromRegisteredOpenAiBase() {
+        assertEquals("http://node:8080/models", RuntimeUrl.root("http://node:8080/v1/", "/models"));
+        assertEquals("http://node:8080/models", RuntimeUrl.root("http://node:8080", "/models"));
+    }
 }

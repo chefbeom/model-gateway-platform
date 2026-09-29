@@ -32,6 +32,9 @@ public class ControlPlaneService {
     private final LlmServiceRepository services;
     private final ProjectServiceAccessRepository access;
     private final ServiceTargetRepository targets;
+    private final LlmRequestRepository requestHistory;
+    private final LlmRequestAttemptRepository attemptHistory;
+    private final PlaygroundRequestRepository playgroundHistory;
     private final TeamRepository teams;
     private final SecretCipher secretCipher;
     private final InferenceRuntimeClient runtimeClient;
@@ -40,7 +43,9 @@ public class ControlPlaneService {
     public ControlPlaneService(OrganizationRepository organizations, ProjectRepository projects, InferenceNodeRepository nodes,
                                RuntimeEndpointRepository endpoints, ModelDeploymentRepository deployments,
                                ExternalProviderRepository externalProviders, LlmServiceRepository services, ProjectServiceAccessRepository access,
-                               ServiceTargetRepository targets, TeamRepository teams, SecretCipher secretCipher,
+                               ServiceTargetRepository targets, LlmRequestRepository requestHistory,
+                               LlmRequestAttemptRepository attemptHistory, PlaygroundRequestRepository playgroundHistory,
+                               TeamRepository teams, SecretCipher secretCipher,
                                InferenceRuntimeClient runtimeClient, LmStudioModelDiscovery modelDiscovery) {
         this.organizations = organizations;
         this.projects = projects;
@@ -51,6 +56,9 @@ public class ControlPlaneService {
         this.services = services;
         this.access = access;
         this.targets = targets;
+        this.requestHistory = requestHistory;
+        this.attemptHistory = attemptHistory;
+        this.playgroundHistory = playgroundHistory;
         this.teams = teams;
         this.secretCipher = secretCipher;
         this.runtimeClient = runtimeClient;
@@ -198,13 +206,18 @@ public class ControlPlaneService {
         endpoint.recordHealth(true);
         endpoints.save(endpoint);
         List<DiscoveredRuntimeModel> discovered = modelDiscovery.discover(result.body(), endpoint.getRuntimeType());
-        Map<String, ModelDeployment> existing = deployments.findByRuntimeEndpointId(endpointId).stream()
-                .collect(Collectors.toMap(ModelDeployment::getProviderModelId, Function.identity()));
-        Set<String> seen = new HashSet<>();
+        List<ModelDeployment> existing = deployments.findByRuntimeEndpointId(endpointId);
+        Map<String, List<ModelDeployment>> existingById = existing.stream()
+                .collect(Collectors.groupingBy(ModelDeployment::getProviderModelId, LinkedHashMap::new, Collectors.toList()));
+        Set<UUID> claimedExistingIds = new HashSet<>();
         List<ModelDeployment> created = new ArrayList<>();
         for (DiscoveredRuntimeModel model : discovered) {
-            seen.add(model.providerModelId());
-            ModelDeployment deployment = existing.get(model.providerModelId());
+            ModelDeployment deployment = existingById.getOrDefault(model.providerModelId(), List.of()).stream()
+                    .filter(item -> !claimedExistingIds.contains(item.getId())).findFirst().orElse(null);
+            if (deployment == null && endpoint.getRuntimeType() == RuntimeType.LLAMA_CPP) {
+                deployment = findCanonicalLlamaCppMatch(existing, model.providerModelId(), claimedExistingIds);
+                if (deployment != null) deployment.reidentifyProviderModel(model.providerModelId(), model.compatibilityKey());
+            }
             if (deployment == null) {
                 deployment = new ModelDeployment(endpointId, model.providerModelId(), model.compatibilityKey(), model.displayName(),
                         model.modelFamily(), model.quantization(), model.contextLength(), model.loaded(), model.maxConcurrency(), model.capabilitiesJson());
@@ -212,19 +225,51 @@ public class ControlPlaneService {
                         model.loaded(), model.maxConcurrency(), model.capabilitiesJson(), model.metadataJson());
                 created.add(deployments.save(deployment));
             } else {
+                claimedExistingIds.add(deployment.getId());
                 deployment.synchronize(model.displayName(), model.modelFamily(), model.quantization(), model.contextLength(),
                         model.loaded(), model.maxConcurrency(), model.capabilitiesJson(), model.metadataJson());
                 deployments.save(deployment);
             }
         }
-        for (ModelDeployment deployment : existing.values()) {
-            if (!seen.contains(deployment.getProviderModelId())) {
+        List<ModelDeployment> stale = existing.stream()
+                .filter(deployment -> !claimedExistingIds.contains(deployment.getId()))
+                .toList();
+        for (ModelDeployment deployment : stale) {
                 deployment.markUnavailable();
                 deployments.save(deployment);
-            }
         }
-        rebindStaleTargets(endpointId, preferredModelKey, existing.values());
+        rebindStaleTargets(endpointId, preferredModelKey, existing);
+        pruneUnreferencedDiscoveredRows(stale);
         return created;
+    }
+
+    private ModelDeployment findCanonicalLlamaCppMatch(List<ModelDeployment> existing, String providerModelId,
+                                                       Set<UUID> claimedIds) {
+        String canonical = LmStudioModelDiscovery.canonicalLlamaCppIdentity(providerModelId);
+        if (canonical.isBlank()) return null;
+        List<ModelDeployment> matches = existing.stream()
+                .filter(item -> !claimedIds.contains(item.getId()))
+                .filter(item -> canonical.equals(LmStudioModelDiscovery.canonicalLlamaCppIdentity(item.getProviderModelId())))
+                .toList();
+        return matches.size() == 1 ? matches.get(0) : null;
+    }
+
+    /** Keep target-backed and manually created rows; discard only vanished auto-discovery ghosts. */
+    private void pruneUnreferencedDiscoveredRows(List<ModelDeployment> stale) {
+        List<ModelDeployment> staleDiscovered = stale.stream()
+                .filter(item -> item.getMetadataJson() != null && !item.getMetadataJson().isBlank())
+                .toList();
+        if (staleDiscovered.isEmpty()) return;
+        Set<UUID> staleIds = staleDiscovered.stream().map(ModelDeployment::getId).collect(Collectors.toSet());
+        Set<UUID> referencedIds = targets.findByDeploymentIdIn(staleIds).stream()
+                .map(ServiceTarget::getDeploymentId).collect(Collectors.toSet());
+        List<ModelDeployment> removable = staleDiscovered.stream()
+                .filter(item -> !referencedIds.contains(item.getId()))
+                .filter(item -> !requestHistory.existsByFinalDeploymentIdIn(List.of(item.getId())))
+                .filter(item -> !attemptHistory.existsByDeploymentIdIn(List.of(item.getId())))
+                .filter(item -> !playgroundHistory.existsByDeploymentIdIn(List.of(item.getId())))
+                .toList();
+        deployments.deleteAll(removable);
     }
 
     private void rebindStaleTargets(UUID endpointId, String preferredModelKey,
