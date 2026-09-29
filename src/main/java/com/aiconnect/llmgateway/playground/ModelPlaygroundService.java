@@ -175,10 +175,10 @@ public class ModelPlaygroundService {
                 traces.save(updateTrace(trace, false, exception.getStatus().value(), elapsed(startedNanos),
                         null, null, exception.getCode()));
                 throw exception;
+            }
             trace.recordRequestMetadata(RequestCapabilityDetector.requestType(upstream),
                     upstream.path("reasoning_effort").asText(null), upstream.path("service_tier").asText(null));
             traces.save(trace);
-            }
             if (stream) return startStream(resolved, upstream, trace, requestId, startedNanos);
             RuntimeResult result = resolved.external()
                     ? openAiClient.chatCompletion(resolved.provider(), upstream, upstream.has("temperature"))
