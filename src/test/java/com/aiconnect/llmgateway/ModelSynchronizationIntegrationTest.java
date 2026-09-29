@@ -5,6 +5,7 @@ import com.aiconnect.llmgateway.domain.*;
 import com.aiconnect.llmgateway.repository.*;
 import com.aiconnect.llmgateway.runtime.InferenceRuntimeClient;
 import com.aiconnect.llmgateway.runtime.RuntimeResult;
+import com.aiconnect.llmgateway.runtime.RuntimeUnavailableException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
