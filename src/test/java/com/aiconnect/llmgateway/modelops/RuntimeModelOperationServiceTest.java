@@ -97,7 +97,7 @@ class RuntimeModelOperationServiceTest {
 
         RuntimeModelOperation operation = service.load(endpointId,
                 new RuntimeModelOperationService.LoadCommand("gemma-q4.gguf", null, null, null, null, null, null,
-                        null, null, null, null), null);
+                        null, null, null), null);
 
         ArgumentCaptor<com.fasterxml.jackson.databind.JsonNode> payload = ArgumentCaptor.forClass(com.fasterxml.jackson.databind.JsonNode.class);
         verify(models).load(eq(endpoint), payload.capture());
