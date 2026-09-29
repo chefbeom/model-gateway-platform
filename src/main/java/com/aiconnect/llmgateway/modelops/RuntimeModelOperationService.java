@@ -233,8 +233,9 @@ public class RuntimeModelOperationService {
         endpoints.save(endpoint);
         if (isLlamaCpp(endpoint)) {
             if (loading) {
+                String requestedModelKey = modelKey;
                 boolean confirmedLoaded = deployments.findByRuntimeEndpointId(endpoint.getId()).stream()
-                        .anyMatch(item -> item.getProviderModelId().equals(modelKey) && item.isLoaded());
+                        .anyMatch(item -> item.getProviderModelId().equals(requestedModelKey) && item.isLoaded());
                 if (!confirmedLoaded) {
                     endpoint.failRecovery();
                     endpoints.save(endpoint);
