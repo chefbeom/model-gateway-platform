@@ -40,6 +40,13 @@ public class PlaygroundRequest {
     private String endpointUrl;
     @Column(nullable = false, length = 24)
     private String source = "PLAYGROUND";
+    /** Request modality only; prompts and attachment payloads are never persisted here. */
+    @Column(nullable = false, length = 60)
+    private String requestType = "UNKNOWN";
+    @Column(length = 24)
+    private String reasoningEffort;
+    @Column(length = 24)
+    private String requestedServiceTier;
     @Column(nullable = false, length = 24)
     private String status = "IN_PROGRESS";
     @Column(nullable = false)
@@ -82,6 +89,18 @@ public class PlaygroundRequest {
         this.completedAt = Instant.now();
     }
 
+    public void recordRequestMetadata(String requestType, String reasoningEffort, String requestedServiceTier) {
+        if (requestType != null && !requestType.isBlank()) {
+            this.requestType = requestType.substring(0, Math.min(60, requestType.length()));
+        }
+        this.reasoningEffort = normalizeMetadata(reasoningEffort);
+        this.requestedServiceTier = normalizeMetadata(requestedServiceTier);
+    }
+
+    private String normalizeMetadata(String value) {
+        return value == null || value.isBlank() ? null : value.substring(0, Math.min(24, value.length()));
+    }
+
     public void interrupted(long latencyMs, String errorCode) {
         complete(false, 502, latencyMs, inputTokens, outputTokens, errorCode);
     }
@@ -95,6 +114,9 @@ public class PlaygroundRequest {
     public String getModelId() { return modelId; }
     public String getEndpointUrl() { return endpointUrl; }
     public String getSource() { return source; }
+    public String getRequestType() { return requestType; }
+    public String getReasoningEffort() { return reasoningEffort; }
+    public String getRequestedServiceTier() { return requestedServiceTier; }
     public String getStatus() { return status; }
     public boolean isStream() { return stream; }
     public Integer getHttpStatus() { return httpStatus; }

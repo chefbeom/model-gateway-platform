@@ -434,6 +434,14 @@ export const devDocs: DocPage[] = [
             { label: 'PROJECT', title: '팀·프로젝트', text: '어느 조직 단위에서 사용량이 증가했는지 비교합니다.' },
             { label: 'RUNTIME', title: '실제 인프라', text: '처리 배포, 지연, 오류와 Failover를 확인합니다.' }
           ] },
+          { type: 'table', columns: ['상세 통계', '무엇을 의미하는가', '해석 기준'], rows: [
+            ['Runtime / 모델', '완료 요청·모델 시도 수, 성공률, 지연시간, 입력·출력·전체 토큰', '최종 응답은 완료 모델에 귀속하고, 모든 재시도는 Attempt로 별도 집계'],
+            ['요청 기능', 'Vision, Structured Output, Tool Calling, 스트리밍', '기능별 요청은 서로 겹칠 수 있어 퍼센트 합이 100%를 넘을 수 있음'],
+            ['수치 범위', '응답시간·토큰 평균, 최솟값, 최댓값', '누락된 토큰은 0으로 보지 않고 실제 표본 수만 계산'],
+            ['실패 원인', '최종 오류 코드와 모델별 재시도 실패 유형', '상세 오류 메시지와 요청 본문은 통계에 저장하지 않음'],
+            ['Playground', '직접 모델 테스트 성공률·토큰·응답시간', '운영 API와 분리하며 비용을 합산하지 않음']
+          ] },
+          { type: 'callout', tone: 'info', title: '집계 기준', text: '성공률 분모는 완료된 요청(성공+실패)입니다. 비용은 통화별 등록 가격 기준 추정치이며 KRW와 USD를 합산하지 않습니다. 자세한 지표 정의는 docs/runtime-usage-statistics.md에서 확인합니다.' },
           { type: 'steps', items: [
             { title: '사용량에서 이상 구간 확인', text: '요청 급증, 토큰 비용, 실패율을 프로젝트별로 좁힙니다.', action: { label: '사용량 열기', destination: 'usage' } },
             { title: '관측성에서 Request·Attempt 확인', text: 'Request ID, 실제 배포, 오류, Failover 경로를 확인합니다.', action: { label: '관측성 열기', destination: 'observability' } },

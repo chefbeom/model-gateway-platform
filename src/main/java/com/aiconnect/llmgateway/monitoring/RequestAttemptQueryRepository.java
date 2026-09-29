@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
 import org.springframework.data.repository.query.Param;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 
@@ -18,6 +19,14 @@ public interface RequestAttemptQueryRepository extends Repository<LlmRequestAtte
             """)
     List<AttemptProjection> findAttempts(@Param("requestId") UUID requestId);
 
+    @Query("""
+            select a.requestId as requestId, a.deploymentId as deploymentId, a.status as status,
+                   a.startedAt as startedAt, a.latencyMs as latencyMs, a.httpStatus as httpStatus,
+                   a.errorType as errorType
+            from LlmRequestAttempt a where a.requestId in :requestIds
+            """)
+    List<UsageAttemptProjection> findAttemptsForRequests(@Param("requestIds") Collection<UUID> requestIds);
+
     interface AttemptProjection {
         UUID getDeploymentId();
         int getAttemptNumber();
@@ -29,5 +38,15 @@ public interface RequestAttemptQueryRepository extends Repository<LlmRequestAtte
         String getErrorType();
         String getErrorMessage();
         boolean isResponseStarted();
+    }
+
+    interface UsageAttemptProjection {
+        UUID getRequestId();
+        UUID getDeploymentId();
+        String getStatus();
+        Instant getStartedAt();
+        Long getLatencyMs();
+        Integer getHttpStatus();
+        String getErrorType();
     }
 }

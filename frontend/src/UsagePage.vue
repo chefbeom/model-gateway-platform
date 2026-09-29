@@ -2,8 +2,10 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { adminFetch, type AdminAuth } from './api'
 import RequestDetailModal from './RequestDetailModal.vue'
+import RuntimeAnalyticsPanel from './RuntimeAnalyticsPanel.vue'
 import type { RequestDetail } from './requestDetail'
 import { formatExecutionMode } from './requestMode'
+import type { RuntimeAnalytics } from './runtimeAnalytics'
 
 type UsageMetric = { label: string; detail: string; requestCount: number; succeeded: number; failed: number; inputTokens: number; outputTokens: number; estimatedCost: number; estimatedCostByCurrency?: Record<string, number>; failovers: number; averageLatencyMs: number }
 type UsageRequest = { requestId: string; projectName: string; serviceKey: string; infrastructure: string; apiKeyLabel: string; status: string; inputTokens: number; outputTokens: number; estimatedCost: number; costCurrency?: string; latencyMs?: number | null; failoverCount: number; errorCode?: string | null; startedAt: string; reasoningEffort?: string | null; requestedServiceTier?: string | null; actualServiceTier?: string | null }
@@ -20,6 +22,7 @@ type UsageOverview = {
   scope: 'ORGANIZATION' | 'PROJECT_OWNER' | 'KEY_ISSUER'
   scopeLabel: string
   availableProjects: ProjectScope[]
+  runtimeAnalytics?: RuntimeAnalytics
 }
 
 const props = defineProps<{ organizationId: string; auth: AdminAuth }>()
@@ -156,6 +159,8 @@ onMounted(() => { void loadUsage() })
         <article class="metric-card"><span>예상 비용</span><strong>{{ costBreakdown(overview.total) }}</strong></article>
         <article class="metric-card" :class="{ warning: overview.total.failed > 0 }"><span>Failover</span><strong>{{ integer(overview.total.failovers) }}</strong><small>평균 {{ integer(overview.total.averageLatencyMs) }} ms</small></article>
       </div>
+
+      <RuntimeAnalyticsPanel v-if="overview.runtimeAnalytics" :analytics="overview.runtimeAnalytics" />
 
       <div class="usage-grid">
         <article class="surface-card">

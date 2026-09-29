@@ -30,7 +30,7 @@ AICONNECT의 실제 화면과 현재 main 브랜치 구현을 기준으로, 사�
 | 첫 연결과 API 호출 | 내 API / API 테스트 | 빠른 시작, API 연결, API 테스트·구조 |
 | Runtime·외부 AI 설정 | 인프라 / 외부 AI | Runtime·모델, 외부 AI |
 | 단가·통화·예산 | 요금·쿼터 / LLM 서비스 | 요금·통화·총량제 |
-| 요청·비용·Failover 추적 | 사용량 / 관측성 | 사용량·관측·감사·알림, Runtime 장애 진단 |
+| 요청·비용·Failover 추적 | 사용량 / 관측성 | [Runtime·모델 사용량 통계](runtime-usage-statistics.md), 사용량·관측·감사·알림, Runtime 장애 진단 |
 | 전체 연결 관계 | 시스템 구조 | API 테스트와 시스템 구조 |
 | 배포·보안·복구 | 배포 프로필 / 운영 문서 | 배포 프로필, 보안·보관·Timeout |
 

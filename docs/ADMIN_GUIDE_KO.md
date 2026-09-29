@@ -481,6 +481,7 @@ POST /api/admin/services/{serviceId}/targets
 - [장애 전환 운영](failover-operations.md)
 - [알림과 Incident](incident-and-alerts.md)
 - [백업과 복구](backup-and-restore.md)
+- [Runtime·모델 사용량 통계](runtime-usage-statistics.md)
 
 
 ## 외부 OpenAI Provider

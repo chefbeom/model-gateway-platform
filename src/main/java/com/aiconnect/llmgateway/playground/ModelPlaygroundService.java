@@ -8,6 +8,7 @@ import com.aiconnect.llmgateway.domain.ModelDeployment;
 import com.aiconnect.llmgateway.domain.PlaygroundRequest;
 import com.aiconnect.llmgateway.domain.RuntimeEndpoint;
 import com.aiconnect.llmgateway.identity.CurrentActor;
+import com.aiconnect.llmgateway.gateway.RequestCapabilityDetector;
 import com.aiconnect.llmgateway.repository.ExternalProviderRepository;
 import com.aiconnect.llmgateway.repository.InferenceNodeRepository;
 import com.aiconnect.llmgateway.repository.ModelDeploymentRepository;
@@ -174,6 +175,9 @@ public class ModelPlaygroundService {
                 traces.save(updateTrace(trace, false, exception.getStatus().value(), elapsed(startedNanos),
                         null, null, exception.getCode()));
                 throw exception;
+            trace.recordRequestMetadata(RequestCapabilityDetector.requestType(upstream),
+                    upstream.path("reasoning_effort").asText(null), upstream.path("service_tier").asText(null));
+            traces.save(trace);
             }
             if (stream) return startStream(resolved, upstream, trace, requestId, startedNanos);
             RuntimeResult result = resolved.external()

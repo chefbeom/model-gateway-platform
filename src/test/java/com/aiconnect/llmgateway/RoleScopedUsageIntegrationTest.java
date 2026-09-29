@@ -100,20 +100,26 @@ class RoleScopedUsageIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.scope").value("KEY_ISSUER"))
                 .andExpect(jsonPath("$.total.requestCount").value(1))
-                .andExpect(jsonPath("$.total.inputTokens").value(10));
+                .andExpect(jsonPath("$.total.inputTokens").value(10))
+                .andExpect(jsonPath("$.runtimeAnalytics.byServer[0].requests.requestCount").value(1))
+                .andExpect(jsonPath("$.runtimeAnalytics.playground").doesNotExist());
 
         mvc.perform(get(path, organization.getId()).header("Authorization", "Bearer " + tokens.issue(owner)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.scope").value("PROJECT_OWNER"))
                 .andExpect(jsonPath("$.total.requestCount").value(2))
                 .andExpect(jsonPath("$.total.inputTokens").value(30))
+                .andExpect(jsonPath("$.runtimeAnalytics.byServer[0].requests.requestCount").value(2))
+                .andExpect(jsonPath("$.runtimeAnalytics.playground").doesNotExist())
                 .andExpect(jsonPath("$.availableProjects[0].access").value("PROJECT_ALL"));
 
         mvc.perform(get(path, organization.getId()).header("Authorization", "Bearer " + tokens.issue(administrator)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.scope").value("ORGANIZATION"))
                 .andExpect(jsonPath("$.total.requestCount").value(3))
-                .andExpect(jsonPath("$.total.inputTokens").value(60));
+                .andExpect(jsonPath("$.total.inputTokens").value(60))
+                .andExpect(jsonPath("$.runtimeAnalytics.byServer[0].requests.requestCount").value(3))
+                .andExpect(jsonPath("$.runtimeAnalytics.playground.total.requestCount").value(0));
     }
 
     private AppUser user(String email, boolean platformAdmin) {
