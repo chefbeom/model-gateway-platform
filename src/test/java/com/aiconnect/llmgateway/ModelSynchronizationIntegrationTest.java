@@ -13,6 +13,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
+import java.net.ConnectException;
 import java.util.List;
 import java.util.UUID;
 
@@ -80,7 +81,7 @@ class ModelSynchronizationIntegrationTest {
 
         when(runtimeClient.listModels(any(RuntimeEndpoint.class)))
                 .thenReturn(new RuntimeResult(200, objectMapper.readTree(nativeResponse("vendor/new-model", "new-instance", 65536, 4))));
-        controlPlane.syncModels(endpoint.getId());
+        controlPlane.syncModels(endpoint.getId(), "vendor/new-model");
 
         ModelDeployment newDeployment = deployments.findByRuntimeEndpointId(endpoint.getId()).stream()
                 .filter(item -> "new-instance".equals(item.getProviderModelId())).findFirst().orElseThrow();
@@ -90,11 +91,12 @@ class ModelSynchronizationIntegrationTest {
         assertThat(rebound.getWeight()).isEqualTo(70);
         assertThat(rebound.isDegraded()).isTrue();
         assertThat(rebound.getMaxConcurrencyOverride()).isEqualTo(4);
-        assertThat(deployments.findById(oldDeployment.getId())).isEmpty();
+        assertThat(deployments.findById(oldDeployment.getId())).isPresent()
+                .get().extracting(ModelDeployment::getHealthStatus).isEqualTo(HealthStatus.UNHEALTHY);
     }
 
     @Test
-    void doesNotGuessWhenSeveralReplacementModelsAreLoaded() throws Exception {
+    void doesNotRebindFollowTargetsDuringOrdinaryInventorySync() throws Exception {
         Organization organization = organizations.save(new Organization("Ambiguous Rebind Org"));
         InferenceNode node = nodes.save(new InferenceNode(organization.getId(), "ambiguous-rebind-node", null, "DIRECT", null));
         RuntimeEndpoint endpoint = endpoints.save(new RuntimeEndpoint(node.getId(), RuntimeType.LM_STUDIO, "http://ambiguous-rebind-node:1234", null));
@@ -108,11 +110,13 @@ class ModelSynchronizationIntegrationTest {
         ServiceTarget target = targets.save(new ServiceTarget(service.getId(), oldDeployment.getId(), 1, 100, false, null));
 
         when(runtimeClient.listModels(any(RuntimeEndpoint.class)))
-                .thenReturn(new RuntimeResult(200, objectMapper.readTree(nativeResponseWithTwoLoadedModels())));
+                .thenReturn(new RuntimeResult(200, objectMapper.readTree(nativeResponse("vendor/new-model", "new-instance", 32768, 2))));
         controlPlane.syncModels(endpoint.getId());
 
         ServiceTarget unchanged = targets.findById(target.getId()).orElseThrow();
         assertThat(unchanged.getDeploymentId()).isEqualTo(oldDeployment.getId());
+        assertThat(deployments.findById(oldDeployment.getId())).isPresent()
+                .get().extracting(ModelDeployment::getHealthStatus).isEqualTo(HealthStatus.UNHEALTHY);
     }
 
     @Test
@@ -150,7 +154,7 @@ class ModelSynchronizationIntegrationTest {
     }
 
     @Test
-    void prunesOnlyUnreferencedStaleDiscoveredRowsAndKeepsAuditHistory() throws Exception {
+    void retainsPreviouslyDiscoveredModelsWhenRuntimeInventoryIsEmpty() throws Exception {
         Organization organization = organizations.save(new Organization("stale model retention org"));
         Project project = projects.save(new Project(organization.getId(), "stale model retention project"));
         InferenceNode node = nodes.save(new InferenceNode(organization.getId(), "stale-retention-node", null, "DIRECT", null));
@@ -187,7 +191,46 @@ class ModelSynchronizationIntegrationTest {
         assertThat(requests.existsByFinalDeploymentIdIn(List.of(retained.getId()))).isTrue();
         assertThat(attempts.existsByDeploymentIdIn(List.of(retained.getId()))).isTrue();
         assertThat(playgroundRequests.existsByDeploymentIdIn(List.of(retained.getId()))).isTrue();
-        assertThat(deployments.findById(orphan.getId())).isEmpty();
+        assertThat(deployments.findById(orphan.getId())).isPresent()
+                .get().extracting(ModelDeployment::getHealthStatus).isEqualTo(HealthStatus.UNHEALTHY);
+    }
+
+    @Test
+    void probeFailurePreservesPreviouslyDiscoveredModelsAndTargetBindings() throws Exception {
+        Organization organization = organizations.save(new Organization("runtime outage retention org"));
+        InferenceNode node = nodes.save(new InferenceNode(organization.getId(), "runtime-outage-node", null, "DIRECT", null));
+        RuntimeEndpoint endpoint = endpoints.save(new RuntimeEndpoint(node.getId(), RuntimeType.LM_STUDIO,
+                "http://runtime-outage-node:1234", null));
+        LlmService service = services.save(new LlmService(organization.getId(), "runtime-outage-service", "runtime outage service",
+                FailoverPolicy.STRICT, RetryPolicy.SAFE, false, "[]", java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO));
+
+        when(runtimeClient.listModels(any(RuntimeEndpoint.class))).thenReturn(new RuntimeResult(200, objectMapper.readTree("""
+                {"models":[
+                  {"type":"llm","key":"vendor/loaded-model","display_name":"Loaded Model",
+                   "loaded_instances":[{"id":"loaded-instance","config":{"context_length":32768,"parallel":2}}]},
+                  {"type":"llm","key":"vendor/unloaded-model","display_name":"Unloaded Model","loaded_instances":[]}
+                ]}
+                """)));
+        controlPlane.syncModels(endpoint.getId());
+        List<ModelDeployment> known = deployments.findByRuntimeEndpointId(endpoint.getId());
+        assertThat(known).hasSize(2);
+        List<ServiceTarget> originalTargets = known.stream()
+                .map(item -> targets.save(new ServiceTarget(service.getId(), item.getId(), 1, 100, false, null, true)))
+                .toList();
+
+        when(runtimeClient.listModels(any(RuntimeEndpoint.class))).thenThrow(new RuntimeUnavailableException(
+                "Connection refused", new ConnectException("Connection refused")));
+        var probe = controlPlane.probe(endpoint.getId());
+
+        assertThat(probe.reachable()).isFalse();
+        assertThat(deployments.findByRuntimeEndpointId(endpoint.getId())).hasSize(2)
+                .allSatisfy(item -> {
+                    assertThat(item.isLoaded()).isFalse();
+                    assertThat(item.getHealthStatus()).isEqualTo(HealthStatus.UNHEALTHY);
+                });
+        assertThat(targets.findAllById(originalTargets.stream().map(ServiceTarget::getId).toList()))
+                .extracting(ServiceTarget::getDeploymentId)
+                .containsExactlyInAnyOrderElementsOf(known.stream().map(ModelDeployment::getId).toList());
     }
 
     private String nativeResponse(int contextLength, int parallel) {
@@ -205,18 +248,4 @@ class ModelSynchronizationIntegrationTest {
                 """.formatted(key, instanceId, contextLength, parallel);
     }
 
-    private String nativeResponseWithTwoLoadedModels() {
-        return """
-                {"models":[
-                  {"type":"llm","key":"vendor/new-one","display_name":"New One","architecture":"future-arch",
-                   "quantization":{"name":"Q4_K_M"},"max_context_length":131072,
-                   "loaded_instances":[{"id":"new-one-instance","config":{"context_length":32768,"parallel":2}}],
-                   "capabilities":{"vision":true}},
-                  {"type":"llm","key":"vendor/new-two","display_name":"New Two","architecture":"future-arch",
-                   "quantization":{"name":"Q8_0"},"max_context_length":131072,
-                   "loaded_instances":[{"id":"new-two-instance","config":{"context_length":32768,"parallel":2}}],
-                   "capabilities":{"vision":true}}
-                ]}
-                """;
-    }
 }

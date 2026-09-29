@@ -32,9 +32,6 @@ public class ControlPlaneService {
     private final LlmServiceRepository services;
     private final ProjectServiceAccessRepository access;
     private final ServiceTargetRepository targets;
-    private final LlmRequestRepository requestHistory;
-    private final LlmRequestAttemptRepository attemptHistory;
-    private final PlaygroundRequestRepository playgroundHistory;
     private final TeamRepository teams;
     private final SecretCipher secretCipher;
     private final InferenceRuntimeClient runtimeClient;
@@ -43,8 +40,7 @@ public class ControlPlaneService {
     public ControlPlaneService(OrganizationRepository organizations, ProjectRepository projects, InferenceNodeRepository nodes,
                                RuntimeEndpointRepository endpoints, ModelDeploymentRepository deployments,
                                ExternalProviderRepository externalProviders, LlmServiceRepository services, ProjectServiceAccessRepository access,
-                               ServiceTargetRepository targets, LlmRequestRepository requestHistory,
-                               LlmRequestAttemptRepository attemptHistory, PlaygroundRequestRepository playgroundHistory,
+                               ServiceTargetRepository targets,
                                TeamRepository teams, SecretCipher secretCipher,
                                InferenceRuntimeClient runtimeClient, LmStudioModelDiscovery modelDiscovery) {
         this.organizations = organizations;
@@ -56,9 +52,6 @@ public class ControlPlaneService {
         this.services = services;
         this.access = access;
         this.targets = targets;
-        this.requestHistory = requestHistory;
-        this.attemptHistory = attemptHistory;
-        this.playgroundHistory = playgroundHistory;
         this.teams = teams;
         this.secretCipher = secretCipher;
         this.runtimeClient = runtimeClient;
@@ -192,9 +185,9 @@ public class ControlPlaneService {
     }
 
     /**
-     * Synchronize a runtime and, when possible, keep existing service targets attached to
-     * the current model. The preferred key is supplied by an explicit load operation; a
-     * manual sync falls back to an unambiguous replacement only.
+     * Synchronize the last reported runtime inventory without deleting prior model records.
+     * Only an explicit model-load operation supplies a preferred key and may move
+     * follow-model targets to that selected replacement.
      */
     @Transactional
     public List<ModelDeployment> syncModels(UUID endpointId, String preferredModelKey) {
@@ -235,11 +228,12 @@ public class ControlPlaneService {
                 .filter(deployment -> !claimedExistingIds.contains(deployment.getId()))
                 .toList();
         for (ModelDeployment deployment : stale) {
-                deployment.markUnavailable();
-                deployments.save(deployment);
+            deployment.markUnavailable();
+            deployments.save(deployment);
         }
-        rebindStaleTargets(endpointId, preferredModelKey, existing);
-        pruneUnreferencedDiscoveredRows(stale);
+        if (preferredModelKey != null && !preferredModelKey.isBlank()) {
+            rebindStaleTargets(endpointId, preferredModelKey, existing);
+        }
         return created;
     }
 
@@ -252,24 +246,6 @@ public class ControlPlaneService {
                 .filter(item -> canonical.equals(LmStudioModelDiscovery.canonicalLlamaCppIdentity(item.getProviderModelId())))
                 .toList();
         return matches.size() == 1 ? matches.get(0) : null;
-    }
-
-    /** Keep target-backed and manually created rows; discard only vanished auto-discovery ghosts. */
-    private void pruneUnreferencedDiscoveredRows(List<ModelDeployment> stale) {
-        List<ModelDeployment> staleDiscovered = stale.stream()
-                .filter(item -> item.getMetadataJson() != null && !item.getMetadataJson().isBlank())
-                .toList();
-        if (staleDiscovered.isEmpty()) return;
-        Set<UUID> staleIds = staleDiscovered.stream().map(ModelDeployment::getId).collect(Collectors.toSet());
-        Set<UUID> referencedIds = targets.findByDeploymentIdIn(staleIds).stream()
-                .map(ServiceTarget::getDeploymentId).collect(Collectors.toSet());
-        List<ModelDeployment> removable = staleDiscovered.stream()
-                .filter(item -> !referencedIds.contains(item.getId()))
-                .filter(item -> !requestHistory.existsByFinalDeploymentIdIn(List.of(item.getId())))
-                .filter(item -> !attemptHistory.existsByDeploymentIdIn(List.of(item.getId())))
-                .filter(item -> !playgroundHistory.existsByDeploymentIdIn(List.of(item.getId())))
-                .toList();
-        deployments.deleteAll(removable);
     }
 
     private void rebindStaleTargets(UUID endpointId, String preferredModelKey,

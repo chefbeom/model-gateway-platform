@@ -46,9 +46,10 @@ const runtime = ref({ nodeName: '', runtimeName: '', runtimeType: 'LM_STUDIO' as
 const endpointForm = ref({ displayName: '', runtimeType: 'LM_STUDIO' as RuntimeType, baseUrl: '', enabled: true, apiToken: '', clearApiToken: false, inputPricePerMillion: 0, outputPricePerMillion: 0, currency: 'KRW' as 'KRW' | 'USD', clearPricing: false })
 const accelerator = ref({ vendor: '', productName: '', deviceIndex: 0, deviceUuid: '', memoryTotalMb: null as number | null, driverVersion: '' })
 
-const visibleDeployments = computed(() => deployments.value.filter(item => item.healthStatus !== 'UNHEALTHY'))
-const loadedDeployments = computed(() => visibleDeployments.value.filter(item => item.loaded))
-const candidateDeployments = computed(() => visibleDeployments.value.filter(item => !item.loaded))
+const currentRuntimeDeployments = computed(() => deployments.value.filter(item => item.healthStatus !== 'UNHEALTHY'))
+const unavailableDeployments = computed(() => deployments.value.filter(item => item.healthStatus === 'UNHEALTHY'))
+const loadedDeployments = computed(() => currentRuntimeDeployments.value.filter(item => item.loaded))
+const candidateDeployments = computed(() => currentRuntimeDeployments.value.filter(item => !item.loaded))
 
 type RuntimeSettingField = { label: string; keys: string[]; fallback?: unknown; source?: string }
 type RuntimeSettingSection = { title: string; fields: RuntimeSettingField[] }
@@ -400,7 +401,7 @@ onMounted(load)
           <div v-if="accelerators.length" class="hardware-strip"><article v-for="device in accelerators" :key="device.id" class="accelerator-card"><span class="accelerator-index">{{ device.deviceIndex }}</span><div><span class="card-kicker">{{ device.vendor || 'UNKNOWN VENDOR' }}</span><h3>{{ device.productName || '이름 없는 Accelerator' }}</h3><p>{{ device.memoryTotalMb ? `${device.memoryTotalMb.toLocaleString()} MB` : '메모리 정보 없음' }} · {{ device.driverVersion || '드라이버 정보 없음' }}</p></div><small class="mono">{{ device.deviceUuid || device.id }}</small></article></div>
           <div v-if="accelerators.length" class="hardware-actions"><span>Hardware inventory is optional metadata. It does not change routing capacity automatically.</span><div><button v-for="device in accelerators" :key="`${device.id}-actions`" class="text-button" :disabled="busy" @click="openAccelerator(device)">Edit {{ device.deviceIndex }}</button><button v-for="device in accelerators" :key="`${device.id}-delete`" class="danger-text-button" :disabled="busy" @click="deleteAccelerator(device)">Delete {{ device.deviceIndex }}</button></div></div>
           <div v-else class="hardware-empty"><span>GPU 정보는 선택 항목입니다.</span><p>Endpoint와 모델 운영은 GPU 메타데이터 없이도 정상 동작합니다.</p><button class="text-button" @click="openAccelerator">인벤토리 추가</button></div>
-          <div class="section-divider"><span>현재 Runtime 인벤토리</span><b>{{ visibleDeployments.length }}</b></div>
+          <div class="section-divider"><span>현재 Runtime 인벤토리</span><b>{{ currentRuntimeDeployments.length }}</b></div>
           <section v-if="loadedDeployments.length" class="runtime-model-section">
             <header class="runtime-model-heading"><div><span class="card-kicker">ACTIVE IN MEMORY</span><h3>현재 로드된 모델</h3></div><span class="count-badge">{{ loadedDeployments.length }}</span></header>
             <div class="deployment-grid">
@@ -425,8 +426,17 @@ onMounted(load)
               </button>
             </div>
           </details>
-          <div v-if="!visibleDeployments.length" class="empty-state"><span>◈</span><h3>현재 Runtime에서 확인된 모델이 없습니다</h3><p>Runtime 서버에서 모델을 준비한 뒤 ‘모델 동기화’를 실행하세요.</p></div>
-          <ModelOperationsPanel :endpoint="selected" :deployments="visibleDeployments" :auth="auth" @changed="load(selected?.id)" />
+          <details v-if="unavailableDeployments.length" class="candidate-models unavailable-models">
+            <summary><span><strong>이전 등록 모델 · 현재 확인 불가</strong><small>연결 장애 또는 최근 Runtime 목록에 없어도 모델 기록과 서비스 Target을 보존합니다.</small></span><b>{{ unavailableDeployments.length }}</b></summary>
+            <div class="candidate-model-list">
+              <button v-for="deployment in unavailableDeployments" :key="deployment.id" class="candidate-model-row" @click="openDeployment(deployment)">
+                <span class="model-cube small">◈</span><span class="candidate-model-name"><strong>{{ deployment.displayName }}</strong><small class="mono">{{ deployment.providerModelId }}</small></span><span class="deployment-variant-summary">상세 정보 및 기존 요금 설정 보존</span><span class="status-chip tiny unhealthy">기록 보존</span>
+              </button>
+            </div>
+            <p class="unavailable-model-note">이 모델들은 현재 로드·호출 후보로 취급하지 않습니다. Runtime이 복구되면 ‘모델 동기화’로 다시 확인할 수 있으며, 기존 논리 서비스 Target은 자동으로 삭제하거나 임의 변경하지 않습니다.</p>
+          </details>
+          <div v-if="!currentRuntimeDeployments.length && !unavailableDeployments.length" class="empty-state"><span>◈</span><h3>현재 Runtime에서 확인된 모델이 없습니다</h3><p>Runtime 서버에서 모델을 준비한 뒤 ‘모델 동기화’를 실행하세요.</p></div>
+          <ModelOperationsPanel :endpoint="selected" :deployments="currentRuntimeDeployments" :auth="auth" @changed="load(selected?.id)" />
         </template>
         <div v-else class="empty-state centered"><span>◌</span><h3>Runtime을 선택하세요</h3><p>선택한 Runtime의 상태, Endpoint 설정, GPU 인벤토리와 모델 작업을 확인할 수 있습니다.</p></div>
       </article>
@@ -461,6 +471,7 @@ onMounted(load)
 <style scoped>
 .deployment-card-slot{min-width:0;display:grid;align-content:start;gap:7px}.deployment-chat-button{justify-self:end;min-height:30px;padding-inline:10px;font-size:9px}
 .runtime-model-section{padding:10px 0 0}.runtime-model-heading{padding:8px 22px 0;display:flex;align-items:center;justify-content:space-between}.runtime-model-heading h3{margin:5px 0 0;font-size:13px}.loaded-model-empty{margin:13px;padding:13px;border:1px dashed var(--border);border-radius:11px;color:var(--muted);font-size:10px;line-height:1.6}.loaded-model-card{width:100%;cursor:pointer}.deployment-card-actions{display:flex;align-items:center;justify-content:flex-end;gap:12px}.deployment-card-actions .text-button{font-size:9px}.candidate-models{margin:10px 13px 14px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2);overflow:hidden}.candidate-models summary{min-height:58px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;list-style:none}.candidate-models summary::-webkit-details-marker{display:none}.candidate-models summary::after{content:'⌄';color:var(--accent-strong);font-size:15px}.candidate-models[open] summary::after{content:'⌃'}.candidate-models summary>span{display:grid;gap:4px}.candidate-models summary strong{font-size:11px}.candidate-models summary small{color:var(--muted);font-size:9px}.candidate-models summary>b{margin-left:auto;padding:5px 8px;border:1px solid var(--border);border-radius:8px;color:var(--muted);font-size:9px}.candidate-model-list{padding:0 10px 10px;display:grid;gap:6px}.candidate-model-row{min-width:0;padding:9px 11px;display:grid;grid-template-columns:30px minmax(120px,1fr) minmax(70px,auto) auto;align-items:center;gap:9px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);text-align:left;cursor:pointer}.candidate-model-row:hover{border-color:var(--accent-border)}.candidate-model-name{min-width:0;display:grid;gap:4px}.candidate-model-name strong,.candidate-model-name small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.candidate-model-name strong{font-size:10px}.candidate-model-name small{color:var(--muted);font-size:8px}.runtime-model-detail{display:grid;gap:13px}.runtime-detail-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.runtime-detail-summary>div{min-width:0;padding:10px 12px;display:grid;gap:5px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2)}.runtime-detail-summary span,.runtime-setting-section dt{color:var(--muted);font-size:9px}.runtime-detail-summary strong{overflow-wrap:anywhere;font-size:10px}.runtime-detail-note,.runtime-detail-footnote{margin:0;padding:10px 12px;border:1px solid var(--accent-border);border-radius:10px;background:var(--accent-dim);color:var(--text-soft);font-size:10px;line-height:1.6}.runtime-setting-section{padding:12px;border:1px solid var(--border);border-radius:11px;background:var(--surface-2)}.runtime-setting-section h3{margin:0 0 10px;font-size:11px}.runtime-setting-section dl{margin:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.runtime-setting-section dl>div{min-width:0;padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--surface)}.runtime-setting-section dt{margin-bottom:5px}.runtime-setting-section dd{margin:0;overflow-wrap:anywhere;font-size:10px;font-weight:700}.runtime-setting-section .unreported dd{color:var(--muted);font-weight:500}.runtime-detail-footnote{border-color:var(--border);background:transparent;color:var(--muted)}
+.unavailable-models{border-color:color-mix(in srgb,var(--danger) 28%,var(--border))}.unavailable-model-note{margin:0;padding:0 14px 12px;color:var(--muted);font-size:9px;line-height:1.6}
 .endpoint-list { padding: 8px; display: grid; gap: 4px; }
 .endpoint-list-row { display: grid; grid-template-columns: 1fr 37px; gap: 3px; align-items: stretch; border: 1px solid transparent; border-radius: 11px; }
 .endpoint-list-row:hover, .endpoint-list-row.active { border-color: var(--accent-border); background: var(--accent-dim); }
