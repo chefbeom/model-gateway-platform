@@ -20,6 +20,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -84,7 +86,8 @@ class RuntimeModelOperationServiceTest {
     @Test
     void loadsLlamaCppRouterModelUsingModelIdOnlyAndConfirmsLoadedState() throws Exception {
         UUID endpointId = UUID.randomUUID();
-        RuntimeEndpoint endpoint = new RuntimeEndpoint(UUID.randomUUID(), RuntimeType.LLAMA_CPP, "http://llama:4040", null);
+        RuntimeEndpoint endpoint = spy(new RuntimeEndpoint(UUID.randomUUID(), RuntimeType.LLAMA_CPP, "http://llama:4040", null));
+        doReturn(endpointId).when(endpoint).getId();
         when(endpoints.findById(endpointId)).thenReturn(Optional.of(endpoint));
         when(models.list(any(RuntimeEndpoint.class))).thenReturn(new RuntimeResult(200, mapper.readTree("""
                 {"data":[{"id":"gemma-q4.gguf","status":{"value":"unloaded"}}]}
