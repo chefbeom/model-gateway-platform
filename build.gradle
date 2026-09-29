@@ -28,6 +28,7 @@ dependencies {
     implementation 'io.micrometer:micrometer-registry-prometheus'
     implementation 'org.flywaydb:flyway-core:11.20.1'
     implementation 'org.flywaydb:flyway-mysql:11.20.1'
+    implementation 'org.apache.pdfbox:pdfbox:3.0.8'
     runtimeOnly 'org.mariadb.jdbc:mariadb-java-client'
     testRuntimeOnly 'com.h2database:h2'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'

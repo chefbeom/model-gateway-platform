@@ -17,12 +17,13 @@ import UsagePage from './UsagePage.vue'
 import QuotaPage from './QuotaPage.vue'
 import DataProtectionPage from './DataProtectionPage.vue'
 import ApiPlaygroundPage from './ApiPlaygroundPage.vue'
+import ModelPlaygroundPage from './ModelPlaygroundPage.vue'
 import PlatformAdminPage from './PlatformAdminPage.vue'
 import { adminFetch, type AdminAuth, type User } from './api'
 
 type Theme = 'dark' | 'light'
 type FontScale = '100' | '115' | '125' | '135'
-type PageKey = 'dashboard' | 'infrastructure' | 'system' | 'external' | 'services' | 'teams' | 'projects' | 'observability' | 'usage' | 'quotas' | 'data-protection' | 'notifications' | 'audit' | 'platform' | 'portal' | 'playground' | 'docs'
+type PageKey = 'dashboard' | 'infrastructure' | 'system' | 'external' | 'services' | 'teams' | 'projects' | 'observability' | 'usage' | 'quotas' | 'data-protection' | 'notifications' | 'audit' | 'platform' | 'portal' | 'playground' | 'model-playground' | 'docs'
 type OrganizationRole = 'ORGANIZATION_ADMIN' | 'DEVELOPER'
 type TeamRole = 'TEAM_ADMIN' | 'PROJECT_OWNER' | 'DEVELOPER' | 'AUDITOR'
 type Organization = { id: string; name: string; status: string }
@@ -49,7 +50,8 @@ const adminNavItems: NavItem[] = [
   { id: 'audit', label: '감사 로그', description: '관리자 변경·열람 증적', keywords: 'audit log admin change security', icon: '◎', group: '시스템' },
   { id: 'quotas', label: '요금·한도', description: '범위별 예산과 초과 차단', keywords: 'budget quota limit spend cost', icon: '₩', group: '관측' },
   { id: 'data-protection', label: '데이터 보호', description: '민감정보 탐지·외부 전송 정책', keywords: 'security privacy dlp pii secret local only external block', icon: '◇', group: '시스템' },
-  { id: 'playground', label: 'API 테스트', description: '모델 연결·Chat Completions 테스트', keywords: 'playground api test chat completion models', icon: '▷', group: '개발자 도구' }
+  { id: 'playground', label: 'API 테스트', description: '모델 연결·Chat Completions 테스트', keywords: 'playground api test chat completion models', icon: '▷', group: '개발자 도구' },
+  { id: 'model-playground', label: '모델 테스트 콘솔', description: '등록된 Runtime·Provider 모델 직접 대화 테스트', keywords: 'model playground chat runtime provider streaming file test', icon: '◈', group: '개발자 도구' }
 ]
 const platformNavItem: NavItem = { id: 'platform', label: 'Platform Admin', description: '조직·사용자·키·데이터 정리', keywords: 'platform admin organization user api key cleanup purge', icon: '⚡', group: '시스템' }
 const developerNavItems: NavItem[] = [
@@ -82,6 +84,7 @@ const busy = ref(false)
 const message = ref('')
 const profileLabel = ref(localStorage.getItem('aiconnect.profileLabel') ?? '')
 const accountForm = ref({ email: '', password: '', organizationRole: 'DEVELOPER' as OrganizationRole, teamId: '', teamRole: 'DEVELOPER' as TeamRole })
+const playgroundInitialTargetId = ref('')
 
 const selectedMembership = computed(() => memberships.value.find(member => member.organizationId === organizationId.value) ?? null)
 const platformAdmin = computed(() => Boolean(props.user?.platformAdmin || props.platformTokenSession || contextPlatformAdmin.value))
@@ -99,7 +102,7 @@ const searchResults = computed(() => {
 })
 
 function knownPage(value: string): value is PageKey {
-  return ['dashboard', 'infrastructure', 'system', 'external', 'services', 'teams', 'projects', 'observability', 'usage', 'quotas', 'data-protection', 'notifications', 'audit', 'platform', 'portal', 'playground', 'docs'].includes(value)
+  return ['dashboard', 'infrastructure', 'system', 'external', 'services', 'teams', 'projects', 'observability', 'usage', 'quotas', 'data-protection', 'notifications', 'audit', 'platform', 'portal', 'playground', 'model-playground', 'docs'].includes(value)
 }
 function isAllowedPage(target: PageKey) { return isAdminConsole.value || target === 'portal' || target === 'usage' || target === 'playground' || target === 'docs' }
 function fallbackPage(): PageKey { return isAdminConsole.value ? 'dashboard' : 'portal' }
@@ -114,6 +117,15 @@ function ensureAllowedPage() {
 function navigate(target: PageKey) {
   const allowedTarget = isAllowedPage(target) ? target : fallbackPage()
   window.location.hash = `#${allowedTarget}`
+  page.value = allowedTarget
+  sidebarOpen.value = false
+  searchOpen.value = false
+}
+function openModelPlayground(targetId: string) {
+  const value = targetId.trim()
+  playgroundInitialTargetId.value = value
+  const allowedTarget = isAllowedPage('model-playground') ? 'model-playground' : fallbackPage()
+  window.location.hash = allowedTarget === 'model-playground' && value ? `#model-playground/${encodeURIComponent(value)}` : `#${allowedTarget}`
   page.value = allowedTarget
   sidebarOpen.value = false
   searchOpen.value = false
@@ -174,7 +186,14 @@ async function createAccount() {
   } catch (error) { message.value = error instanceof Error ? error.message : '계정 생성에 실패했습니다.' }
   finally { busy.value = false }
 }
-function onHashChange() { page.value = resolveHash(); ensureAllowedPage(); sidebarOpen.value = false; searchOpen.value = false }
+function onHashChange() {
+  page.value = resolveHash()
+  if (page.value === 'model-playground') {
+    const part = window.location.hash.replace(/^#\/?/, '').split('/')[1]
+    try { playgroundInitialTargetId.value = part ? decodeURIComponent(part) : '' } catch { playgroundInitialTargetId.value = '' }
+  } else playgroundInitialTargetId.value = ''
+  ensureAllowedPage(); sidebarOpen.value = false; searchOpen.value = false
+}
 function onGlobalKeydown(event: KeyboardEvent) {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openSearch() }
   if (event.key === 'Escape') { searchOpen.value = false; settingsOpen.value = false; userMenuOpen.value = false }
@@ -182,6 +201,10 @@ function onGlobalKeydown(event: KeyboardEvent) {
 
 onMounted(async () => {
   page.value = resolveHash()
+  if (page.value === 'model-playground') {
+    const part = window.location.hash.replace(/^#\/?/, '').split('/')[1]
+    try { playgroundInitialTargetId.value = part ? decodeURIComponent(part) : '' } catch { playgroundInitialTargetId.value = '' }
+  }
   window.addEventListener('hashchange', onHashChange)
   window.addEventListener('keydown', onGlobalKeydown)
   await loadSessionContext()
@@ -223,9 +246,9 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
       <main class="console-content">
         <p v-if="message" class="inline-alert">{{ message }}</p>
         <DashboardPage v-if="isAdminConsole && page === 'dashboard'" :organization-id="organizationId" :auth="auth" @navigate="navigate" />
-        <InfrastructurePage v-else-if="isAdminConsole && page === 'infrastructure'" :organization-id="organizationId" :auth="auth" />
+        <InfrastructurePage v-else-if="isAdminConsole && page === 'infrastructure'" :organization-id="organizationId" :auth="auth" @open-playground="openModelPlayground" />
         <SystemStructurePage v-else-if="isAdminConsole && page === 'system'" :organization-id="organizationId" :auth="auth" />
-        <ExternalProvidersPage v-else-if="isAdminConsole && page === 'external'" :organization-id="organizationId" :auth="auth" />
+        <ExternalProvidersPage v-else-if="isAdminConsole && page === 'external'" :organization-id="organizationId" :auth="auth" @open-playground="openModelPlayground" />
         <ServicesPage v-else-if="isAdminConsole && page === 'services'" :organization-id="organizationId" :auth="auth" />
         <TeamsPage v-else-if="isAdminConsole && page === 'teams'" :organization-id="organizationId" :auth="auth" />
         <ProjectsPage v-else-if="isAdminConsole && page === 'projects'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" @organizations-changed="loadOrganizations" @organization-selected="loadOrganizations($event)" />
@@ -237,6 +260,7 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
         <QuotaPage v-else-if="isAdminConsole && page === 'quotas'" :organization-id="organizationId" :auth="auth" />
         <DataProtectionPage v-else-if="isAdminConsole && page === 'data-protection'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" />
         <ApiPlaygroundPage v-else-if="page === 'playground'" :organization-id="organizationId" :auth="auth" />
+        <ModelPlaygroundPage v-else-if="isAdminConsole && page === 'model-playground'" :organization-id="organizationId" :auth="auth" :initial-target-id="playgroundInitialTargetId" />
         <DevDocsPage v-else-if="page === 'docs'" @navigate="navigate" />
         <DeveloperPortalPage v-else :organization-id="organizationId" :auth="auth" />
       </main>

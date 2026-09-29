@@ -63,12 +63,18 @@ async function fetchAdmin(path: string, auth: AdminAuth, init: RequestInit): Pro
   })
 }
 
-export async function adminFetch<T>(path: string, auth: AdminAuth, init: RequestInit = {}): Promise<T> {
+/** Makes an authenticated admin request without consuming the response body (used for SSE relays). */
+export async function adminResponse(path: string, auth: AdminAuth, init: RequestInit = {}): Promise<Response> {
   let response = await fetchAdmin(path, auth, init)
   if (response.status === 401 && auth.accessToken) {
     const session = await refreshAuthentication()
     response = await fetchAdmin(path, { accessToken: session.accessToken }, init)
   }
+  return response
+}
+
+export async function adminFetch<T>(path: string, auth: AdminAuth, init: RequestInit = {}): Promise<T> {
+  const response = await adminResponse(path, auth, init)
   if (!response.ok) throw await responseError(response, '요청을 처리할 수 없습니다.')
   if (response.status === 204) return undefined as T
   const body = await response.text()

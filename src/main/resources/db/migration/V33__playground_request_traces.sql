@@ -1,0 +1,23 @@
+CREATE TABLE playground_request (
+    id CHAR(36) NOT NULL PRIMARY KEY,
+    request_id VARCHAR(64) NOT NULL UNIQUE,
+    organization_id CHAR(36) NOT NULL,
+    deployment_id CHAR(36) NULL,
+    target_type VARCHAR(24) NOT NULL,
+    target_name VARCHAR(160) NOT NULL,
+    model_id VARCHAR(500) NOT NULL,
+    endpoint_url VARCHAR(500) NOT NULL,
+    source VARCHAR(24) NOT NULL DEFAULT 'PLAYGROUND',
+    status VARCHAR(24) NOT NULL,
+    stream BOOLEAN NOT NULL DEFAULT FALSE,
+    http_status INT NULL,
+    latency_ms BIGINT NULL,
+    input_tokens INT NULL,
+    output_tokens INT NULL,
+    error_code VARCHAR(80) NULL,
+    actor_user_id CHAR(36) NULL,
+    started_at TIMESTAMP(6) NOT NULL,
+    completed_at TIMESTAMP(6) NULL,
+    INDEX idx_playground_request_org_started (organization_id, started_at),
+    INDEX idx_playground_request_deployment (deployment_id)
+);
