@@ -4,7 +4,7 @@ import { adminFetch, adminResponse, type AdminAuth } from './api'
 
 type Target = {
   id: string; sourceId: string; targetType: 'RUNTIME' | 'EXTERNAL_PROVIDER'; providerName: string; protocol: string
-  endpointUrl: string; modelId: string; displayName: string; status: string; enabled: boolean; loaded: boolean
+  endpointUrl: string; modelId: string; displayName: string; status: string; enabled: boolean; loaded: boolean; loadState: string; canChat: boolean
   contextLength?: number | null; maxConcurrency: number; capabilities: string[]; inputPricePerMillion?: number | null
   outputPricePerMillion?: number | null; currency?: string | null; nodeName?: string | null
 }
@@ -40,14 +40,17 @@ const traces = ref<Trace[]>([])
 const traceLoading = ref(false)
 
 const selectedTarget = computed(() => targets.value.find(item => item.id === selectedTargetId.value) ?? null)
-const availableTargets = computed(() => targets.value.filter(item => item.enabled))
+const availableTargets = computed(() => targets.value.filter(item => item.canChat))
+const candidateTargets = computed(() => targets.value.filter(item => item.targetType === 'RUNTIME' && !item.canChat && !['NOT_FOUND', 'UNAVAILABLE', 'FAILED'].includes(item.loadState)))
+const unavailableTargets = computed(() => targets.value.filter(item => item.targetType === 'RUNTIME' && ['NOT_FOUND', 'UNAVAILABLE', 'FAILED'].includes(item.loadState)))
 const initialTargetMissing = computed(() => Boolean(props.initialTargetId?.trim() && targets.value.length
   && !targets.value.some(item => item.id === props.initialTargetId || item.sourceId === props.initialTargetId)))
 const supportsVision = computed(() => selectedTarget.value?.capabilities.includes('VISION') ?? false)
-const canSend = computed(() => Boolean(props.organizationId && selectedTarget.value?.enabled && !sending.value && (prompt.value.trim() || selectedFiles.value.length)))
+const canSend = computed(() => Boolean(props.organizationId && selectedTarget.value?.canChat && !sending.value && (prompt.value.trim() || selectedFiles.value.length)))
 const statusLabel = computed(() => {
   if (!selectedTarget.value) return '모델 선택 필요'
   if (!selectedTarget.value.enabled) return '비활성'
+  if (!selectedTarget.value.canChat) return loadStateLabel(selectedTarget.value.loadState)
   if (connection.value) return connection.value.reachable ? connection.value.modelAvailable ? '연결됨 · 모델 확인' : '연결됨 · 모델 미확인' : '연결 실패'
   return selectedTarget.value.status
 })
@@ -58,7 +61,8 @@ function pickInitialTarget() {
   const initial = props.initialTargetId?.trim()
   if (initial) {
     const direct = targets.value.find(item => item.id === initial)
-    const source = targets.value.find(item => item.sourceId === initial)
+    const sourceModels = targets.value.filter(item => item.sourceId === initial)
+    const source = sourceModels.find(item => item.canChat) ?? sourceModels[0]
     const found = direct ?? source
     if (found) { selectedTargetId.value = found.id; return }
     selectedTargetId.value = ''
@@ -89,6 +93,9 @@ async function loadRequests() {
   finally { traceLoading.value = false }
 }
 function onTargetChanged() { connection.value = null }
+function loadStateLabel(state: string) {
+  return ({ LOADED: '로드됨 · 테스트 가능', UNLOADED: '미로드 · 먼저 로드하세요', LOADING: '로딩 중', DOWNLOADING: '다운로드 중', SLEEPING: '절전 상태 · 깨운 뒤 테스트', FAILED: '로드 실패', NOT_FOUND: 'Runtime에서 찾을 수 없음', UNKNOWN: '현재 로드 상태 확인 필요' } as Record<string, string>)[state] ?? state
+}
 function clearConversation() { conversation.value = []; notice.value = '대화를 초기화했습니다.' }
 async function checkConnection() {
   if (!selectedTarget.value || !props.organizationId) return
@@ -299,10 +306,11 @@ watch(() => [props.organizationId, props.initialTargetId], () => { void load() }
     <article v-if="!organizationId" class="surface-card playground-empty"><strong>조직을 선택하세요</strong><p>조직에 등록된 Runtime, Deployment와 외부 Provider 모델을 불러옵니다.</p></article>
     <div v-else class="model-playground-layout">
       <aside class="surface-card model-playground-sidebar">
-        <div class="playground-sidebar-head"><div><span class="card-kicker">REGISTERED MODELS</span><h2>테스트 대상</h2></div><span class="count-pill">{{ targets.length }}</span></div>
-        <label class="field">모델 선택<select v-model="selectedTargetId" :disabled="loading || !targets.length" @change="onTargetChanged"><option value="" disabled>모델을 선택하세요</option><option v-for="target in targets" :key="target.id" :value="target.id" :disabled="!target.enabled">{{ target.displayName }} · {{ target.providerName }}</option></select></label>
+        <div class="playground-sidebar-head"><div><span class="card-kicker">REGISTERED MODELS</span><h2>테스트 대상</h2></div><span class="count-pill">{{ availableTargets.length }} 활성</span></div>
+        <label class="field">모델 선택<select v-model="selectedTargetId" :disabled="loading || !targets.length" @change="onTargetChanged"><option value="" disabled>모델을 선택하세요</option><optgroup v-if="availableTargets.length" label="현재 대화 테스트 가능"><option v-for="target in availableTargets" :key="target.id" :value="target.id">{{ target.displayName }} · {{ target.providerName }}</option></optgroup><optgroup v-if="candidateTargets.length" label="Runtime 후보 · 로드 후 테스트"><option v-for="target in candidateTargets" :key="target.id" :value="target.id">{{ target.displayName }} · {{ loadStateLabel(target.loadState) }}</option></optgroup><optgroup v-if="unavailableTargets.length" label="미발견·접속 불가 모델 기록"><option v-for="target in unavailableTargets" :key="target.id" :value="target.id" disabled>{{ target.displayName }} · {{ loadStateLabel(target.loadState) }}</option></optgroup><optgroup v-if="targets.some(target => target.targetType === 'EXTERNAL_PROVIDER' && !target.canChat)" label="비활성 Provider 모델"><option v-for="target in targets.filter(item => item.targetType === 'EXTERNAL_PROVIDER' && !item.canChat)" :key="target.id" :value="target.id" disabled>{{ target.displayName }} · 비활성</option></optgroup></select></label>
         <div v-if="selectedTarget" class="playground-target-info">
           <div class="target-info-row"><span>연결 상태</span><b :class="connection?.reachable ? 'good' : ''">{{ statusLabel }}</b></div>
+          <div v-if="selectedTarget.targetType === 'RUNTIME'" class="target-info-row"><span>모델 상태</span><b>{{ loadStateLabel(selectedTarget.loadState) }}</b></div>
           <div class="target-info-row"><span>Provider / Runtime</span><b>{{ selectedTarget.providerName }} · {{ selectedTarget.protocol }}</b></div>
           <div class="target-info-row"><span>모델</span><b>{{ selectedTarget.displayName }} <code>{{ selectedTarget.modelId }}</code></b></div>
           <div class="target-info-row"><span>Endpoint</span><code>{{ selectedTarget.endpointUrl }}</code></div>
@@ -310,6 +318,7 @@ watch(() => [props.organizationId, props.initialTargetId], () => { void load() }
           <div class="target-info-row"><span>요금표</span><b>{{ costLabel(selectedTarget) }}</b></div>
           <div class="target-capabilities"><span v-for="capability in selectedTarget.capabilities" :key="capability" class="capability-pill">{{ capability }}</span><span v-if="!selectedTarget.capabilities.length" class="muted">Capability 정보 없음</span></div>
           <p v-if="selectedTarget.targetType === 'RUNTIME' && !selectedTarget.loaded" class="target-warning">모델 상태가 LOADED가 아닙니다. Runtime에 모델을 준비한 뒤에도 테스트 요청은 실행되며, 실제 오류를 그대로 표시합니다.</p>
+          <p v-if="!selectedTarget.canChat" class="target-warning">이 후보는 현재 채팅 대상이 아닙니다. Infrastructure에서 모델을 로드하고 동기화하면 활성 테스트 목록으로 이동합니다.</p>
           <button class="secondary-button full-width" :disabled="probing" @click="checkConnection">{{ probing ? '확인 중…' : '연결 및 모델 확인' }}</button>
           <div v-if="connection" class="probe-detail" :class="connection.reachable ? 'good' : 'bad'">{{ connection.reachable ? `HTTP ${connection.httpStatus} · ${connection.latencyMs}ms · ${connection.modelCount}개 모델` : connection.message }}</div>
         </div>
@@ -335,8 +344,8 @@ watch(() => [props.organizationId, props.initialTargetId], () => { void load() }
         <div v-if="notice" class="playground-inline-notice" :class="{ failed: notice.startsWith('요청 실패') || notice.startsWith('연결 실패') }">{{ notice }}</div>
         <div class="chat-composer">
           <div v-if="selectedFiles.length" class="selected-files"><span v-for="(file, index) in selectedFiles" :key="`${file.name}-${index}`" class="file-pill"><span>▧ {{ file.name }} · {{ (file.size / 1024).toFixed(0) }} KB</span><button type="button" :aria-label="`${file.name} 제거`" @click="removeFile(index)">×</button></span></div>
-          <textarea v-model="prompt" rows="3" :disabled="sending || !selectedTarget?.enabled" placeholder="메시지를 입력하세요. Enter 전송 · Shift+Enter 줄바꿈" @keydown="handleEnter" />
-          <div class="composer-actions"><div class="composer-tools"><input ref="fileInput" type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,.pdf,.txt,.text,.md,.markdown,.json,.csv,.tsv,.xml,.log" hidden @change="addFiles" /><button class="secondary-button" type="button" :disabled="sending || !selectedTarget?.enabled" @click="fileInput?.click()">파일 첨부</button><span class="file-support-hint">이미지 {{ supportsVision ? '지원' : 'VISION 모델 필요' }} · 텍스트/PDF 최대 4MB</span></div><button class="primary-button send-button" :disabled="!canSend" @click="send">{{ sending ? '응답 중…' : '전송' }} <span>↗</span></button></div>
+          <textarea v-model="prompt" rows="3" :disabled="sending" :placeholder="selectedTarget?.canChat ? '메시지를 입력하세요. Enter 전송 · Shift+Enter 줄바꿈' : '모델을 선택하기 전에도 입력할 수 있습니다. 활성 모델을 선택하면 전송할 수 있습니다.'" @keydown="handleEnter" />
+          <div class="composer-actions"><div class="composer-tools"><input ref="fileInput" type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,.pdf,.txt,.text,.md,.markdown,.json,.csv,.tsv,.xml,.log" hidden @change="addFiles" /><button class="secondary-button" type="button" :disabled="sending" @click="fileInput?.click()">파일 첨부</button><span class="file-support-hint">이미지 {{ supportsVision ? '지원' : 'VISION 모델 필요' }} · 텍스트/PDF 최대 4MB</span></div><button class="primary-button send-button" :disabled="!canSend" @click="send">{{ sending ? '응답 중…' : '전송' }} <span>↗</span></button></div>
           <details class="chat-advanced"><summary>요청 옵션</summary><div class="advanced-options"><label class="toggle-field"><span>Temperature 전송<small>기본은 생략해 모델 기본값을 사용합니다.</small></span><input v-model="includeTemperature" type="checkbox" /></label><label v-if="includeTemperature" class="field">Temperature<input v-model.number="temperature" type="number" min="0" max="2" step="0.1" /></label><label class="field">Max completion tokens<input v-model.number="maxCompletionTokens" type="number" min="1" max="32768" step="1" /></label><label class="field">응답 형식<select v-model="responseMode"><option value="text">일반 텍스트</option><option value="json">JSON object</option></select></label></div></details>
         </div>
       </main>

@@ -54,6 +54,7 @@ type ModelMetadata = {
   variants?: unknown
   selected_variant?: unknown
   loaded_instances?: unknown
+  status?: { value?: unknown } | null
   capabilities?: unknown
   quantization?: { name?: unknown; bits_per_weight?: unknown } | null
   size_bytes?: unknown
@@ -135,7 +136,7 @@ function emptyCommand(deployment?: Deployment | null): LoadCommand {
 }
 const command = ref<LoadCommand>(emptyCommand())
 
-const modelOptions = computed(() => props.deployments.map(item => ({
+const modelOptions = computed(() => props.deployments.filter(item => item.loaded || item.healthStatus !== 'UNHEALTHY').map(item => ({
   key: item.providerModelId,
   label: `${item.displayName || item.providerModelId}${item.quantization ? ` · ${item.quantization}` : ''}`,
   loaded: item.loaded
@@ -145,7 +146,18 @@ const availableVariants = computed(() => variantsFor(selectedDeployment.value))
 const activeVariant = computed(() => selectedVariantFor(selectedDeployment.value))
 const variantMismatch = computed(() => availableVariants.value.length > 1 && Boolean(command.value.variantKey) && Boolean(activeVariant.value) && command.value.variantKey !== activeVariant.value)
 const selectedCapabilities = computed(() => capabilityList(selectedDeployment.value))
-const nativeModelManagement = computed(() => props.endpoint.runtimeType === 'LM_STUDIO')
+const llamaCpp = computed(() => props.endpoint.runtimeType === 'LLAMA_CPP')
+const lmStudioManagement = computed(() => props.endpoint.runtimeType === 'LM_STUDIO')
+const nativeModelManagement = computed(() => lmStudioManagement.value || llamaCpp.value)
+function deploymentState(deployment: Deployment): string {
+  if (deployment.loaded) return 'LOADED'
+  const state = parseMetadata(deployment).status?.value
+  if (typeof state === 'string' && ['unloaded', 'loading', 'downloading', 'sleeping', 'failed'].includes(state.toLowerCase())) return state.toUpperCase()
+  return deployment.healthStatus === 'UNHEALTHY' ? 'UNAVAILABLE' : 'UNLOADED'
+}
+function canLoad(deployment: Deployment): boolean {
+  return deployment.healthStatus !== 'UNHEALTHY' && !['LOADING', 'DOWNLOADING'].includes(deploymentState(deployment))
+}
 
 function bytes(value: number) {
   if (!value) return '확인 불가'
@@ -154,7 +166,9 @@ function bytes(value: number) {
   return `${size.toFixed(unit > 1 ? 1 : 0)} ${units[unit]}`
 }
 function resetCommand(modelKey?: string) {
-  const deployment = props.deployments.find(item => item.providerModelId === modelKey) ?? props.deployments[0]
+  const deployment = modelOptions.value.find(item => item.key === modelKey)
+    ? props.deployments.find(item => item.providerModelId === modelKey)
+    : props.deployments.find(item => item.loaded || item.healthStatus !== 'UNHEALTHY')
   command.value = emptyCommand(deployment)
   preflight.value = null
   profileName.value = ''
@@ -183,7 +197,8 @@ async function inspect() {
 async function runLoad() {
   busy.value = true; message.value = ''
   try {
-    const operation = await adminFetch<Operation>(`/api/admin/runtime-endpoints/${props.endpoint.id}/model-operations/load`, props.auth, { method: 'POST', body: JSON.stringify(command.value) })
+    const request = llamaCpp.value ? { modelKey: command.value.modelKey } : command.value
+    const operation = await adminFetch<Operation>(`/api/admin/runtime-endpoints/${props.endpoint.id}/model-operations/load`, props.auth, { method: 'POST', body: JSON.stringify(request) })
     message.value = operation.message ?? '로드 작업을 요청했습니다.'; loadOpen.value = false; await refresh(); emit('changed')
   } catch (error) { message.value = error instanceof Error ? error.message : '모델 로드에 실패했습니다.' }
   finally { busy.value = false }
@@ -230,12 +245,12 @@ onMounted(refresh)
 
 <template>
   <section class="model-operations">
-    <div class="section-divider"><span>MODEL OPERATIONS</span><div class="operation-actions"><button class="secondary-button" :disabled="busy || !nativeModelManagement" @click="openLoad()">모델 로드 설정</button><button class="text-button" :disabled="busy || !nativeModelManagement" @click="downloadOpen = true">다운로드 요청</button></div></div>
+    <div class="section-divider"><span>MODEL OPERATIONS</span><div class="operation-actions"><button class="secondary-button" :disabled="busy || !nativeModelManagement || !modelOptions.length" @click="openLoad()">{{ llamaCpp ? '모델 로드' : '모델 로드 설정' }}</button><button v-if="lmStudioManagement" class="text-button" :disabled="busy" @click="downloadOpen = true">다운로드 요청</button></div></div>
     <p v-if="message" class="inline-alert">{{ message }}</p>
     <div class="operation-grid">
       <article class="operation-card">
         <header><div><span class="card-kicker">SAFE CONTROL</span><h3>메모리 모델 상태</h3></div><button class="text-button" :disabled="busy" @click="refresh">새로고침</button></header>
-        <div v-if="deployments.length" class="model-state-list"><div v-for="deployment in deployments" :key="deployment.id" class="model-state-row"><div><strong>{{ deployment.displayName }}</strong><small class="mono">{{ deployment.providerModelId }}</small><small class="variant-summary">{{ deploymentVariants(deployment) }}</small></div><div class="state-actions"><span class="status-chip tiny" :class="deployment.loaded ? 'healthy' : 'unknown'">{{ deployment.loaded ? 'LOADED' : 'NOT LOADED' }}</span><button class="text-button" :disabled="busy || !nativeModelManagement" @click="deployment.loaded ? unload(deployment.providerModelId) : openLoad(deployment.providerModelId)">{{ deployment.loaded ? '언로드' : '로드' }}</button></div></div></div>
+        <div v-if="deployments.length" class="model-state-list"><div v-for="deployment in deployments" :key="deployment.id" class="model-state-row"><div><strong>{{ deployment.displayName }}</strong><small class="mono">{{ deployment.providerModelId }}</small><small class="variant-summary">{{ deploymentVariants(deployment) }}</small></div><div class="state-actions"><span class="status-chip tiny" :class="deployment.loaded ? 'healthy' : deployment.healthStatus === 'UNHEALTHY' ? 'unhealthy' : 'unknown'">{{ deploymentState(deployment) }}</span><button v-if="deployment.loaded || canLoad(deployment)" class="text-button" :disabled="busy || !nativeModelManagement" @click="deployment.loaded ? unload(deployment.providerModelId) : openLoad(deployment.providerModelId)">{{ deployment.loaded ? '언로드' : '로드' }}</button><span v-else class="field-help">{{ deployment.healthStatus === 'UNHEALTHY' ? '현재 Runtime 목록에서 확인되지 않음' : '작업 진행 중' }}</span></div></div></div>
         <p v-else class="field-help">먼저 ‘모델 동기화’를 실행하면 이 Runtime에서 발견된 모델을 선택할 수 있습니다.</p>
       </article>
       <article class="operation-card">
@@ -244,13 +259,15 @@ onMounted(refresh)
         <p v-else class="field-help">모델 변형과 로딩 설정을 프로필로 저장할 수 있습니다.</p>
       </article>
     </div>
-    <article class="agentless-note"><strong>네이티브 REST 적용 범위</strong><span v-if="nativeModelManagement">Context Length, Evaluation Batch Size, Flash Attention, MoE Expert 수, KV Cache GPU Offload는 LM Studio native v1 API로 적용합니다. GPU 비율, TTL과 나머지 고급 항목은 프로필에 저장하고 Node Agent·CLI·SDK 연결이 준비되면 적용할 수 있도록 상태를 표시합니다.</span><span v-if="!nativeModelManagement">This Runtime manages model loading in its own server process. Prepare the model there, then run model synchronization.</span></article>
+    <article class="agentless-note"><strong>네이티브 REST 적용 범위</strong><span v-if="llamaCpp">llama.cpp router의 /models/load 및 /models/unload API를 사용합니다. 모델은 먼저 서버의 모델 카탈로그에 등록되어 있어야 하며, 로딩 설정은 llama.cpp 서버 측 설정을 따릅니다. GGUF 다운로드는 서버에서 수행한 뒤 모델 동기화를 실행하세요.</span><span v-else-if="lmStudioManagement">Context Length, Evaluation Batch Size, Flash Attention, MoE Expert 수, KV Cache GPU Offload는 LM Studio native v1 API로 적용합니다. GPU 비율, TTL과 나머지 고급 항목은 프로필에 저장하고 Node Agent·CLI·SDK 연결이 준비되면 적용할 수 있도록 상태를 표시합니다.</span><span v-else>This Runtime manages model loading in its own server process. Prepare the model there, then run model synchronization.</span></article>
     <article class="operation-card operation-history"><header><div><span class="card-kicker">AUDIT TRAIL</span><h3>최근 모델 작업</h3></div></header><div v-if="operations.length" class="history-list"><div v-for="operation in operations.slice(0, 6)" :key="operation.id"><span class="status-chip tiny" :class="operation.status === 'SUCCEEDED' ? 'healthy' : operation.status === 'FAILED' ? 'unhealthy' : 'suspect'">{{ operation.status }}</span><strong>{{ operation.operationType }} · {{ operation.modelKey }}</strong><small>{{ operation.message || '처리 중' }} · {{ new Date(operation.createdAt).toLocaleString() }}</small></div></div><p v-else class="field-help">아직 기록된 모델 작업이 없습니다.</p></article>
 
-    <BaseModal :open="loadOpen" title="LM Studio 모델 로드 설정" description="모델 파일 변형과 LM Studio 로딩 옵션을 한 곳에서 관리합니다. 적용되지 않는 항목은 사전 점검에서 명확히 안내합니다." size="lg" @close="loadOpen = false">
+    <BaseModal :open="loadOpen" :title="llamaCpp ? 'llama.cpp 모델 로드' : 'LM Studio 모델 로드 설정'" :description="llamaCpp ? 'llama.cpp router에 등록된 모델을 메모리에 로드합니다. 실제 컨텍스트·GPU 설정은 llama.cpp 서버 구성을 따릅니다.' : '모델 파일 변형과 LM Studio 로딩 옵션을 한 곳에서 관리합니다. 적용되지 않는 항목은 사전 점검에서 명확히 안내합니다.'" size="lg" @close="loadOpen = false">
       <div class="modal-form load-settings-form">
-        <div class="settings-callout"><strong>모델 변형과 유효 설정을 확인하세요.</strong><span>Q4/Q8은 같은 모델의 다른 파일입니다. 현재 LM Studio가 선택한 변형과 다르면 native REST만으로 변경할 수 없으므로 적용 전에 경고가 표시됩니다.</span></div>
+        <div v-if="llamaCpp" class="settings-callout"><strong>모델 후보를 선택하세요.</strong><span>AIConnect는 llama.cpp router에 모델 로드 요청을 전송합니다. 해당 서버의 모델 카탈로그에 있는 모델만 로드할 수 있으며, GGUF 파일 다운로드와 컨텍스트/GPU 옵션 변경은 이 화면에서 수행하지 않습니다.</span></div>
+        <div v-if="!llamaCpp" class="settings-callout"><strong>모델 변형과 유효 설정을 확인하세요.</strong><span>Q4/Q8은 같은 모델의 다른 파일입니다. 현재 LM Studio가 선택한 변형과 다르면 native REST만으로 변경할 수 없으므로 적용 전에 경고가 표시됩니다.</span></div>
         <label class="field">모델<select v-model="command.modelKey" required @change="preflight = null"><option disabled value="">동기화된 모델 선택</option><option v-for="option in modelOptions" :key="option.key" :value="option.key">{{ option.label }} {{ option.loaded ? '(로드됨)' : '' }}</option></select></label>
+        <template v-if="!llamaCpp">
         <div v-if="availableVariants.length" class="variant-picker"><label class="field">모델 파일 / 양자화 변형<select v-model="command.variantKey" @change="preflight = null"><option v-for="variant in availableVariants" :key="variant" :value="variant">{{ variantLabel(variant) }} · {{ variant }}</option></select><small class="field-help">현재 LM Studio 선택: {{ activeVariant ? variantLabel(activeVariant) : '확인되지 않음' }}</small></label><div class="variant-list"><span v-for="variant in availableVariants" :key="`${variant}-chip`" class="variant-chip" :class="{ active: variant === activeVariant, selected: variant === command.variantKey }">{{ variantLabel(variant) }}<b v-if="variant === activeVariant">현재</b></span></div></div>
         <div v-if="selectedCapabilities.length" class="capability-tags"><span v-for="capability in selectedCapabilities" :key="capability" class="capability-tag">{{ capability }}</span></div>
         <p v-if="variantMismatch" class="settings-warning">선택한 변형은 {{ variantLabel(command.variantKey) }}이지만 LM Studio의 현재 선택은 {{ variantLabel(activeVariant) }}입니다. LM Studio에서 변형을 먼저 선택하고 모델 동기화 후 다시 점검하세요.</p>
@@ -260,9 +277,10 @@ onMounted(refresh)
         <label class="toggle-field"><span>Flash Attention<small>지원 모델에서 메모리 사용량과 생성 속도를 개선합니다. Native REST 적용.</small></span><input v-model="command.flashAttention" type="checkbox" /></label>
         <label class="toggle-field"><span>KV Cache GPU Offload<small>KV 캐시를 GPU 메모리에 둘지 선택합니다. Native REST 적용.</small></span><input v-model="command.offloadKvCacheToGpu" type="checkbox" /></label>
         <details class="advanced-options" open><summary>고급 로딩 옵션 <span>Node Agent·CLI·SDK 필요 항목 포함</span></summary><div class="advanced-grid"><label class="field">API Identifier<input v-model.trim="command.apiIdentifier" maxlength="200" placeholder="예: gemma-4-12b-q8" /><small class="field-help">OpenAI 호환 API에서 노출할 별칭입니다. Native REST는 프로필에 저장합니다.</small></label><label class="field">GPU Offload<select v-model="command.gpuOffloadMode"><option value="">LM Studio 기본값</option><option value="auto">Auto</option><option value="off">Off</option><option value="max">Max</option><option value="custom">비율 직접 입력</option></select><small class="field-help">CLI `lms load --gpu` 기준입니다.</small></label><label class="field">GPU Offload 비율 (0~1)<input v-model.number="command.gpuOffloadRatio" type="number" min="0" max="1" step="0.05" placeholder="예: 0.8" :disabled="command.gpuOffloadMode !== 'custom'" /></label><label class="field">GPU Offload Layers<input v-model.number="command.gpuOffloadLayers" type="number" min="0" placeholder="예: 48" /></label><label class="field">CPU Thread Pool Size<input v-model.number="command.cpuThreadPoolSize" type="number" min="1" placeholder="예: 8" /></label><label class="field">자동 언로드 TTL (초)<input v-model.number="command.autoUnloadTtlSeconds" type="number" min="1" placeholder="예: 3600" /><small class="field-help">유휴 시간 후 모델을 내립니다.</small></label><label class="field">Seed<input v-model.number="command.seed" type="number" min="0" placeholder="예: 42" /></label><label class="field">RoPE Frequency Base<input v-model.number="command.ropeFrequencyBase" type="number" min="0" step="0.01" placeholder="모델 기본값" /></label><label class="field">RoPE Frequency Scale<input v-model.number="command.ropeFrequencyScale" type="number" min="0" step="0.01" placeholder="모델 기본값" /></label><label class="field">K Cache Quantization<select v-model="command.kCacheQuantizationType"><option value="">LM Studio 기본값</option><option value="Q4_0">Q4_0</option><option value="Q8_0">Q8_0</option><option value="F16">F16</option></select></label><label class="field">V Cache Quantization<select v-model="command.vCacheQuantizationType"><option value="">LM Studio 기본값</option><option value="Q4_0">Q4_0</option><option value="Q8_0">Q8_0</option><option value="F16">F16</option></select></label></div><div class="advanced-toggles"><label class="toggle-field"><span>Unified KV Cache<small>Agent·SDK 적용 항목</small></span><input v-model="command.unifiedKvCache" type="checkbox" /></label><label class="toggle-field"><span>Keep Model in Memory<small>Agent·SDK 적용 항목</small></span><input v-model="command.keepModelInMemory" type="checkbox" /></label><label class="toggle-field"><span>mmap 사용<small>Agent·SDK 적용 항목</small></span><input v-model="command.tryMmap" type="checkbox" /></label></div></details>
+        </template>
         <div v-if="preflight" class="preflight-result" :class="{ warning: !preflight.compatible }"><strong>{{ preflight.displayName }}</strong><span>모델 {{ bytes(preflight.modelSizeBytes) }} · 보수적 필요 메모리 약 {{ bytes(preflight.heuristicMemoryBytes) }}</span><span>컨텍스트 {{ preflight.requestedContextLength.toLocaleString() }} / 최대 {{ preflight.maxContextLength ? preflight.maxContextLength.toLocaleString() : '미확인' }}</span><span v-if="preflight.variants.length">변형: {{ preflight.requestedVariant ? variantLabel(preflight.requestedVariant) : '기본' }} · 현재 {{ preflight.selectedVariant ? variantLabel(preflight.selectedVariant) : '미확인' }}</span><small v-for="warning in preflight.warnings" :key="warning">{{ warning }}</small></div>
       </div>
-      <template #footer><button class="secondary-button" :disabled="busy || !command.modelKey" @click="inspect">사전 점검</button><button class="secondary-button" :disabled="busy || !profileName" @click="saveProfile">프로필 저장</button><button class="primary-button" :disabled="busy || !command.modelKey || (preflight !== null && !preflight.compatible)" @click="runLoad">Drain 후 로드</button></template>
+      <template #footer><button v-if="!llamaCpp" class="secondary-button" :disabled="busy || !command.modelKey" @click="inspect">사전 점검</button><button v-if="!llamaCpp" class="secondary-button" :disabled="busy || !profileName" @click="saveProfile">프로필 저장</button><button class="primary-button" :disabled="busy || !command.modelKey || (!llamaCpp && preflight !== null && !preflight.compatible)" @click="runLoad">{{ llamaCpp ? '모델 로드' : 'Drain 후 로드' }}</button></template>
     </BaseModal>
     <BaseModal :open="downloadOpen" title="LM Studio 모델 다운로드" description="모델 ID와 양자화 형식을 지정합니다. 다운로드가 끝나면 ‘모델 동기화’ 후 로드 설정을 적용하세요." @close="downloadOpen = false"><div class="modal-form"><label class="field">모델 식별자<input v-model.trim="download.modelKey" placeholder="publisher/model-name 또는 Hugging Face URL" required /></label><label class="field">양자화 (선택)<select v-model="download.quantization"><option value="">LM Studio 기본 선택</option><option value="Q4_K_M">Q4_K_M</option><option value="Q5_K_M">Q5_K_M</option><option value="Q6_K">Q6_K</option><option value="Q8_0">Q8_0</option><option value="F16">F16</option></select><small class="field-help">공식 API에서는 Hugging Face URL을 사용할 때 quantization 선택을 지원합니다.</small></label></div><template #footer><button class="secondary-button" @click="downloadOpen = false">취소</button><button class="primary-button" :disabled="busy || !download.modelKey" @click="requestDownload">다운로드 요청</button></template></BaseModal>
   </section>

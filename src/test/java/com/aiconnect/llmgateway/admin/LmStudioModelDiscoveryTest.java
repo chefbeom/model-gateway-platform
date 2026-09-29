@@ -65,7 +65,7 @@ class LmStudioModelDiscoveryTest {
     }
 
     @Test
-    void prefersOpenAiDataWhenLlamaCppReturnsBothModelsAndDataArrays() throws Exception {
+    void doesNotTreatStateLessOpenAiCatalogAsLoadedForLlamaCpp() throws Exception {
         String json = """
                 {"models":[{"name":"/opt/llm/models/gemma.gguf","model":"/opt/llm/models/gemma.gguf","type":"model","capabilities":["completion"]}],
                  "object":"list",
@@ -73,14 +73,35 @@ class LmStudioModelDiscoveryTest {
                    "meta":{"n_ctx":8192,"n_ctx_train":262144,"ftype":"Q4_0","families":[""]}}]}
                 """;
 
-        var models = discovery.discover(objectMapper.readTree(json));
+        var models = discovery.discover(objectMapper.readTree(json), com.aiconnect.llmgateway.domain.RuntimeType.LLAMA_CPP);
 
         assertThat(models).hasSize(1);
         DiscoveredRuntimeModel model = models.get(0);
         assertThat(model.providerModelId()).isEqualTo("/opt/llm/models/gemma.gguf");
-        assertThat(model.loaded()).isTrue();
+        assertThat(model.loaded()).isFalse();
         assertThat(model.contextLength()).isEqualTo(8192);
         assertThat(model.quantization()).isEqualTo("Q4_0");
         assertThat(model.capabilitiesJson()).contains("CHAT_COMPLETION", "STREAMING");
+    }
+
+    @Test
+    void usesLlamaCppRouterStatusAndKeepsDownloadedCandidatesWithoutDuplicateFilePaths() throws Exception {
+        String json = """
+                {"models":[
+                  {"name":"/opt/llm/models/gemma-4-12b-it-qat-q4_0.gguf","model":"/opt/llm/models/gemma-4-12b-it-qat-q4_0.gguf","status":{"value":"unloaded"}},
+                  {"name":"/opt/llm/models/gemma-4-12b-obliterated-Q8_0.gguf","model":"/opt/llm/models/gemma-4-12b-obliterated-Q8_0.gguf","status":{"value":"loaded"}}
+                ],"data":[
+                  {"id":"gemma-4-12b-it-qat-q4_0","object":"model","meta":{"ftype":"Q4_0"},"status":{"value":"unloaded"}},
+                  {"id":"gemma-4-12b-obliterated-Q8_0","object":"model","meta":{"ftype":"Q8_0"},"status":{"value":"loaded"}}
+                ]}
+                """;
+
+        var models = discovery.discover(objectMapper.readTree(json), com.aiconnect.llmgateway.domain.RuntimeType.LLAMA_CPP);
+
+        assertThat(models).hasSize(2);
+        assertThat(models).extracting(DiscoveredRuntimeModel::providerModelId)
+                .containsExactly("gemma-4-12b-it-qat-q4_0", "gemma-4-12b-obliterated-Q8_0");
+        assertThat(models).extracting(DiscoveredRuntimeModel::loaded).containsExactly(false, true);
+        assertThat(models.get(0).metadataJson()).contains("/opt/llm/models/gemma-4-12b-it-qat-q4_0.gguf");
     }
 }

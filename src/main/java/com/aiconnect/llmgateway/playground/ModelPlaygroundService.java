@@ -43,8 +43,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -101,14 +103,16 @@ public class ModelPlaygroundService {
         List<TargetView> result = new ArrayList<>();
         for (InferenceNode node : nodes.findByOrganizationId(organizationId)) {
             for (RuntimeEndpoint endpoint : endpoints.findByNodeId(node.getId())) {
+                LiveRuntimeState liveState = endpoint.getRuntimeType() == com.aiconnect.llmgateway.domain.RuntimeType.LLAMA_CPP
+                        ? liveLlamaState(endpoint) : null;
                 for (ModelDeployment deployment : deployments.findByRuntimeEndpointId(endpoint.getId())) {
-                    result.add(view(deployment, endpoint, null, node.getName()));
+                    result.add(view(deployment, endpoint, null, node.getName(), liveState));
                 }
             }
         }
         for (ExternalProvider provider : providers.findByOrganizationIdOrderByDisplayNameAsc(organizationId)) {
             for (ModelDeployment deployment : deployments.findByExternalProviderId(provider.getId())) {
-                result.add(view(deployment, null, provider, null));
+                result.add(view(deployment, null, provider, null, null));
             }
         }
         return result.stream().sorted((a, b) -> {
@@ -136,7 +140,7 @@ public class ModelPlaygroundService {
                         "상위 서버가 HTTP " + response.statusCode() + "을 반환했습니다.");
             }
             List<DiscoveredRuntimeModel> models = resolved.external() ? discoverExternalModels(response.body())
-                    : modelDiscovery.discover(response.body());
+                    : modelDiscovery.discover(response.body(), resolved.endpoint().getRuntimeType());
             boolean found = models.stream().anyMatch(model -> resolved.deployment().getProviderModelId().equals(model.providerModelId())
                     || resolved.deployment().getCompatibilityKey().equals(model.compatibilityKey()));
             int count = models.size();
@@ -151,6 +155,7 @@ public class ModelPlaygroundService {
         UUID targetId = parseUuid(body.path("targetId").asText(null), "PLAYGROUND_TARGET_REQUIRED", "테스트할 모델을 선택하세요.");
         Resolved resolved = resolve(organizationId, targetId);
         if (!resolved.enabled()) throw new ApiException(HttpStatus.CONFLICT, "PLAYGROUND_TARGET_DISABLED", "선택한 Runtime, Provider 또는 모델이 비활성화되어 있습니다.");
+        requireLlamaModelLoaded(resolved);
 
         boolean stream = body.path("stream").asBoolean(false);
         String requestId = UUID.randomUUID().toString();
@@ -395,7 +400,8 @@ public class ModelPlaygroundService {
         return dot < 0 ? "" : filename.substring(dot + 1).toLowerCase(Locale.ROOT);
     }
 
-    private TargetView view(ModelDeployment deployment, RuntimeEndpoint endpoint, ExternalProvider provider, String nodeName) {
+    private TargetView view(ModelDeployment deployment, RuntimeEndpoint endpoint, ExternalProvider provider, String nodeName,
+                            LiveRuntimeState liveState) {
         boolean external = provider != null;
         String providerName = external ? provider.getDisplayName() : endpoint.getDisplayName();
         String endpointUrl = safeEndpointUrl(external ? provider.getBaseUrl() : endpoint.getBaseUrl());
@@ -412,14 +418,67 @@ public class ModelPlaygroundService {
                 : hasModelPricing ? deployment.getProviderPriceCurrency() == null ? null : deployment.getProviderPriceCurrency().name()
                 : endpoint.getCurrency() == null ? null : endpoint.getCurrency().name();
         boolean enabled = deployment.isEnabled() && (external ? provider.isEnabled() : endpoint.isEnabled());
-        String status = !enabled ? "DISABLED" : !external && !deployment.isLoaded() ? "UNLOADED"
-                : deployment.getHealthStatus() == null ? "UNKNOWN" : deployment.getHealthStatus().name();
+        String loadState = modelLoadState(deployment, endpoint, external, liveState);
+        String status = !enabled ? "DISABLED" : external ? "HEALTHY" : loadState;
         return new TargetView(deployment.getId(), external ? provider.getId() : endpoint.getId(),
                 external ? "EXTERNAL_PROVIDER" : "RUNTIME", providerName, protocol, endpointUrl,
                 deployment.getProviderModelId(), deployment.getDisplayName(), status, enabled,
-                external || deployment.isLoaded(), deployment.getContextLength(), deployment.getMaxConcurrency(),
+                external || "LOADED".equals(loadState), deployment.getContextLength(), deployment.getMaxConcurrency(),
                 capabilities(deployment), inputPrice, outputPrice,
-                currency, nodeName);
+                currency, nodeName, loadState, enabled && (external || "LOADED".equals(loadState)));
+    }
+
+    private LiveRuntimeState liveLlamaState(RuntimeEndpoint endpoint) {
+        try {
+            RuntimeResult response = runtimeClient.listModels(endpoint);
+            if (!response.isSuccessful()) return new LiveRuntimeState(false, Map.of());
+            Map<String, DiscoveredRuntimeModel> models = new HashMap<>();
+            for (DiscoveredRuntimeModel model : modelDiscovery.discover(response.body(), endpoint.getRuntimeType())) {
+                models.put(model.providerModelId(), model);
+            }
+            return new LiveRuntimeState(true, Map.copyOf(models));
+        } catch (RuntimeException ignored) {
+            return new LiveRuntimeState(false, Map.of());
+        }
+    }
+
+    private String modelLoadState(ModelDeployment deployment, RuntimeEndpoint endpoint, boolean external,
+                                 LiveRuntimeState liveState) {
+        if (external) return "LOADED";
+        if (endpoint == null) return "UNKNOWN";
+        if (endpoint.getRuntimeType() == com.aiconnect.llmgateway.domain.RuntimeType.LLAMA_CPP) {
+            try {
+                if (liveState == null || !liveState.reachable()) return "UNAVAILABLE";
+                DiscoveredRuntimeModel liveModel = liveState.models().get(deployment.getProviderModelId());
+                if (liveModel == null) return "NOT_FOUND";
+                JsonNode metadata = mapper.readTree(liveModel.metadataJson() == null ? "{}" : liveModel.metadataJson());
+                String state = metadata.path("status").path("value").asText("").toLowerCase(Locale.ROOT);
+                if (state.equals("loaded") && liveModel.loaded()) return "LOADED";
+                if (state.equals("unloaded")) return "UNLOADED";
+                if (state.equals("loading")) return "LOADING";
+                if (state.equals("downloading")) return "DOWNLOADING";
+                if (state.equals("sleeping")) return "SLEEPING";
+                if (state.equals("failed")) return "FAILED";
+            } catch (Exception ignored) { }
+            return "UNKNOWN";
+        }
+        return deployment.isLoaded() ? "LOADED" : "UNLOADED";
+    }
+
+    private void requireLlamaModelLoaded(Resolved resolved) {
+        if (resolved.external() || resolved.endpoint().getRuntimeType() != com.aiconnect.llmgateway.domain.RuntimeType.LLAMA_CPP) return;
+        try {
+            RuntimeResult response = runtimeClient.listModels(resolved.endpoint());
+            if (!response.isSuccessful()) throw new ApiException(HttpStatus.BAD_GATEWAY, "PLAYGROUND_RUNTIME_UNAVAILABLE",
+                    "llama.cpp 서버에서 현재 모델 상태를 확인하지 못했습니다. 연결을 확인한 뒤 다시 시도하세요.");
+            boolean loaded = modelDiscovery.discover(response.body(), resolved.endpoint().getRuntimeType()).stream()
+                    .anyMatch(model -> resolved.deployment().getProviderModelId().equals(model.providerModelId()) && model.loaded());
+            if (!loaded) throw new ApiException(HttpStatus.CONFLICT, "PLAYGROUND_MODEL_NOT_LOADED",
+                    "선택한 모델은 llama.cpp 서버에서 현재 로드된 상태가 아닙니다. 모델을 로드한 뒤 모델 동기화를 실행하고 다시 테스트하세요.");
+        } catch (RuntimeUnavailableException exception) {
+            throw new ApiException(HttpStatus.BAD_GATEWAY, "PLAYGROUND_RUNTIME_UNAVAILABLE",
+                    "llama.cpp 서버에 연결할 수 없어 현재 모델 상태를 확인하지 못했습니다.");
+        }
     }
 
     private List<String> capabilities(ModelDeployment deployment) {
@@ -552,7 +611,7 @@ public class ModelPlaygroundService {
                              String modelId, String displayName, String status, boolean enabled, boolean loaded,
                              Integer contextLength, int maxConcurrency, List<String> capabilities,
                              java.math.BigDecimal inputPricePerMillion, java.math.BigDecimal outputPricePerMillion,
-                             String currency, String nodeName) { }
+                             String currency, String nodeName, String loadState, boolean canChat) { }
 
     public record ProbeView(boolean reachable, int httpStatus, long latencyMs, boolean modelAvailable,
                             int modelCount, String message) { }
@@ -580,6 +639,8 @@ public class ModelPlaygroundService {
     private record Resolved(ModelDeployment deployment, RuntimeEndpoint endpoint, ExternalProvider provider,
                             String providerName, String endpointUrl, boolean enabled, boolean external,
                             List<String> capabilities, String secret) { }
+
+    private record LiveRuntimeState(boolean reachable, Map<String, DiscoveredRuntimeModel> models) { }
 
     private static final class BoundedOutputStream extends java.io.OutputStream {
         private final ByteArrayOutputStream target;

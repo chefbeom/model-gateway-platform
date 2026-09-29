@@ -3,7 +3,7 @@ package com.aiconnect.llmgateway.domain;
 public enum RuntimeType {
     LM_STUDIO("LM Studio", 1234, true),
     OLLAMA("Ollama", 11434, false),
-    LLAMA_CPP("llama.cpp", 8080, false),
+    LLAMA_CPP("llama.cpp", 8080, true),
     OPENAI_COMPATIBLE("OpenAI Compatible", null, false);
 
     private final String displayName;

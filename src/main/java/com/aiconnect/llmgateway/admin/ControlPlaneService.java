@@ -95,7 +95,7 @@ public class ControlPlaneService {
     public ModelDeployment create(AdminDtos.CreateDeployment request) {
         requireEndpoint(request.runtimeEndpointId());
         ModelDeployment deployment = new ModelDeployment(request.runtimeEndpointId(), request.providerModelId(), request.compatibilityKey(),
-                request.displayName(), request.modelFamily(), request.quantization(), request.contextLength(), true,
+                request.displayName(), request.modelFamily(), request.quantization(), request.contextLength(), false,
                 request.maxConcurrency() == null ? 1 : request.maxConcurrency(), request.capabilitiesJson());
         deployment.configurePricing(request.inputPricePerMillion(), request.outputPricePerMillion(),
                 request.currency() == null ? Currency.KRW : request.currency());
@@ -162,7 +162,7 @@ public class ControlPlaneService {
             boolean healthy = result.isSuccessful();
             endpoint.recordHealth(healthy);
             endpoints.save(endpoint);
-            List<DiscoveredRuntimeModel> discovered = modelDiscovery.discover(result.body());
+            List<DiscoveredRuntimeModel> discovered = modelDiscovery.discover(result.body(), endpoint.getRuntimeType());
             syncDeploymentHealth(endpoint, discovered, healthy);
             return healthy
                     ? new ProbeResult(true, result.statusCode(), modelIds(discovered), null)
@@ -197,7 +197,7 @@ public class ControlPlaneService {
         }
         endpoint.recordHealth(true);
         endpoints.save(endpoint);
-        List<DiscoveredRuntimeModel> discovered = modelDiscovery.discover(result.body());
+        List<DiscoveredRuntimeModel> discovered = modelDiscovery.discover(result.body(), endpoint.getRuntimeType());
         Map<String, ModelDeployment> existing = deployments.findByRuntimeEndpointId(endpointId).stream()
                 .collect(Collectors.toMap(ModelDeployment::getProviderModelId, Function.identity()));
         Set<String> seen = new HashSet<>();
@@ -282,10 +282,14 @@ public class ControlPlaneService {
     public List<ModelDeployment> deployments(UUID endpointId) { return deployments.findByRuntimeEndpointId(endpointId); }
 
     private void syncDeploymentHealth(RuntimeEndpoint endpoint, List<DiscoveredRuntimeModel> discovered, boolean healthy) {
-        Set<String> loaded = discovered.stream().filter(DiscoveredRuntimeModel::loaded)
-                .map(DiscoveredRuntimeModel::providerModelId).collect(Collectors.toSet());
+        Map<String, DiscoveredRuntimeModel> states = discovered.stream().collect(Collectors.toMap(
+                DiscoveredRuntimeModel::providerModelId, Function.identity(), (first, ignored) -> first));
         for (ModelDeployment deployment : deployments.findByRuntimeEndpointId(endpoint.getId())) {
-            deployment.recordHealth(healthy && loaded.contains(deployment.getProviderModelId()));
+            DiscoveredRuntimeModel model = states.get(deployment.getProviderModelId());
+            if (model == null) deployment.recordRuntimeState(false, false, healthy);
+            else deployment.synchronize(model.displayName(), model.modelFamily(), model.quantization(), model.contextLength(),
+                    model.loaded() && healthy, model.maxConcurrency(), model.capabilitiesJson(), model.metadataJson());
+            deployments.save(deployment);
         }
     }
 

@@ -23,8 +23,8 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Native LM Studio model administration. The endpoint-scoped path is also protected by the
- * organization authorization filter, so only an organization administrator can perform these actions.
+ * Native model administration for runtimes with supported management APIs. The endpoint-scoped path is also
+ * protected by the organization authorization filter, so only an organization administrator can perform these actions.
  */
 @RestController
 @RequestMapping("/api/admin/runtime-endpoints/{endpointId}")
@@ -46,7 +46,7 @@ public class RuntimeModelOperationController {
         RuntimeModelOperationService.PreflightResult check = service.preflight(endpointId, request.command());
         if (!check.compatible()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "MODEL_CONFIGURATION_INCOMPATIBLE",
-                    "The requested model variant or loading configuration is not compatible with this LM Studio endpoint. Review the preflight warnings and try again.");
+                    "The requested model variant or loading configuration is not compatible with this runtime. Review the preflight warnings and try again.");
         }
         return OperationView.from(service.load(endpointId, request.command(), null));
     }

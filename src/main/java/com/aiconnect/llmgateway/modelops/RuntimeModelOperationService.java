@@ -55,8 +55,19 @@ public class RuntimeModelOperationService {
         requireNativeManagement(endpoint);
         RuntimeResult result = models.list(endpoint);
         if (!result.isSuccessful()) throw rejected("MODEL_LIST_FAILED", runtimeLabel(endpoint) + " rejected the model list request.");
-        JsonNode model = findModel(result.body().path("models"), command.modelKey(), command.variantKey());
+        JsonNode model = findModelInBody(endpoint, result.body(), command.modelKey(), command.variantKey());
         if (model == null) throw rejected("MODEL_NOT_AVAILABLE", "The requested model is not downloaded on this runtime.");
+
+        if (isLlamaCpp(endpoint)) {
+            List<String> warnings = new ArrayList<>();
+            if (hasLlamaUnsupportedOptions(command)) warnings.add("llama.cpp router model loading accepts the model ID only; LM Studio-specific loading options are not sent.");
+            int maximum = model.path("meta").path("n_ctx_train").asInt(model.path("max_context_length").asInt(0));
+            int context = command.contextLength() == null ? maximum : command.contextLength();
+            return new PreflightResult(command.modelKey(), text(model, "display_name", command.modelKey()),
+                    model.path("size_bytes").asLong(0), 0, maximum, context, true, warnings,
+                    "loaded".equalsIgnoreCase(text(model.path("status"), "value", "")), List.of(),
+                    null, null, true, true, List.of("model"));
+        }
 
         long size = model.path("size_bytes").asLong(0);
         int maximum = model.path("max_context_length").asInt(0);
@@ -136,7 +147,7 @@ public class RuntimeModelOperationService {
     @Transactional
     public RuntimeModelOperation download(UUID endpointId, String modelKey, String quantization) {
         RuntimeEndpoint endpoint = endpoint(endpointId);
-        requireNativeManagement(endpoint);
+        requireLmStudioManagement(endpoint);
         ObjectNode request = mapper.createObjectNode().put("model", modelKey);
         if (quantization != null && !quantization.isBlank()) request.put("quantization", quantization);
         RuntimeModelOperation operation = operations.save(new RuntimeModelOperation(endpointId, null, modelKey, "DOWNLOAD", json(request)));
@@ -153,7 +164,7 @@ public class RuntimeModelOperationService {
     @Transactional(readOnly = true)
     public RuntimeResult downloadStatus(UUID endpointId, String jobId) {
         RuntimeEndpoint endpoint = endpoint(endpointId);
-        requireNativeManagement(endpoint);
+        requireLmStudioManagement(endpoint);
         return models.downloadStatus(endpoint, jobId);
     }
 
@@ -172,12 +183,12 @@ public class RuntimeModelOperationService {
             }
             RuntimeResult listing = models.list(endpoint);
             if (!listing.isSuccessful()) throw rejected("MODEL_LIST_FAILED", runtimeLabel(endpoint) + " rejected the model list request.");
-            model = findModel(listing.body().path("models"), command.modelKey(), command.variantKey());
+            model = findModelInBody(endpoint, listing.body(), command.modelKey(), command.variantKey());
             if (model == null) throw rejected("MODEL_NOT_AVAILABLE", "The requested model is not downloaded on this runtime.");
-            warmupModelKey = text(model, "key", command.modelKey());
+            warmupModelKey = text(model, "key", text(model, "id", text(model, "name", command.modelKey())));
         }
-        // LM Studio's native unload endpoint does not accept a model catalog key. It requires instance_id.
-        ObjectNode request = "LOAD".equals(type) ? request(command, model) : unloadRequest(command.modelKey());
+        // LM Studio unload addresses its loaded instance; llama.cpp router uses the catalog model ID.
+        ObjectNode request = "LOAD".equals(type) ? request(endpoint, command, model) : unloadRequest(endpoint, command.modelKey());
         RuntimeModelOperation operation = operations.save(new RuntimeModelOperation(endpointId, profileId, command.modelKey(), type, json(request)));
         try {
             if (safe) {
@@ -192,6 +203,7 @@ public class RuntimeModelOperationService {
             RuntimeResult result = "LOAD".equals(type) ? models.load(endpoint, request) : models.unload(endpoint, request);
             if (!result.isSuccessful()) {
                 operation.fail(failureMessage(endpoint, result));
+                if (safe) releaseDrain(endpoint, true);
                 return operations.save(operation);
             }
             // The runtime response may assign a new loaded instance ID. Pass the
@@ -202,13 +214,37 @@ public class RuntimeModelOperationService {
             operation.complete(json(result.body()), withWarnings(recoveryMessage, preflightWarnings));
         } catch (RuntimeException exception) {
             operation.fail(exception.getMessage());
+            if (safe) releaseDrain(endpoint, false);
         }
         return operations.save(operation);
+    }
+
+    private void releaseDrain(RuntimeEndpoint endpoint, boolean runtimeResponded) {
+        if (endpoint.getHealthStatus() == com.aiconnect.llmgateway.domain.HealthStatus.DRAINING) endpoint.beginRecovery();
+        if (endpoint.getHealthStatus() == com.aiconnect.llmgateway.domain.HealthStatus.RECOVERING) {
+            if (runtimeResponded) endpoint.completeRecovery();
+            else endpoint.failRecovery();
+        }
+        endpoints.save(endpoint);
     }
 
     private String recover(RuntimeEndpoint endpoint, String modelKey, boolean loading) {
         endpoint.beginRecovery();
         endpoints.save(endpoint);
+        if (isLlamaCpp(endpoint)) {
+            if (loading) {
+                boolean confirmedLoaded = deployments.findByRuntimeEndpointId(endpoint.getId()).stream()
+                        .anyMatch(item -> item.getProviderModelId().equals(modelKey) && item.isLoaded());
+                if (!confirmedLoaded) {
+                    endpoint.failRecovery();
+                    endpoints.save(endpoint);
+                    throw rejected("MODEL_LOAD_STATE_NOT_CONFIRMED", "llama.cpp accepted the operation, but the refreshed model catalog does not confirm the model is loaded yet. Refresh model synchronization and check its status.");
+                }
+            }
+            endpoint.completeRecovery();
+            endpoints.save(endpoint);
+            return loading ? "llama.cpp router confirms the model is loaded." : "llama.cpp model unload completed; the router remains available.";
+        }
         if (!loading) {
             Optional<ModelDeployment> remaining = deployments.findByRuntimeEndpointId(endpoint.getId()).stream()
                     .filter(ModelDeployment::isLoaded).findFirst();
@@ -234,7 +270,8 @@ public class RuntimeModelOperationService {
         return loading ? "Model loaded and endpoint warm-up succeeded." : "Model unloaded and the remaining runtime model warm-up succeeded.";
     }
 
-    private ObjectNode request(LoadCommand command, JsonNode model) {
+    private ObjectNode request(RuntimeEndpoint endpoint, LoadCommand command, JsonNode model) {
+        if (isLlamaCpp(endpoint)) return mapper.createObjectNode().put("model", command.modelKey());
         String runtimeModelKey = model == null ? command.modelKey() : text(model, "key", command.modelKey());
         ObjectNode node = mapper.createObjectNode().put("model", runtimeModelKey).put("echo_load_config", true);
         // These are the options documented by LM Studio's native v1 load endpoint.
@@ -246,8 +283,9 @@ public class RuntimeModelOperationService {
         return node;
     }
 
-    private ObjectNode unloadRequest(String instanceId) {
-        return mapper.createObjectNode().put("instance_id", instanceId);
+    private ObjectNode unloadRequest(RuntimeEndpoint endpoint, String modelKey) {
+        return isLlamaCpp(endpoint) ? mapper.createObjectNode().put("model", modelKey)
+                : mapper.createObjectNode().put("instance_id", modelKey);
     }
 
     private String withWarnings(String message, List<String> warnings) {
@@ -268,9 +306,9 @@ public class RuntimeModelOperationService {
 
     private JsonNode findModel(JsonNode models, String key, String variantKey) {
         for (JsonNode model : models) {
-            String modelKey = model.path("key").asText("");
-            if (key != null && (key.equals(modelKey) || key.equals(model.path("id").asText()))) return model;
-            if (variantKey != null && (variantKey.equals(modelKey) || variantKey.equals(model.path("id").asText()))) return model;
+            String modelKey = text(model, "key", text(model, "id", text(model, "name", text(model, "model", ""))));
+            if (matchesModelId(key, modelKey)) return model;
+            if (matchesModelId(variantKey, modelKey)) return model;
             if (contains(model.path("variants"), key) || contains(model.path("variants"), variantKey)) return model;
             for (JsonNode instance : model.path("loaded_instances")) {
                 String instanceId = instance.path("id").asText("");
@@ -279,6 +317,40 @@ public class RuntimeModelOperationService {
             }
         }
         return null;
+    }
+
+    private JsonNode findModelInBody(RuntimeEndpoint endpoint, JsonNode body, String key, String variantKey) {
+        if (isLlamaCpp(endpoint)) {
+            JsonNode found = findModel(body.path("data"), key, variantKey);
+            return found != null ? found : findModel(body.path("models"), key, variantKey);
+        }
+        return findModel(body.path("models"), key, variantKey);
+    }
+
+    private boolean matchesModelId(String requested, String candidate) {
+        if (requested == null || candidate == null) return false;
+        if (requested.equals(candidate)) return true;
+        return modelIdentity(requested).equals(modelIdentity(candidate));
+    }
+
+    private String modelIdentity(String value) {
+        String normalized = value.trim().replace('\\', '/').toLowerCase(java.util.Locale.ROOT);
+        int slash = normalized.lastIndexOf('/');
+        if (slash >= 0) normalized = normalized.substring(slash + 1);
+        return normalized.endsWith(".gguf") ? normalized.substring(0, normalized.length() - 5) : normalized;
+    }
+
+    private boolean hasLlamaUnsupportedOptions(LoadCommand command) {
+        return command.variantKey() != null || command.contextLength() != null || command.evalBatchSize() != null
+                || command.physicalBatchSize() != null || command.parallel() != null || command.numExperts() != null
+                || command.flashAttention() != null || command.offloadKvCacheToGpu() != null
+                || command.gpuOffloadLayers() != null || command.autoUnloadTtlSeconds() != null
+                || nonBlank(command.apiIdentifier()) != null || nonBlank(command.gpuOffloadMode()) != null
+                || command.gpuOffloadRatio() != null || command.cpuThreadPoolSize() != null
+                || command.unifiedKvCache() != null || command.ropeFrequencyBase() != null
+                || command.ropeFrequencyScale() != null || command.keepModelInMemory() != null
+                || command.tryMmap() != null || command.seed() != null
+                || nonBlank(command.kCacheQuantizationType()) != null || nonBlank(command.vCacheQuantizationType()) != null;
     }
 
     private boolean contains(JsonNode values, String expected) {
@@ -311,10 +383,19 @@ public class RuntimeModelOperationService {
     }
 
     private void requireNativeManagement(RuntimeEndpoint endpoint) {
-        if ((endpoint.getRuntimeType() == null ? RuntimeType.LM_STUDIO : endpoint.getRuntimeType()) != RuntimeType.LM_STUDIO) {
-            throw rejected("RUNTIME_MODEL_MANAGEMENT_UNSUPPORTED", (endpoint.getRuntimeType() == null ? RuntimeType.LM_STUDIO : endpoint.getRuntimeType()).displayName() + " model loading is managed by its server process, not by the LM Studio management API.");
+        RuntimeType type = endpoint.getRuntimeType() == null ? RuntimeType.LM_STUDIO : endpoint.getRuntimeType();
+        if (type != RuntimeType.LM_STUDIO && type != RuntimeType.LLAMA_CPP) {
+            throw rejected("RUNTIME_MODEL_MANAGEMENT_UNSUPPORTED", type.displayName() + " does not expose a supported model load/unload API through AIConnect.");
         }
     }
+
+    private void requireLmStudioManagement(RuntimeEndpoint endpoint) {
+        if (endpoint.getRuntimeType() != null && endpoint.getRuntimeType() != RuntimeType.LM_STUDIO) {
+            throw rejected("RUNTIME_MODEL_MANAGEMENT_UNSUPPORTED", "Download management is currently supported only by LM Studio. Download models in llama.cpp's model directory, then synchronize the runtime.");
+        }
+    }
+
+    private boolean isLlamaCpp(RuntimeEndpoint endpoint) { return endpoint.getRuntimeType() == RuntimeType.LLAMA_CPP; }
 
     private ApiException rejected(String code, String message) {
         return new ApiException(HttpStatus.BAD_REQUEST, code, message);

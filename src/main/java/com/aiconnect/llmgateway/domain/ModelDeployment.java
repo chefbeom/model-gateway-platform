@@ -221,6 +221,14 @@ public class ModelDeployment {
         lastSyncedAt = Instant.now();
     }
 
+    /** Persist a fresh runtime inventory result without conflating an unloaded candidate with a broken endpoint. */
+    public void recordRuntimeState(boolean listed, boolean runtimeLoaded, boolean endpointHealthy) {
+        loaded = listed && runtimeLoaded;
+        healthStatus = !endpointHealthy || !listed ? HealthStatus.UNHEALTHY
+                : loaded ? HealthStatus.HEALTHY : HealthStatus.UNKNOWN;
+        lastSyncedAt = Instant.now();
+    }
+
     public void recordHealth(boolean healthy) { healthStatus = healthy ? HealthStatus.HEALTHY : HealthStatus.UNHEALTHY; }
     @PreUpdate void updateTimestamp() { updatedAt = Instant.now(); }
     public UUID getId() { return id; }

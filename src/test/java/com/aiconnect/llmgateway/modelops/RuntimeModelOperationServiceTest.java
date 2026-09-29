@@ -2,6 +2,7 @@ package com.aiconnect.llmgateway.modelops;
 
 import com.aiconnect.llmgateway.admin.ControlPlaneService;
 import com.aiconnect.llmgateway.domain.RuntimeEndpoint;
+import com.aiconnect.llmgateway.domain.ModelDeployment;
 import com.aiconnect.llmgateway.domain.RuntimeType;
 import com.aiconnect.llmgateway.repository.ModelDeploymentRepository;
 import com.aiconnect.llmgateway.repository.RuntimeEndpointRepository;
@@ -10,13 +11,16 @@ import com.aiconnect.llmgateway.runtime.InferenceRuntimeClient;
 import com.aiconnect.llmgateway.runtime.RuntimeResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class RuntimeModelOperationServiceTest {
@@ -75,5 +79,30 @@ class RuntimeModelOperationServiceTest {
         assertThat(result.warnings()).anyMatch(value -> value.contains("Physical Batch Size"));
         assertThat(result.warnings()).anyMatch(value -> value.contains("GPU offload"));
         assertThat(result.warnings()).anyMatch(value -> value.contains("CPU Thread Pool"));
+    }
+
+    @Test
+    void loadsLlamaCppRouterModelUsingModelIdOnlyAndConfirmsLoadedState() throws Exception {
+        UUID endpointId = UUID.randomUUID();
+        RuntimeEndpoint endpoint = new RuntimeEndpoint(UUID.randomUUID(), RuntimeType.LLAMA_CPP, "http://llama:4040", null);
+        when(endpoints.findById(endpointId)).thenReturn(Optional.of(endpoint));
+        when(models.list(any(RuntimeEndpoint.class))).thenReturn(new RuntimeResult(200, mapper.readTree("""
+                {"data":[{"id":"gemma-q4.gguf","status":{"value":"unloaded"}}]}
+                """)));
+        when(models.load(any(RuntimeEndpoint.class), any())).thenReturn(new RuntimeResult(200, mapper.readTree("{\"success\":true}")));
+        ModelDeployment loaded = new ModelDeployment(endpointId, "gemma-q4.gguf", "gemma-q4.gguf", "Gemma Q4",
+                "gemma", "Q4_0", 8192, true, 1, "[\"CHAT_COMPLETION\"]");
+        when(deployments.findByRuntimeEndpointId(endpointId)).thenReturn(java.util.List.of(loaded));
+        when(operations.save(any(RuntimeModelOperation.class))).thenAnswer(call -> call.getArgument(0));
+
+        RuntimeModelOperation operation = service.load(endpointId,
+                new RuntimeModelOperationService.LoadCommand("gemma-q4.gguf", null, null, null, null, null, null,
+                        null, null, null, null), null);
+
+        ArgumentCaptor<com.fasterxml.jackson.databind.JsonNode> payload = ArgumentCaptor.forClass(com.fasterxml.jackson.databind.JsonNode.class);
+        verify(models).load(eq(endpoint), payload.capture());
+        assertThat(payload.getValue().toString()).isEqualTo("{\"model\":\"gemma-q4.gguf\"}");
+        assertThat(operation.getOperationType()).isEqualTo("LOAD");
+        assertThat(operation.getStatus()).isEqualTo("SUCCEEDED");
     }
 }
