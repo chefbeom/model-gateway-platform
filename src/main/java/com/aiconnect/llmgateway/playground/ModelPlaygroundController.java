@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.UUID;
 
@@ -38,19 +39,20 @@ public class ModelPlaygroundController {
     }
 
     @PostMapping(value = "/chat", consumes = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<?> chat(@PathVariable UUID organizationId, @RequestBody ObjectNode body) {
+    public ResponseEntity<StreamingResponseBody> chat(@PathVariable UUID organizationId, @RequestBody ObjectNode body) {
         ModelPlaygroundService.ChatResult result = playground.chat(organizationId, body);
-        if (result.streaming() != null) {
-            return ResponseEntity.status(result.statusCode())
-                    .header("X-Request-Id", result.requestId())
-                    .header(HttpHeaders.CACHE_CONTROL, "no-cache")
-                    .header("X-Accel-Buffering", "no")
-                    .contentType(MediaType.TEXT_EVENT_STREAM)
-                    .body(result.streaming());
-        }
+        boolean streaming = result.streaming() != null;
+        StreamingResponseBody responseBody = streaming ? result.streaming()
+                : output -> output.write(result.body().toString().getBytes(StandardCharsets.UTF_8));
         return ResponseEntity.status(result.statusCode())
                 .header("X-Request-Id", result.requestId())
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(result.body());
+                .headers(headers -> {
+                    if (streaming) {
+                        headers.set(HttpHeaders.CACHE_CONTROL, "no-cache");
+                        headers.set("X-Accel-Buffering", "no");
+                    }
+                })
+                .contentType(streaming ? MediaType.TEXT_EVENT_STREAM : MediaType.APPLICATION_JSON)
+                .body(responseBody);
     }
 }

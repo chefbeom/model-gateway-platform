@@ -14,13 +14,15 @@ type Trace = {
   inputTokens?: number | null; outputTokens?: number | null; errorCode?: string | null; startedAt: string
 }
 type Probe = { reachable: boolean; httpStatus: number; latencyMs: number; modelAvailable: boolean; modelCount: number; message?: string | null }
-type Turn = { id: string; role: 'user' | 'assistant'; content: string; files?: string[]; attachmentPayloads?: Attachment[]; status?: string; httpStatus?: number; latencyMs?: number; requestId?: string; inputTokens?: number | null; outputTokens?: number | null; totalTokens?: number | null; stream?: boolean; error?: string }
+type Turn = { id: string; role: 'user' | 'assistant'; content: string; files?: string[]; attachmentPayloads?: Attachment[]; status?: string; httpStatus?: number; latencyMs?: number; requestId?: string; inputTokens?: number | null; outputTokens?: number | null; totalTokens?: number | null; stream?: boolean; responseStream?: boolean; error?: string }
 type Attachment = { name: string; mediaType: string; base64: string; messageIndex?: number }
 
 const props = defineProps<{ organizationId?: string; auth: AdminAuth; initialTargetId?: string }>()
 const targets = ref<Target[]>([])
 const selectedTargetId = ref('')
 const conversation = ref<Turn[]>([])
+const conversationsByTarget = new Map<string, Turn[]>()
+const activeConversationTargetId = ref('')
 const prompt = ref('')
 const selectedFiles = ref<File[]>([])
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -28,7 +30,7 @@ const chatPane = ref<HTMLElement | null>(null)
 const loading = ref(false)
 const sending = ref(false)
 const probing = ref(false)
-const stream = ref(true)
+const stream = ref(false)
 const includeTemperature = ref(false)
 const temperature = ref(0.2)
 const maxCompletionTokens = ref(512)
@@ -57,18 +59,21 @@ const statusLabel = computed(() => {
 
 function apiPath(path: string) { return `/api/admin/organizations/${props.organizationId}/playground/${path}` }
 function pickInitialTarget() {
-  if (!targets.value.length) { selectedTargetId.value = ''; return }
+  if (!targets.value.length) { activateTarget(''); return }
   const initial = props.initialTargetId?.trim()
   if (initial) {
     const direct = targets.value.find(item => item.id === initial)
     const sourceModels = targets.value.filter(item => item.sourceId === initial)
     const source = sourceModels.find(item => item.canChat) ?? sourceModels[0]
     const found = direct ?? source
-    if (found) { selectedTargetId.value = found.id; return }
-    selectedTargetId.value = ''
+    if (found) { activateTarget(found.id); return }
+    activateTarget('')
     return
   }
-  if (!targets.value.some(item => item.id === selectedTargetId.value)) selectedTargetId.value = availableTargets.value[0]?.id ?? targets.value[0].id
+  const nextTargetId = targets.value.some(item => item.id === selectedTargetId.value)
+    ? selectedTargetId.value
+    : availableTargets.value[0]?.id ?? targets.value[0].id
+  activateTarget(nextTargetId)
 }
 async function load() {
   if (!props.organizationId) { targets.value = []; traces.value = []; return }
@@ -92,11 +97,43 @@ async function loadRequests() {
   catch { /* Chat result remains available even when history refresh fails. */ }
   finally { traceLoading.value = false }
 }
-function onTargetChanged() { connection.value = null }
+function activateTarget(targetId: string, announce = false) {
+  const previousTargetId = activeConversationTargetId.value
+  if (previousTargetId === targetId) {
+    selectedTargetId.value = targetId
+    return
+  }
+  if (previousTargetId) conversationsByTarget.set(previousTargetId, conversation.value)
+  activeConversationTargetId.value = targetId
+  selectedTargetId.value = targetId
+  conversation.value = targetId ? [...(conversationsByTarget.get(targetId) ?? [])] : []
+  selectedFiles.value = []
+  if (fileInput.value) fileInput.value.value = ''
+  connection.value = null
+  if (announce && previousTargetId && targetId) {
+    notice.value = '모델별 대화는 분리되어 있습니다. 이전 대화와 첨부 파일은 새 모델로 전송되지 않습니다. 다른 모델에서 파일을 테스트하려면 다시 첨부하세요.'
+  }
+}
+function onTargetChanged() { activateTarget(selectedTargetId.value, true) }
+function resetPlaygroundSession() {
+  conversationsByTarget.clear()
+  activeConversationTargetId.value = ''
+  selectedTargetId.value = ''
+  conversation.value = []
+  selectedFiles.value = []
+  if (fileInput.value) fileInput.value.value = ''
+  connection.value = null
+}
 function loadStateLabel(state: string) {
   return ({ LOADED: '로드됨 · 테스트 가능', UNLOADED: '미로드 · 먼저 로드하세요', LOADING: '로딩 중', DOWNLOADING: '다운로드 중', SLEEPING: '절전 상태 · 깨운 뒤 테스트', FAILED: '로드 실패', NOT_FOUND: 'Runtime에서 찾을 수 없음', UNKNOWN: '현재 로드 상태 확인 필요' } as Record<string, string>)[state] ?? state
 }
-function clearConversation() { conversation.value = []; notice.value = '대화를 초기화했습니다.' }
+function clearConversation() {
+  conversation.value = []
+  if (activeConversationTargetId.value) conversationsByTarget.set(activeConversationTargetId.value, conversation.value)
+  selectedFiles.value = []
+  if (fileInput.value) fileInput.value.value = ''
+  notice.value = '현재 모델의 대화와 첨부 기록을 초기화했습니다.'
+}
 async function checkConnection() {
   if (!selectedTarget.value || !props.organizationId) return
   probing.value = true
@@ -118,6 +155,10 @@ function errorText(body: unknown, status: number) {
     return code ? `${message} [${code}]` : message
   }
   return typeof body === 'string' && body.trim() ? body : `요청이 실패했습니다. (HTTP ${status})`
+}
+function withRuntimeCrashGuidance(message: string, target: Target) {
+  if (target.targetType !== 'RUNTIME' || !/model has crashed|exit code/i.test(message)) return message
+  return `${message}\n\n선택한 로컬 Runtime에서 모델 프로세스가 종료된 것으로 보입니다. AIConnect의 연결·이미지 요청 형식과 별개로 Runtime 서버 로그와 GPU 메모리/비전 모델 지원을 확인하고, 더 작은 이미지 또는 일반 응답(JSON) 모드로 다시 테스트해 주세요.`
 }
 async function parseResponse(response: Response) {
   const text = await response.text()
@@ -146,37 +187,46 @@ function usage(body: unknown) {
 }
 function newTurnId() { return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}` }
 async function readStream(response: Response, turn: Turn) {
-  if (!response.body) return
+  if (!response.body) throw new Error('서버가 SSE 응답을 반환했지만 응답 본문이 비어 있습니다.')
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  const processFrame = async (frame: string) => {
+    const data = frame.split(/\r?\n/).filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n').trim()
+    if (!data || data === '[DONE]') return
+    let event: { error?: unknown; choices?: Array<{ delta?: { content?: unknown } }>; usage?: Record<string, unknown> }
+    try { event = JSON.parse(data) as typeof event }
+    catch {
+      turn.error = '스트리밍 응답을 해석할 수 없습니다. SSE 이벤트 형식이 올바른지 확인하세요.'
+      turn.status = 'FAILED'
+      return
+    }
+    if (event.error) {
+      turn.error = errorText(event.error, response.status)
+      turn.status = 'FAILED'
+      return
+    }
+    const delta = event.choices?.[0]?.delta?.content
+    if (typeof delta === 'string') turn.content += delta
+    else if (Array.isArray(delta)) turn.content += delta.map(part => part && typeof part === 'object' && 'text' in part ? String((part as { text: unknown }).text) : '').join('')
+    if (event.usage) {
+      turn.inputTokens = tokenCount(event.usage.prompt_tokens ?? event.usage.input_tokens)
+      turn.outputTokens = tokenCount(event.usage.completion_tokens ?? event.usage.output_tokens)
+      turn.totalTokens = tokenCount(event.usage.total_tokens) ?? (turn.inputTokens == null && turn.outputTokens == null ? null : (turn.inputTokens ?? 0) + (turn.outputTokens ?? 0))
+    }
+    await nextTick(() => { if (chatPane.value) chatPane.value.scrollTop = chatPane.value.scrollHeight })
+  }
   while (true) {
     const { value, done } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split(/\r?\n/)
-    buffer = lines.pop() ?? ''
-    for (const line of lines) {
-      if (!line.startsWith('data:')) continue
-      const data = line.slice(5).trim()
-      if (!data || data === '[DONE]') continue
-      try {
-        const event = JSON.parse(data) as { error?: unknown; choices?: Array<{ delta?: { content?: unknown } }>; usage?: Record<string, unknown> }
-        if (event.error) {
-          turn.error = errorText(event.error, response.status)
-          turn.status = 'FAILED'
-        }
-        const delta = event.choices?.[0]?.delta?.content
-        if (typeof delta === 'string') turn.content += delta
-        else if (Array.isArray(delta)) turn.content += delta.map(part => part && typeof part === 'object' && 'text' in part ? String((part as { text: unknown }).text) : '').join('')
-        if (event.usage) {
-          turn.inputTokens = tokenCount(event.usage.prompt_tokens ?? event.usage.input_tokens)
-          turn.outputTokens = tokenCount(event.usage.completion_tokens ?? event.usage.output_tokens)
-          turn.totalTokens = tokenCount(event.usage.total_tokens) ?? (turn.inputTokens == null && turn.outputTokens == null ? null : (turn.inputTokens ?? 0) + (turn.outputTokens ?? 0))
-        }
-        await nextTick(() => { if (chatPane.value) chatPane.value.scrollTop = chatPane.value.scrollHeight })
-      } catch { /* Ignore SSE comments/keep-alive lines. */ }
+    if (done) {
+      buffer += decoder.decode()
+      if (buffer.trim()) await processFrame(buffer)
+      break
     }
+    buffer += decoder.decode(value, { stream: true })
+    const frames = buffer.split(/\r?\n\r?\n/)
+    buffer = frames.pop() ?? ''
+    for (const frame of frames) await processFrame(frame)
   }
 }
 async function toAttachment(file: File): Promise<Attachment> {
@@ -211,43 +261,53 @@ async function send() {
     notice.value = '선택 모델이 VISION을 지원하지 않아 이미지 파일을 보낼 수 없습니다.'
     return
   }
+  const target = selectedTarget.value
+  const targetId = target.id
+  const organizationId = props.organizationId
+  const useStream = stream.value
+  const requestTemperature = Number(temperature.value)
+  const useTemperature = includeTemperature.value
+  const requestMaxCompletionTokens = Number(maxCompletionTokens.value)
+  const requestResponseMode = responseMode.value
   const text = prompt.value.trim()
   if (!text && !selectedFiles.value.length) return
   sending.value = true
   notice.value = ''
   const files = [...selectedFiles.value]
-  const currentMessageIndex = conversation.value.length
-  const historyAttachments = conversation.value.flatMap((turn, messageIndex) => turn.role === 'user'
+  const requestHistory = conversation.value.filter(turn => turn.role === 'user' || (turn.status === 'SUCCEEDED' && Boolean(turn.content.trim())))
+  const requestMessages = requestHistory.map(turn => ({ role: turn.role, content: turn.content }))
+  const currentMessageIndex = requestMessages.length
+  const historyAttachments = requestHistory.flatMap((turn, messageIndex) => turn.role === 'user'
     ? (turn.attachmentPayloads ?? []).map(attachment => ({ ...attachment, messageIndex }))
     : [])
   const started = performance.now()
   const userTurn: Turn = { id: newTurnId(), role: 'user', content: text || '첨부 파일을 확인해 주세요.', files: files.map(file => file.name) }
-  const assistantTurn: Turn = { id: newTurnId(), role: 'assistant', content: '', status: '요청 중', stream: stream.value }
-  const requestMessages = [...conversation.value.map(turn => ({ role: turn.role, content: turn.content })), { role: 'user', content: userTurn.content }]
+  const assistantTurn: Turn = { id: newTurnId(), role: 'assistant', content: '', status: '요청 중', stream: useStream, responseStream: false }
+  requestMessages.push({ role: 'user', content: userTurn.content })
   conversation.value.push(userTurn, assistantTurn)
   prompt.value = ''
   selectedFiles.value = []
   await nextTick(() => { if (chatPane.value) chatPane.value.scrollTop = chatPane.value.scrollHeight })
   try {
     const attachments = await Promise.all(files.map(toAttachment))
-    conversation.value[currentMessageIndex].attachmentPayloads = attachments
+    userTurn.attachmentPayloads = attachments
     const allAttachments = [...historyAttachments, ...attachments.map(attachment => ({ ...attachment, messageIndex: currentMessageIndex }))]
     const attachmentBytes = allAttachments.reduce((total, attachment) => total + Math.floor(attachment.base64.length * 3 / 4), 0)
     if (allAttachments.length > 20 || attachmentBytes > 8 * 1024 * 1024) {
       throw new Error('현재 대화에 포함된 첨부 파일은 총 20개·8MB까지 보낼 수 있습니다. 새 대화를 시작하거나 기존 첨부 대화를 지워 주세요.')
     }
     const body: Record<string, unknown> = {
-      targetId: selectedTarget.value.id,
+      targetId,
       messages: requestMessages,
       attachments: allAttachments,
-      stream: stream.value,
-      maxCompletionTokens: Number(maxCompletionTokens.value),
-      responseMode: responseMode.value
+      stream: useStream,
+      maxCompletionTokens: requestMaxCompletionTokens,
+      responseMode: requestResponseMode
     }
-    if (includeTemperature.value) body.temperature = Number(temperature.value)
-    const response = await adminResponse(apiPath('chat'), props.auth, {
+    if (useTemperature) body.temperature = requestTemperature
+    const response = await adminResponse(`/api/admin/organizations/${organizationId}/playground/chat`, props.auth, {
       method: 'POST',
-      headers: { Accept: stream.value ? 'text/event-stream, application/json' : 'application/json' },
+      headers: { Accept: useStream ? 'text/event-stream, application/json' : 'application/json' },
       body: JSON.stringify(body)
     })
     assistantTurn.httpStatus = response.status
@@ -255,13 +315,15 @@ async function send() {
     assistantTurn.latencyMs = Math.round(performance.now() - started)
     if (!response.ok) {
       const errorBody = await parseResponse(response)
-      assistantTurn.error = errorText(errorBody, response.status)
+      assistantTurn.error = withRuntimeCrashGuidance(errorText(errorBody, response.status), target)
       assistantTurn.status = 'FAILED'
-    } else if (stream.value && response.headers.get('content-type')?.includes('text/event-stream')) {
+    } else if (useStream && response.headers.get('content-type')?.toLowerCase().includes('text/event-stream')) {
+      assistantTurn.responseStream = true
       assistantTurn.status = 'STREAMING'
       await readStream(response, assistantTurn)
       assistantTurn.status = assistantTurn.error ? 'FAILED' : 'SUCCEEDED'
     } else {
+      assistantTurn.responseStream = false
       const result = await parseResponse(response)
       assistantTurn.content = responseText(result)
       Object.assign(assistantTurn, usage(result))
@@ -273,7 +335,7 @@ async function send() {
     else notice.value = `응답 완료 · ${assistantTurn.latencyMs.toLocaleString()}ms${assistantTurn.inputTokens != null || assistantTurn.outputTokens != null ? ` · 입력 ${assistantTurn.inputTokens ?? '-'} / 출력 ${assistantTurn.outputTokens ?? '-'} 토큰` : ''}`
   } catch (error) {
     assistantTurn.status = 'FAILED'
-    assistantTurn.error = error instanceof Error ? error.message : '요청을 완료하지 못했습니다.'
+    assistantTurn.error = withRuntimeCrashGuidance(error instanceof Error ? error.message : '요청을 완료하지 못했습니다.', target)
     assistantTurn.latencyMs = Math.round(performance.now() - started)
     notice.value = '요청 실패 · ' + assistantTurn.error
   } finally {
@@ -282,7 +344,11 @@ async function send() {
     await nextTick(() => { if (chatPane.value) chatPane.value.scrollTop = chatPane.value.scrollHeight })
   }
 }
-function handleEnter(event: KeyboardEvent) { if (!event.shiftKey && !event.isComposing) { event.preventDefault(); void send() } }
+function handleEnter(event: KeyboardEvent) {
+  if (event.key !== 'Enter' || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.isComposing || event.keyCode === 229) return
+  event.preventDefault()
+  void send()
+}
 function formatTime(value: string) { return new Intl.DateTimeFormat('ko-KR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value)) }
 function costLabel(target: Target) {
   const symbol = target.currency === 'USD' ? '$' : target.currency === 'KRW' ? '₩' : ''
@@ -290,14 +356,14 @@ function costLabel(target: Target) {
   return `입력 ${symbol}${target.inputPricePerMillion ?? '-'} / 출력 ${symbol}${target.outputPricePerMillion ?? '-'} · 1M`
 }
 
-watch(() => [props.organizationId, props.initialTargetId], () => { void load() }, { immediate: true })
+watch(() => [props.organizationId, props.initialTargetId], () => { resetPlaygroundSession(); void load() }, { immediate: true })
 </script>
 
 <template>
   <section class="page-stack model-playground-page">
     <div class="page-hero model-playground-hero">
       <div><p class="eyebrow">MODEL CHAT PLAYGROUND</p><h1>모델 직접 테스트</h1><p>등록된 Runtime 또는 외부 Provider의 인증 설정을 이용해 특정 모델에 직접 요청합니다.</p></div>
-      <div class="playground-top-actions"><button class="secondary-button" :disabled="loading" @click="load">{{ loading ? '불러오는 중…' : '새로고침' }}</button><button class="secondary-button" :disabled="!conversation.length || sending" @click="clearConversation">새 대화</button></div>
+      <div class="playground-top-actions"><button class="secondary-button" :disabled="loading || sending" @click="load">{{ loading ? '불러오는 중…' : '새로고침' }}</button><button class="secondary-button" :disabled="!conversation.length || sending" @click="clearConversation">새 대화</button></div>
     </div>
 
     <div class="model-playground-warning"><strong>직접 테스트 안내</strong><span>이 경로는 관리자 직접 호출이며 프로젝트 권한·총량제·데이터 보호 정책을 거치지 않습니다. 프롬프트와 파일 내용은 저장하지 않으며, 테스트 메타데이터만 <code>PLAYGROUND</code> 이력으로 기록합니다. 민감한 운영 데이터는 입력하지 마세요.</span></div>
@@ -307,7 +373,7 @@ watch(() => [props.organizationId, props.initialTargetId], () => { void load() }
     <div v-else class="model-playground-layout">
       <aside class="surface-card model-playground-sidebar">
         <div class="playground-sidebar-head"><div><span class="card-kicker">REGISTERED MODELS</span><h2>테스트 대상</h2></div><span class="count-pill">{{ availableTargets.length }} 활성</span></div>
-        <label class="field">모델 선택<select v-model="selectedTargetId" :disabled="loading || !targets.length" @change="onTargetChanged"><option value="" disabled>모델을 선택하세요</option><optgroup v-if="availableTargets.length" label="현재 대화 테스트 가능"><option v-for="target in availableTargets" :key="target.id" :value="target.id">{{ target.displayName }} · {{ target.providerName }}</option></optgroup><optgroup v-if="candidateTargets.length" label="Runtime 후보 · 로드 후 테스트"><option v-for="target in candidateTargets" :key="target.id" :value="target.id">{{ target.displayName }} · {{ loadStateLabel(target.loadState) }}</option></optgroup><optgroup v-if="unavailableTargets.length" label="미발견·접속 불가 모델 기록"><option v-for="target in unavailableTargets" :key="target.id" :value="target.id" disabled>{{ target.displayName }} · {{ loadStateLabel(target.loadState) }}</option></optgroup><optgroup v-if="targets.some(target => target.targetType === 'EXTERNAL_PROVIDER' && !target.canChat)" label="비활성 Provider 모델"><option v-for="target in targets.filter(item => item.targetType === 'EXTERNAL_PROVIDER' && !item.canChat)" :key="target.id" :value="target.id" disabled>{{ target.displayName }} · 비활성</option></optgroup></select></label>
+        <label class="field">모델 선택<select v-model="selectedTargetId" :disabled="loading || sending || !targets.length" @change="onTargetChanged"><option value="" disabled>모델을 선택하세요</option><optgroup v-if="availableTargets.length" label="현재 대화 테스트 가능"><option v-for="target in availableTargets" :key="target.id" :value="target.id">{{ target.displayName }} · {{ target.providerName }}</option></optgroup><optgroup v-if="candidateTargets.length" label="Runtime 후보 · 로드 후 테스트"><option v-for="target in candidateTargets" :key="target.id" :value="target.id">{{ target.displayName }} · {{ loadStateLabel(target.loadState) }}</option></optgroup><optgroup v-if="unavailableTargets.length" label="미발견·접속 불가 모델 기록"><option v-for="target in unavailableTargets" :key="target.id" :value="target.id" disabled>{{ target.displayName }} · {{ loadStateLabel(target.loadState) }}</option></optgroup><optgroup v-if="targets.some(target => target.targetType === 'EXTERNAL_PROVIDER' && !target.canChat)" label="비활성 Provider 모델"><option v-for="target in targets.filter(item => item.targetType === 'EXTERNAL_PROVIDER' && !item.canChat)" :key="target.id" :value="target.id" disabled>{{ target.displayName }} · 비활성</option></optgroup></select><small class="muted">모델별 대화와 첨부 파일은 분리되어 다른 모델에 자동 전달되지 않습니다.</small></label>
         <div v-if="selectedTarget" class="playground-target-info">
           <div class="target-info-row"><span>연결 상태</span><b :class="connection?.reachable ? 'good' : ''">{{ statusLabel }}</b></div>
           <div v-if="selectedTarget.targetType === 'RUNTIME'" class="target-info-row"><span>모델 상태</span><b>{{ loadStateLabel(selectedTarget.loadState) }}</b></div>
@@ -326,7 +392,7 @@ watch(() => [props.organizationId, props.initialTargetId], () => { void load() }
       </aside>
 
       <main class="surface-card chat-playground">
-        <header class="chat-playground-header"><div><span class="card-kicker">LIVE MODEL SESSION</span><h2>{{ selectedTarget?.displayName ?? '모델을 선택하세요' }}</h2><small>{{ selectedTarget ? `${selectedTarget.providerName} · ${selectedTarget.endpointUrl}` : '테스트할 모델을 왼쪽에서 선택하세요.' }}</small></div><div class="chat-header-controls"><label class="stream-toggle"><input v-model="stream" type="checkbox" /> 스트리밍</label><button class="secondary-button" :disabled="!selectedTarget || probing" @click="checkConnection">연결 확인</button></div></header>
+        <header class="chat-playground-header"><div><span class="card-kicker">LIVE MODEL SESSION</span><h2>{{ selectedTarget?.displayName ?? '모델을 선택하세요' }}</h2><small>{{ selectedTarget ? `${selectedTarget.providerName} · ${selectedTarget.endpointUrl}` : '테스트할 모델을 왼쪽에서 선택하세요.' }}</small></div><div class="chat-header-controls"><div class="stream-control"><label class="stream-toggle"><input v-model="stream" type="checkbox" :disabled="sending" /><span>{{ stream ? '스트리밍 (SSE)' : '일반 응답 (JSON)' }}</span></label><small>{{ stream ? '응답 토큰을 생성되는 대로 표시합니다. 생성 속도가 빨라지는 것은 아니며 SSE 호환 서버가 필요합니다.' : '응답이 끝난 뒤 한 번에 표시합니다. 기본 권장 모드입니다.' }}</small></div><button class="secondary-button" :disabled="!selectedTarget || probing" @click="checkConnection">연결 확인</button></div></header>
         <div ref="chatPane" class="chat-transcript" aria-live="polite">
           <div v-if="!conversation.length" class="chat-welcome"><span>◈</span><strong>실제 모델에 테스트 요청을 보내세요</strong><p>대화는 현재 화면 메모리에만 유지됩니다. 선택 모델은 변경하지 않고 정확한 등록 모델 ID로 호출합니다.</p></div>
           <article v-for="turn in conversation" :key="turn.id" class="chat-turn" :class="[turn.role, { failed: turn.status === 'FAILED' }]">
@@ -334,10 +400,10 @@ watch(() => [props.organizationId, props.initialTargetId], () => { void load() }
             <div class="chat-turn-body"><div class="chat-turn-heading"><strong>{{ turn.role === 'user' ? '사용자' : '모델 응답' }}</strong><span v-if="turn.status" :class="turn.status === 'FAILED' ? 'bad' : turn.status === 'SUCCEEDED' ? 'good' : ''">{{ turn.status }}</span></div>
               <p v-if="turn.role === 'user'" class="chat-turn-content">{{ turn.content }}</p>
               <pre v-else-if="turn.content" class="chat-turn-content">{{ turn.content }}</pre>
-              <p v-else-if="sending" class="chat-loading-copy">모델 응답을 기다리는 중…</p>
+              <p v-else-if="sending" class="chat-loading-copy">{{ turn.status === 'STREAMING' ? '응답 토큰을 실시간으로 받는 중…' : turn.stream ? 'SSE 스트림을 여는 중…' : '모델 응답을 기다리는 중…' }}</p>
               <p v-if="turn.files?.length" class="chat-files">첨부: {{ turn.files.join(', ') }}</p>
               <div v-if="turn.error" class="chat-turn-error"><strong>실패 사유</strong><p>{{ turn.error }}</p></div>
-              <div v-if="turn.role === 'assistant' && turn.httpStatus" class="chat-turn-meta"><span>HTTP {{ turn.httpStatus }}</span><span>{{ turn.latencyMs?.toLocaleString() ?? '-' }} ms</span><span v-if="turn.inputTokens != null">입력 {{ turn.inputTokens }} · 출력 {{ turn.outputTokens ?? 0 }} · 전체 {{ turn.totalTokens ?? (turn.inputTokens + (turn.outputTokens ?? 0)) }} 토큰</span><span>{{ turn.stream ? 'SSE' : 'JSON' }}</span><code v-if="turn.requestId">{{ turn.requestId }}</code></div>
+              <div v-if="turn.role === 'assistant' && turn.httpStatus" class="chat-turn-meta"><span>HTTP {{ turn.httpStatus }}</span><span>{{ turn.latencyMs?.toLocaleString() ?? '-' }} ms</span><span v-if="turn.inputTokens != null">입력 {{ turn.inputTokens }} · 출력 {{ turn.outputTokens ?? 0 }} · 전체 {{ turn.totalTokens ?? (turn.inputTokens + (turn.outputTokens ?? 0)) }} 토큰</span><span>{{ turn.stream ? turn.responseStream ? 'SSE 실시간' : 'SSE 요청 · JSON 응답' : 'JSON' }}</span><code v-if="turn.requestId">{{ turn.requestId }}</code></div>
             </div>
           </article>
         </div>
@@ -359,4 +425,5 @@ watch(() => [props.organizationId, props.initialTargetId], () => { void load() }
 .model-playground-page{max-width:1600px;margin-inline:auto}.model-playground-hero{align-items:center}.playground-top-actions{display:flex;gap:8px;flex-wrap:wrap}.model-playground-warning{display:flex;gap:12px;align-items:baseline;padding:13px 15px;border:1px solid color-mix(in srgb,var(--warning) 35%,var(--border));border-radius:12px;background:var(--surface-2);color:var(--text-soft);font-size:11px;line-height:1.6}.model-playground-warning strong{color:var(--warning);white-space:nowrap}.model-playground-warning code{color:var(--accent-strong)}.model-playground-layout{display:grid;grid-template-columns:minmax(280px,340px) minmax(0,1fr);gap:14px;align-items:stretch}.model-playground-sidebar{padding:17px;display:grid;align-content:start;gap:16px}.playground-sidebar-head,.chat-playground-header{display:flex;align-items:center;justify-content:space-between;gap:14px}.playground-sidebar-head h2,.chat-playground-header h2{margin:5px 0;font-size:17px}.count-pill{min-width:30px;height:27px;display:grid;place-items:center;border:1px solid var(--border);border-radius:8px;color:var(--muted);font-size:10px}.playground-target-info{display:grid;gap:11px;padding:13px;border:1px solid var(--border);border-radius:11px;background:var(--surface-2)}.target-info-row{display:grid;gap:4px}.target-info-row>span{color:var(--muted);font-size:9px}.target-info-row>b,.target-info-row>code{overflow-wrap:anywhere;font-size:10px}.target-info-row>b code{display:block;margin-top:3px;color:var(--accent-strong);font-size:9px}.target-info-row>code{color:var(--accent-strong)}.target-capabilities{display:flex;gap:5px;flex-wrap:wrap;padding-top:3px}.capability-pill{padding:4px 7px;border:1px solid var(--accent-border);border-radius:999px;color:var(--accent-strong);font-size:8px;font-weight:800}.muted{color:var(--muted);font-size:9px}.good{color:var(--accent-strong)!important}.bad{color:var(--danger)!important}.target-warning{margin:0;color:var(--warning);font-size:9px;line-height:1.5}.full-width{width:100%;justify-content:center}.probe-detail{padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--surface);font-size:10px;line-height:1.5}.probe-detail.bad{border-color:color-mix(in srgb,var(--danger) 35%,var(--border))}.chat-playground{min-height:700px;display:grid;grid-template-rows:auto minmax(320px,1fr) auto auto;overflow:hidden}.chat-playground-header{padding:17px 19px;border-bottom:1px solid var(--border)}.chat-playground-header>div:first-child{min-width:0}.chat-playground-header h2,.chat-playground-header small{overflow-wrap:anywhere}.chat-playground-header small{color:var(--muted);font-size:9px}.chat-header-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.stream-toggle{display:flex;gap:6px;align-items:center;color:var(--text-soft);font-size:10px;font-weight:700}.stream-toggle input{accent-color:var(--accent-strong)}.chat-transcript{min-height:320px;max-height:56vh;overflow:auto;padding:20px;display:grid;align-content:start;gap:16px}.chat-welcome{min-height:280px;display:grid;align-content:center;justify-items:center;text-align:center;gap:9px;color:var(--text-soft)}.chat-welcome>span{width:44px;height:44px;display:grid;place-items:center;border:1px solid var(--accent-border);border-radius:13px;color:var(--accent-strong);font-size:21px}.chat-welcome strong{font-size:14px}.chat-welcome p{max-width:420px;margin:0;color:var(--muted);font-size:10px;line-height:1.6}.chat-turn{display:grid;grid-template-columns:32px minmax(0,1fr);gap:10px;align-items:start}.chat-turn.user{grid-template-columns:minmax(0,1fr) 32px}.chat-turn.user .chat-turn-avatar{grid-column:2;grid-row:1;background:var(--accent-dim);color:var(--accent-strong)}.chat-turn.user .chat-turn-body{grid-column:1;grid-row:1;justify-self:end;max-width:min(88%,760px);background:var(--surface-2)}.chat-turn-avatar{width:30px;height:30px;display:grid;place-items:center;border:1px solid var(--border);border-radius:9px;background:var(--surface);color:var(--muted);font-size:8px;font-weight:900}.chat-turn-body{min-width:0;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:var(--bg-soft)}.chat-turn.failed .chat-turn-body{border-color:color-mix(in srgb,var(--danger) 35%,var(--border))}.chat-turn-heading{display:flex;align-items:center;justify-content:space-between;gap:9px;margin-bottom:7px}.chat-turn-heading strong{font-size:10px}.chat-turn-heading span{color:var(--muted);font-size:8px;font-weight:800}.chat-turn-content{margin:0;color:var(--text-soft);font:12px/1.7 inherit;white-space:pre-wrap;overflow-wrap:anywhere}.chat-turn pre.chat-turn-content{font-family:inherit}.chat-files{margin:8px 0 0;color:var(--accent-strong);font-size:9px;overflow-wrap:anywhere}.chat-loading-copy{margin:0;color:var(--muted);font-size:10px;animation:pulse 1.2s infinite alternate}.chat-turn-error{margin-top:9px;padding:9px 10px;border-left:3px solid var(--danger);background:var(--danger-dim);color:var(--text-soft)}.chat-turn-error strong{color:var(--danger);font-size:9px}.chat-turn-error p{margin:4px 0 0;font-size:10px;line-height:1.5;overflow-wrap:anywhere}.chat-turn-meta{margin-top:9px;padding-top:8px;display:flex;gap:9px;flex-wrap:wrap;border-top:1px solid var(--border);color:var(--muted);font-size:8px}.chat-turn-meta code{max-width:100%;overflow-wrap:anywhere}.playground-inline-notice{padding:8px 17px;color:var(--accent-strong);font-size:10px}.playground-inline-notice.failed{color:var(--danger)}.chat-composer{padding:13px 16px 15px;border-top:1px solid var(--border);background:var(--surface)}.chat-composer textarea{width:100%;min-height:82px;resize:vertical;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2);color:var(--text);font:12px/1.6 inherit}.chat-composer textarea:focus{outline:2px solid var(--accent-border)}.composer-actions{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:9px}.composer-tools{display:flex;align-items:center;gap:9px;flex-wrap:wrap}.composer-tools .secondary-button,.send-button{min-height:34px;padding-inline:11px;font-size:10px}.file-support-hint{color:var(--muted);font-size:8px}.send-button{min-width:94px;justify-content:space-between}.send-button span{font-size:14px}.selected-files{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}.file-pill{max-width:100%;padding:4px 8px;display:flex;align-items:center;gap:8px;border:1px solid var(--border);border-radius:999px;background:var(--surface-2);font-size:9px}.file-pill span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.file-pill button{border:0;background:transparent;color:var(--danger);cursor:pointer;font-size:14px}.chat-advanced{margin-top:10px;color:var(--muted);font-size:9px}.chat-advanced summary{cursor:pointer}.advanced-options{margin-top:9px;padding:10px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;border:1px solid var(--border);border-radius:9px;background:var(--surface-2)}.playground-history{overflow:hidden}.playground-history>summary{padding:14px 17px;display:flex;justify-content:space-between;align-items:center;gap:10px;cursor:pointer;list-style:none}.playground-history>summary::-webkit-details-marker{display:none}.playground-history>summary span{display:grid;gap:4px}.playground-history>summary b{font-size:11px}.playground-history>summary small{color:var(--muted);font-size:9px}.playground-history>summary i{color:var(--accent-strong);font-size:9px;font-style:normal}.playground-history-table{border-top:1px solid var(--border)}.playground-history-row{padding:10px 14px;display:grid;grid-template-columns:minmax(140px,1.5fr) .7fr .8fr 1fr minmax(100px,1fr);gap:10px;align-items:center;border-bottom:1px solid var(--border);font-size:9px}.playground-history-row>span:first-child{min-width:0;display:grid;gap:4px}.playground-history-row b,.playground-history-row small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.playground-history-row small{color:var(--muted)}.playground-history-row code{overflow-wrap:anywhere;color:var(--muted);font-size:8px}.history-heading{color:var(--muted);font-size:8px;font-weight:800}.history-empty{margin:0;padding:14px;color:var(--muted);font-size:10px}.playground-empty{padding:24px}.playground-empty p{color:var(--muted);font-size:11px}.error-alert{color:var(--danger)}@keyframes pulse{to{opacity:.45}}@media(max-width:980px){.model-playground-layout{grid-template-columns:1fr}.model-playground-sidebar{order:0}.chat-playground{order:1;min-height:600px}.playground-history{order:2}.target-info-row{grid-template-columns:130px minmax(0,1fr);align-items:baseline}.model-playground-sidebar{grid-template-columns:1fr 1.4fr}.playground-sidebar-head{grid-column:1/-1}.model-playground-sidebar>.field{grid-column:1}.playground-target-info{grid-column:2;grid-row:2/5}}@media(max-width:700px){.model-playground-warning{display:grid;gap:4px}.chat-playground-header{align-items:flex-start;flex-direction:column}.chat-header-controls{width:100%;justify-content:space-between}.chat-transcript{padding:12px;max-height:60vh}.model-playground-sidebar{display:grid;grid-template-columns:1fr}.playground-sidebar-head,.model-playground-sidebar>.field,.playground-target-info{grid-column:1;grid-row:auto}.target-info-row{grid-template-columns:1fr}.advanced-options{grid-template-columns:1fr 1fr}.playground-history-row{grid-template-columns:minmax(110px,1.3fr) .8fr 1fr;gap:6px}.playground-history-row>:nth-child(4),.playground-history-row>:nth-child(5){grid-column:span 1}.history-heading{display:none}.playground-top-actions{width:100%}}
 /* Keep inherited app typography valid; `font: size/line-height inherit` is not valid CSS. */
 .chat-turn-content{font:inherit;font-size:12px;line-height:1.7}.chat-composer textarea{font:inherit;font-size:12px;line-height:1.6}
+.stream-control{max-width:320px;display:grid;gap:4px}.stream-control>small{color:var(--muted);font-size:8px;line-height:1.4}.stream-toggle input:disabled{opacity:.6}
 </style>
