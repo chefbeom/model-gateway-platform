@@ -11,6 +11,8 @@ export type DocsDestination =
   | 'external'
   | 'quotas'
   | 'playground'
+  | 'model-playground'
+  | 'data-protection'
   | 'system'
 
 export type DocAudience = '공통' | '사용자' | '관리자'

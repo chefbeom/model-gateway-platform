@@ -50,7 +50,7 @@ public class ExternalProviderAdministrationController {
 
     @PostMapping("/external-providers/{providerId}/models")
     public ExternalProviderAdministrationService.ProviderModelView addModel(@PathVariable UUID providerId, @Valid @RequestBody AddModel request) {
-        return service.addModel(providerId, request.providerModelId(), request.displayName(), request.compatibilityKey(), request.contextLength(), request.maxConcurrency(), request.capabilitiesJson(), request.inputPricePerMillion(), request.outputPricePerMillion(), request.currency(), request.reasoningEffort(), request.serviceTier(), request.cachedInputPricePerMillion(), request.fastInputPricePerMillion(), request.fastCachedInputPricePerMillion(), request.fastOutputPricePerMillion());
+        return service.addModel(providerId, request.providerModelId(), request.displayName(), request.compatibilityKey(), request.contextLength(), request.maxConcurrency(), request.capabilitiesJson(), request.inputPricePerMillion(), request.outputPricePerMillion(), request.currency(), request.reasoningEffort(), request.serviceTier(), request.cachedInputPricePerMillion(), request.fastInputPricePerMillion(), request.fastCachedInputPricePerMillion(), request.fastOutputPricePerMillion(), request.featureSupportJson());
     }
 
     @PostMapping("/external-providers/{providerId}/models/batch")
@@ -61,7 +61,7 @@ public class ExternalProviderAdministrationController {
                         item.compatibilityKey(), item.contextLength(), item.maxConcurrency(), item.capabilitiesJson(),
                         item.inputPricePerMillion(), item.outputPricePerMillion(), item.currency(), item.reasoningEffort(),
                         item.serviceTier(), item.cachedInputPricePerMillion(), item.fastInputPricePerMillion(),
-                        item.fastCachedInputPricePerMillion(), item.fastOutputPricePerMillion()))
+                        item.fastCachedInputPricePerMillion(), item.fastOutputPricePerMillion(), item.featureSupportJson()))
                 .toList());
     }
     @PatchMapping("/external-providers/{providerId}/models/{modelId}")
@@ -73,7 +73,7 @@ public class ExternalProviderAdministrationController {
                 request.inputPricePerMillion(), request.outputPricePerMillion(), request.currency(), request.enabled(),
                 request.reasoningEffort(), request.serviceTier(), request.cachedInputPricePerMillion(),
                 request.fastInputPricePerMillion(), request.fastCachedInputPricePerMillion(), request.fastOutputPricePerMillion(),
-                request.clearOptionalPrices());
+                request.clearOptionalPrices(), request.featureSupportJson());
     }
 
     private boolean isPlatformAdmin(HttpServletRequest request) {
@@ -93,7 +93,8 @@ public class ExternalProviderAdministrationController {
                            @PositiveOrZero BigDecimal cachedInputPricePerMillion,
                            @PositiveOrZero BigDecimal fastInputPricePerMillion,
                            @PositiveOrZero BigDecimal fastCachedInputPricePerMillion,
-                           @PositiveOrZero BigDecimal fastOutputPricePerMillion) { }
+                           @PositiveOrZero BigDecimal fastOutputPricePerMillion,
+                           @Size(max = 2000) String featureSupportJson) { }
     public record BatchAddModels(@NotEmpty @Size(max = 100) List<@NotNull @Valid AddModel> models) { }
     public record UpdateModel(@Size(max = 200) String displayName, @Size(max = 500) String compatibilityKey,
                               @Positive Integer contextLength, @Positive Integer maxConcurrency,
@@ -105,5 +106,5 @@ public class ExternalProviderAdministrationController {
                               @PositiveOrZero BigDecimal fastInputPricePerMillion,
                               @PositiveOrZero BigDecimal fastCachedInputPricePerMillion,
                               @PositiveOrZero BigDecimal fastOutputPricePerMillion,
-                              boolean clearOptionalPrices) { }
+                              boolean clearOptionalPrices, @Size(max = 2000) String featureSupportJson) { }
 }

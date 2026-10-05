@@ -12,7 +12,7 @@ import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.UUID;
 
-/** Metadata-only trace for administrator-run direct model tests. Prompt/file content is never stored. */
+/** Metadata-only request trace. Encrypted transcript content, when present, lives in PlaygroundConversation. */
 @Entity
 @Table(name = "playground_request", indexes = {
         @Index(name = "idx_playground_request_org_started", columnList = "organization_id, started_at"),

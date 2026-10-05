@@ -20,6 +20,8 @@ public interface LlmRequestRepository extends JpaRepository<LlmRequest, UUID> {
     Optional<LlmRequest> findByRequestId(String requestId);
     List<LlmRequest> findByStartedAtAfter(Instant startedAt);
     List<LlmRequest> findByProjectIdInAndStartedAtAfter(Collection<UUID> projectIds, Instant startedAt);
+    Optional<LlmRequest> findFirstByProjectIdInAndStartedAtLessThanOrderByStartedAtAsc(
+            Collection<UUID> projectIds, Instant before);
     List<LlmRequest> findByProjectIdAndStartedAtGreaterThanEqualAndStartedAtLessThanOrderByStartedAtAsc(
             UUID projectId, Instant from, Instant to);
 

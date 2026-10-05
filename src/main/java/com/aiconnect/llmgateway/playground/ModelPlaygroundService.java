@@ -7,8 +7,8 @@ import com.aiconnect.llmgateway.domain.InferenceNode;
 import com.aiconnect.llmgateway.domain.ModelDeployment;
 import com.aiconnect.llmgateway.domain.PlaygroundRequest;
 import com.aiconnect.llmgateway.domain.RuntimeEndpoint;
-import com.aiconnect.llmgateway.identity.CurrentActor;
 import com.aiconnect.llmgateway.gateway.RequestCapabilityDetector;
+import com.aiconnect.llmgateway.identity.CurrentActor;
 import com.aiconnect.llmgateway.repository.ExternalProviderRepository;
 import com.aiconnect.llmgateway.repository.InferenceNodeRepository;
 import com.aiconnect.llmgateway.repository.ModelDeploymentRepository;
@@ -51,7 +51,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
-/** Direct administrator-only model tests. Only request metadata is retained; prompts and files are not. */
+/** Direct administrator-only model tests. Transcripts are encrypted; attachment bytes are never retained. */
 @Service
 public class ModelPlaygroundService {
     private static final int MAX_MESSAGES = 48;
@@ -69,6 +69,7 @@ public class ModelPlaygroundService {
     private final ExternalProviderRepository providers;
     private final ModelDeploymentRepository deployments;
     private final PlaygroundRequestRepository traces;
+    private final PlaygroundConversationService conversations;
     private final InferenceRuntimeClient runtimeClient;
     private final OpenAiRuntimeClient openAiClient;
     private final StreamingLmStudioRuntimeClient streamingRuntimeClient;
@@ -79,7 +80,8 @@ public class ModelPlaygroundService {
 
     public ModelPlaygroundService(InferenceNodeRepository nodes, RuntimeEndpointRepository endpoints,
                                   ExternalProviderRepository providers, ModelDeploymentRepository deployments,
-                                  PlaygroundRequestRepository traces, InferenceRuntimeClient runtimeClient,
+                                  PlaygroundRequestRepository traces, PlaygroundConversationService conversations,
+                                  InferenceRuntimeClient runtimeClient,
                                   OpenAiRuntimeClient openAiClient,
                                   StreamingLmStudioRuntimeClient streamingRuntimeClient,
                                   StreamingOpenAiRuntimeClient streamingOpenAiClient,
@@ -90,6 +92,7 @@ public class ModelPlaygroundService {
         this.providers = providers;
         this.deployments = deployments;
         this.traces = traces;
+        this.conversations = conversations;
         this.runtimeClient = runtimeClient;
         this.openAiClient = openAiClient;
         this.streamingRuntimeClient = streamingRuntimeClient;
@@ -128,6 +131,18 @@ public class ModelPlaygroundService {
                 .stream().map(TraceView::from).toList();
     }
 
+    public List<PlaygroundConversationService.ConversationSummary> conversations(UUID organizationId, String query) {
+        return conversations.list(organizationId, query);
+    }
+
+    public PlaygroundConversationService.ConversationDetail conversation(UUID organizationId, UUID conversationId) {
+        return conversations.get(organizationId, conversationId);
+    }
+
+    public void deleteConversation(UUID organizationId, UUID conversationId) {
+        conversations.delete(organizationId, conversationId);
+    }
+
     public ProbeView probe(UUID organizationId, UUID targetId) {
         Resolved resolved = resolve(organizationId, targetId);
         long started = System.nanoTime();
@@ -160,26 +175,43 @@ public class ModelPlaygroundService {
 
         boolean stream = body.path("stream").asBoolean(false);
         String requestId = UUID.randomUUID().toString();
-        Instant startedAt = Instant.now();
         long startedNanos = System.nanoTime();
         PlaygroundRequest trace = traces.save(new PlaygroundRequest(requestId, organizationId,
                 resolved.deployment().getId(), resolved.external() ? "EXTERNAL_PROVIDER" : "RUNTIME",
                 resolved.providerName(), resolved.deployment().getProviderModelId(), resolved.endpointUrl(), stream,
                 CurrentActor.userIdOrNull()));
 
+        ObjectNode upstream;
         try {
-            ObjectNode upstream;
-            try {
-                upstream = prepareRequest(body, resolved, stream);
-            } catch (ApiException exception) {
-                traces.save(updateTrace(trace, false, exception.getStatus().value(), elapsed(startedNanos),
-                        null, null, exception.getCode()));
-                throw exception;
-            }
-            trace.recordRequestMetadata(RequestCapabilityDetector.requestType(upstream),
-                    upstream.path("reasoning_effort").asText(null), upstream.path("service_tier").asText(null));
-            traces.save(trace);
-            if (stream) return startStream(resolved, upstream, trace, requestId, startedNanos);
+            upstream = prepareRequest(body, resolved, stream);
+        } catch (ApiException exception) {
+            traces.save(updateTrace(trace, false, exception.getStatus().value(), elapsed(startedNanos),
+                    null, null, exception.getCode()));
+            throw exception;
+        }
+        trace.recordRequestMetadata(RequestCapabilityDetector.requestType(upstream),
+                upstream.path("reasoning_effort").asText(null), upstream.path("service_tier").asText(null));
+        traces.save(trace);
+        UUID conversationId;
+        try {
+            UUID requestedConversationId = body.hasNonNull("conversationId")
+                    ? parseUuid(body.path("conversationId").asText(),
+                    "PLAYGROUND_CONVERSATION_ID_INVALID", "대화 ID 형식이 올바르지 않습니다.") : null;
+            conversationId = conversations.begin(organizationId, resolved.deployment().getId(),
+                    resolved.deployment().getDisplayName(), resolved.deployment().getProviderModelId(),
+                    requestedConversationId, requestId, body, stream);
+        } catch (ApiException exception) {
+            traces.save(updateTrace(trace, false, exception.getStatus().value(), elapsed(startedNanos),
+                    null, null, exception.getCode()));
+            throw exception;
+        }
+        return executeChat(resolved, upstream, trace, requestId, startedNanos, conversationId, stream);
+    }
+
+    private ChatResult executeChat(Resolved resolved, ObjectNode upstream, PlaygroundRequest trace,
+                                   String requestId, long startedNanos, UUID conversationId, boolean stream) {
+        try {
+            if (stream) return startStream(resolved, upstream, trace, requestId, startedNanos, conversationId);
             RuntimeResult result = resolved.external()
                     ? openAiClient.chatCompletion(resolved.provider(), upstream, upstream.has("temperature"))
                     : runtimeClient.chatCompletion(resolved.endpoint(), upstream);
@@ -187,23 +219,36 @@ public class ModelPlaygroundService {
             Integer input = usage(result.body(), "prompt_tokens", "input_tokens");
             Integer output = usage(result.body(), "completion_tokens", "output_tokens");
             boolean success = result.isSuccessful();
+            JsonNode safeBody = sanitize(result.body(), resolved.secret());
+            conversations.complete(conversationId, requestId, success, result.statusCode(), latency,
+                    input, output, success ? responseContent(safeBody) : "",
+                    success ? null : responseError(safeBody, result.statusCode()), false, false);
             traces.save(updateTrace(trace, success, result.statusCode(), latency, input, output,
                     success ? null : errorCode(result.body(), result.statusCode())));
-            return ChatResult.json(result.statusCode(), requestId, sanitize(result.body(), resolved.secret()));
+            return ChatResult.json(result.statusCode(), requestId, safeBody, conversationId);
         } catch (ApiException exception) {
+            long latency = elapsed(startedNanos);
+            conversations.complete(conversationId, requestId, false, exception.getStatus().value(), latency,
+                    null, null, "", exception.getMessage(), stream, false);
+            traces.save(updateTrace(trace, false, exception.getStatus().value(), latency, null, null, exception.getCode()));
             throw exception;
         } catch (RuntimeUnavailableException exception) {
-            long latency = Duration.between(startedAt, Instant.now()).toMillis();
+            long latency = elapsed(startedNanos);
+            String safeMessage = redact(safeMessage(exception), resolved.secret());
+            conversations.complete(conversationId, requestId, false, 502, latency, null, null,
+                    "", safeMessage, stream, false);
             traces.save(updateTrace(trace, false, 502, latency, null, null, "UPSTREAM_UNAVAILABLE"));
-            return ChatResult.json(502, requestId, error("UPSTREAM_UNAVAILABLE", redact(safeMessage(exception), resolved.secret()), requestId));
+            return ChatResult.json(502, requestId, error("UPSTREAM_UNAVAILABLE", safeMessage, requestId), conversationId);
         } catch (RuntimeException exception) {
             traces.save(updateTrace(trace, false, 500, elapsed(startedNanos), null, null, "PLAYGROUND_REQUEST_FAILED"));
+            conversations.complete(conversationId, requestId, false, 500, elapsed(startedNanos), null, null,
+                    "", "PLAYGROUND_REQUEST_FAILED", stream, false);
             throw exception;
         }
     }
 
     private ChatResult startStream(Resolved resolved, ObjectNode upstream, PlaygroundRequest trace,
-                                   String requestId, long startedNanos) {
+                                   String requestId, long startedNanos, UUID conversationId) {
         StreamingRuntimeResult upstreamResult;
         try {
             // Usage streaming is supported by the OpenAI API but not consistently by local OpenAI-compatible servers.
@@ -212,29 +257,40 @@ public class ModelPlaygroundService {
                     ? streamingOpenAiClient.chatCompletion(resolved.provider(), upstream, upstream.has("temperature"))
                     : streamingRuntimeClient.chatCompletion(resolved.endpoint(), upstream);
         } catch (RuntimeUnavailableException exception) {
-            traces.save(updateTrace(trace, false, 502, elapsed(startedNanos), null, null, "UPSTREAM_UNAVAILABLE"));
-            return ChatResult.json(502, requestId, error("UPSTREAM_UNAVAILABLE", redact(safeMessage(exception), resolved.secret()), requestId));
+            long latency = elapsed(startedNanos);
+            String message = redact(safeMessage(exception), resolved.secret());
+            traces.save(updateTrace(trace, false, 502, latency, null, null, "UPSTREAM_UNAVAILABLE"));
+            conversations.complete(conversationId, requestId, false, 502, latency, null, null,
+                    "", message, true, false);
+            return ChatResult.json(502, requestId, error("UPSTREAM_UNAVAILABLE", message, requestId), conversationId);
         }
 
         if (upstreamResult.statusCode() < 200 || upstreamResult.statusCode() >= 300) {
             JsonNode errorBody = readErrorBody(upstreamResult.body(), resolved.secret());
-            traces.save(updateTrace(trace, false, upstreamResult.statusCode(), elapsed(startedNanos), null, null,
+            long latency = elapsed(startedNanos);
+            traces.save(updateTrace(trace, false, upstreamResult.statusCode(), latency, null, null,
                     errorCode(errorBody, upstreamResult.statusCode())));
-            return ChatResult.json(upstreamResult.statusCode(), requestId, sanitize(errorBody, resolved.secret()));
+            JsonNode safeErrorBody = sanitize(errorBody, resolved.secret());
+            conversations.complete(conversationId, requestId, false, upstreamResult.statusCode(), latency,
+                    null, null, "", responseError(safeErrorBody, upstreamResult.statusCode()), true, false);
+            return ChatResult.json(upstreamResult.statusCode(), requestId, safeErrorBody, conversationId);
         }
 
         StreamingResponseBody stream = output -> relayStream(upstreamResult.body(), output, trace,
-                startedNanos, resolved.secret());
-        return ChatResult.stream(upstreamResult.statusCode(), requestId, stream);
+                startedNanos, resolved.secret(), conversationId, requestId);
+        return ChatResult.stream(upstreamResult.statusCode(), requestId, stream, conversationId);
     }
 
     private void relayStream(InputStream source, OutputStream output, PlaygroundRequest trace,
-                             long startedNanos, String secret) throws IOException {
+                             long startedNanos, String secret, UUID conversationId,
+                             String requestId) throws IOException {
         Integer inputTokens = null;
         Integer outputTokens = null;
         boolean hadUsage = false;
         boolean completed = false;
         String errorCode = null;
+        String errorMessage = null;
+        StringBuilder assistantContent = new StringBuilder();
         try (InputStream upstream = source;
              java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(upstream, StandardCharsets.UTF_8))) {
             String line;
@@ -247,8 +303,16 @@ public class ModelPlaygroundService {
                     if ("[DONE]".equals(data)) completed = errorCode == null;
                     else {
                         try {
-                            JsonNode event = mapper.readTree(data);
-                            if (event.hasNonNull("error")) errorCode = errorCode(event, 502);
+                            JsonNode event = mapper.readTree(redact(data, secret));
+                            if (event.hasNonNull("error")) {
+                                errorCode = errorCode(event, 502);
+                                errorMessage = responseError(event, 502);
+                            }
+                            JsonNode delta = event.path("choices").path(0).path("delta").path("content");
+                            if (delta.isTextual()) assistantContent.append(delta.asText());
+                            else if (delta.isArray()) delta.forEach(part -> {
+                                if (part.path("text").isTextual()) assistantContent.append(part.path("text").asText());
+                            });
                             JsonNode usage = event.path("usage");
                             if (!usage.isMissingNode() && !usage.isNull()) {
                                 inputTokens = usageValue(usage, "prompt_tokens", "input_tokens");
@@ -264,10 +328,33 @@ public class ModelPlaygroundService {
             errorCode = "STREAM_INTERRUPTED";
             throw exception;
         } finally {
-            traces.save(updateTrace(trace, completed, completed ? 200 : 502, elapsed(startedNanos),
+            long latency = elapsed(startedNanos);
+            traces.save(updateTrace(trace, completed, completed ? 200 : 502, latency,
                     hadUsage ? inputTokens : null, hadUsage ? outputTokens : null,
                     completed ? null : (errorCode == null ? "STREAM_INCOMPLETE" : errorCode)));
+            conversations.complete(conversationId, requestId, completed, completed ? 200 : 502,
+                    latency, hadUsage ? inputTokens : null, hadUsage ? outputTokens : null,
+                    assistantContent.toString(), completed ? null : (errorMessage == null
+                            ? (errorCode == null ? "STREAM_INCOMPLETE" : errorCode) : errorMessage), true, true);
         }
+    }
+
+    private String responseContent(JsonNode body) {
+        JsonNode content = body.path("choices").path(0).path("message").path("content");
+        if (content.isTextual()) return content.asText();
+        if (content.isArray()) {
+            StringBuilder text = new StringBuilder();
+            content.forEach(part -> { if (part.path("text").isTextual()) text.append(part.path("text").asText()); });
+            return text.toString();
+        }
+        return content.isMissingNode() || content.isNull() ? "" : content.toString();
+    }
+
+    private String responseError(JsonNode body, int status) {
+        JsonNode error = body.path("error");
+        String message = error.isTextual() ? error.asText() : error.path("message").asText("");
+        if (message.isBlank()) message = body.path("message").asText("");
+        return message.isBlank() ? "요청이 실패했습니다. (HTTP " + status + ")" : message;
     }
 
     private ObjectNode prepareRequest(ObjectNode body, Resolved resolved, boolean stream) {
@@ -428,7 +515,8 @@ public class ModelPlaygroundService {
                 external ? "EXTERNAL_PROVIDER" : "RUNTIME", providerName, protocol, endpointUrl,
                 deployment.getProviderModelId(), deployment.getDisplayName(), status, enabled,
                 external || "LOADED".equals(loadState), deployment.getContextLength(), deployment.getMaxConcurrency(),
-                capabilities(deployment), inputPrice, outputPrice,
+                capabilities(deployment), deployment.getFeatureSupportJson(), deployment.getDefaultReasoningEffort().name(),
+                deployment.getDefaultServiceTier().name(), inputPrice, outputPrice,
                 currency, nodeName, loadState, enabled && (external || "LOADED".equals(loadState)));
     }
 
@@ -614,6 +702,7 @@ public class ModelPlaygroundService {
     public record TargetView(UUID id, UUID sourceId, String targetType, String providerName, String protocol, String endpointUrl,
                              String modelId, String displayName, String status, boolean enabled, boolean loaded,
                              Integer contextLength, int maxConcurrency, List<String> capabilities,
+                             String featureSupportJson, String defaultReasoningEffort, String defaultServiceTier,
                              java.math.BigDecimal inputPricePerMillion, java.math.BigDecimal outputPricePerMillion,
                              String currency, String nodeName, String loadState, boolean canChat) { }
 
@@ -630,14 +719,25 @@ public class ModelPlaygroundService {
         }
     }
 
-    public record ChatResult(int statusCode, String requestId, ObjectNode body, StreamingResponseBody streaming) {
+    public record ChatResult(int statusCode, String requestId, ObjectNode body, StreamingResponseBody streaming,
+                             UUID conversationId) {
+        public ChatResult(int statusCode, String requestId, ObjectNode body, StreamingResponseBody streaming) {
+            this(statusCode, requestId, body, streaming, null);
+        }
         static ChatResult json(int statusCode, String requestId, JsonNode body) {
             ObjectNode object;
             if (body != null && body.isObject()) object = (ObjectNode) body;
             else { object = new ObjectMapper().createObjectNode(); object.set("response", body); }
-            return new ChatResult(statusCode, requestId, object, null);
+            return new ChatResult(statusCode, requestId, object, null, null);
         }
-        static ChatResult stream(int statusCode, String requestId, StreamingResponseBody stream) { return new ChatResult(statusCode, requestId, null, stream); }
+        static ChatResult json(int statusCode, String requestId, JsonNode body, UUID conversationId) {
+            ChatResult result = json(statusCode, requestId, body);
+            return new ChatResult(result.statusCode(), result.requestId(), result.body(), null, conversationId);
+        }
+        static ChatResult stream(int statusCode, String requestId, StreamingResponseBody stream) { return new ChatResult(statusCode, requestId, null, stream, null); }
+        static ChatResult stream(int statusCode, String requestId, StreamingResponseBody stream, UUID conversationId) {
+            return new ChatResult(statusCode, requestId, null, stream, conversationId);
+        }
     }
 
     private record Resolved(ModelDeployment deployment, RuntimeEndpoint endpoint, ExternalProvider provider,

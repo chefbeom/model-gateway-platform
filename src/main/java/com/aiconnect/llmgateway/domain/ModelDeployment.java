@@ -31,6 +31,7 @@ public class ModelDeployment {
     @Enumerated(EnumType.STRING) @Column(nullable = false, length = 16) private OpenAiServiceTier defaultServiceTier = OpenAiServiceTier.REQUEST;
     @Column(columnDefinition = "text") private String capabilitiesJson = "[]";
     @Column(columnDefinition = "text") private String capabilityOverridesJson;
+    @Column(columnDefinition = "text") private String featureSupportJson;
     @Column(columnDefinition = "text") private String metadataJson;
     private Instant lastSyncedAt;
     @Column(nullable = false) private Instant createdAt = Instant.now();
@@ -220,6 +221,11 @@ public class ModelDeployment {
         }
     }
 
+    /** Explicit support declarations are kept separate from request defaults and price metadata. */
+    public void configureFeatureSupport(String featureSupportJson) {
+        if (featureSupportJson != null) this.featureSupportJson = featureSupportJson.isBlank() ? null : featureSupportJson;
+    }
+
     /** Apply explicit provider-model policy after the logical-service defaults. */
     public void applyOpenAiDefaults(com.fasterxml.jackson.databind.node.ObjectNode request) {
         if (request == null || !isExternal()) return;
@@ -270,5 +276,6 @@ public class ModelDeployment {
     public OpenAiServiceTier getDefaultServiceTier() { return defaultServiceTier == null ? OpenAiServiceTier.REQUEST : defaultServiceTier; }
     public String getCapabilitiesJson() { return capabilitiesJson; }
     public String getCapabilityOverridesJson() { return capabilityOverridesJson; }
+    public String getFeatureSupportJson() { return featureSupportJson; }
     public String getMetadataJson() { return metadataJson; }
 }

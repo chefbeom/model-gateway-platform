@@ -35,9 +35,10 @@ class ModelPlaygroundControllerStreamingTest {
         UUID targetId = UUID.randomUUID();
         String eventStream = "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"
                 + "data: [DONE]\n\n";
+        UUID conversationId = UUID.randomUUID();
         StreamingResponseBody upstream = output -> output.write(eventStream.getBytes(StandardCharsets.UTF_8));
         when(playground.chat(eq(organizationId), any(ObjectNode.class)))
-                .thenReturn(ChatResult.stream(200, "playground-stream-id", upstream));
+                .thenReturn(ChatResult.stream(200, "playground-stream-id", upstream, conversationId));
 
         MvcResult started = mvc.perform(post("/api/admin/organizations/{organizationId}/playground/chat", organizationId)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -48,6 +49,7 @@ class ModelPlaygroundControllerStreamingTest {
         mvc.perform(asyncDispatch(started))
                 .andExpect(status().isOk())
                 .andExpect(header().string("X-Request-Id", "playground-stream-id"))
+                .andExpect(header().string("X-Playground-Conversation-Id", conversationId.toString()))
                 .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM))
                 .andExpect(content().string(eventStream));
     }

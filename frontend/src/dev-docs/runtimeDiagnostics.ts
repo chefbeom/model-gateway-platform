@@ -26,11 +26,11 @@ export const runtimeDiagnosticsDoc: DocPage = {
     },
     {
       id: 'diagnose',
-      title: 'Tailscale과 LM Studio를 순서대로 확인',
+      title: '사설망과 Runtime을 순서대로 확인',
       blocks: [
         { type: 'steps', items: [
-          { title: 'GPU 노드가 온라인인지 확인', text: 'GPU 서버에서 Tailscale이 로그인되어 있고 LM Studio Developer Server가 실행 중인지 확인합니다. Tailnet 상태가 offline이면 Gateway는 연결할 수 없습니다.' },
-          { title: '호스트 연결 확인', text: 'AICONNECT 호스트에서 Runtime URL의 TCP 1234와 /v1/models를 확인합니다. 여기서 실패하면 Docker나 Gateway 설정을 바꾸기 전에 원격 GPU 서버·Tailscale부터 복구합니다.' },
+          { title: 'Runtime 노드와 추론 서버 확인', text: 'GPU 서버에서 Tailscale 연결과 LM Studio·Ollama·llama.cpp 등 실제 서버 실행 상태를 확인합니다. 서버 종류, Listen 주소, 인증과 포트가 AICONNECT 등록값과 일치해야 합니다.' },
+          { title: '호스트 연결 확인', text: 'AICONNECT 호스트에서 등록된 Runtime 주소·포트와 종류별 모델 API를 확인합니다. LM Studio는 보통 1234, Ollama는 보통 11434, llama.cpp는 서버 설정 포트를 사용하며 반드시 실제 값을 기준으로 검사합니다.' },
           { title: '인프라의 연결 확인 실행', text: '인프라 화면의 연결 확인은 성공일 때만 “연결 성공”을 표시합니다. 실패하면 HTTP 상태 또는 “runtime endpoint is unreachable” 사유가 표시됩니다.', action: { label: '인프라 열기', destination: 'infrastructure' } },
           { title: '모델 동기화와 Target 재확인', text: '연결이 성공한 후 모델 동기화를 실행합니다. 모델 변경 자동 추적이 켜진 로컬 Target은 같은 Runtime에 정상 모델이 하나로 식별될 때 새 Deployment로 보정됩니다. 후보가 여러 개면 임의 전환하지 않으므로 LLM 서비스에서 Target 또는 요청 진단을 확인합니다.', action: { label: 'LLM 서비스 열기', destination: 'services' } }
         ] },
@@ -41,8 +41,9 @@ export const runtimeDiagnosticsDoc: DocPage = {
       id: 'verify',
       title: '복구 후 전체 경로 검증',
       blocks: [
-        { type: 'checklist', items: ['사용자 프로젝트의 /v1/models에서 논리 모델명이 보임', '짧은 /v1/chat/completions가 200으로 완료됨', '관측성의 요청 탐색기에 Request ID와 Attempt가 생김', '사용량의 프로젝트·서비스·인프라 집계가 1건 증가함', 'GPU Runtime IP:1234가 아니라 Gateway Base URL을 호출함'] },
-        { type: 'callout', tone: 'info', title: '관측이 0건일 때', text: 'AICONNECT DB에 요청이 0건이면 해당 호출은 Gateway를 우회한 것입니다. 호출 애플리케이션의 Base URL은 Gateway의 /v1이며, LM Studio의 100.x.x.x:1234 주소는 사용자 호출에 사용하지 않습니다.' }
+        { type: 'checklist', items: ['사용자 프로젝트의 /v1/models에서 논리 모델명이 보임', '짧은 /v1/chat/completions가 200으로 완료됨', '관측성의 요청 탐색기에 Request ID와 Attempt가 생김', '사용량의 프로젝트·서비스·인프라 집계에 요청이 반영됨', 'GPU Runtime 주소가 아니라 Gateway Base URL을 호출함'] },
+        { type: 'callout', tone: 'info', title: '관측이 0건일 때', text: 'Gateway 우회 외에도 조회 조직·기간·권한 필터, 인증 단계의 차단, 프록시 오류나 기록 보관 범위를 확인하세요. 호출 애플리케이션의 Base URL은 Gateway의 /v1이어야 합니다. 모델 직접 테스트 기록은 일반 Gateway 통계와 별도입니다.' },
+        { type: 'callout', tone: 'warning', title: '서버 장애와 등록 데이터 삭제는 다른 문제입니다', text: '오프라인일 때 현재 확인된 모델이 없어도 과거 등록 모델과 Target 참조는 유지해야 합니다. 연결 복구 후 다시 동기화하고 현재 상태·저장된 모델 정보를 구분해 확인하세요.' }
       ]
     }
   ]

@@ -204,16 +204,31 @@ public class ExternalProviderAdministrationService {
                                       ReasoningEffort reasoningEffort, OpenAiServiceTier serviceTier,
                                       BigDecimal cachedInputPrice, BigDecimal fastInputPrice,
                                       BigDecimal fastCachedInputPrice, BigDecimal fastOutputPrice) {
+        return addModel(providerId, providerModelId, displayName, compatibilityKey, contextLength, maxConcurrency,
+                capabilitiesJson, inputPrice, outputPrice, priceCurrency, reasoningEffort, serviceTier,
+                cachedInputPrice, fastInputPrice, fastCachedInputPrice, fastOutputPrice, null);
+    }
+
+    public ProviderModelView addModel(UUID providerId, String providerModelId, String displayName,
+                                      String compatibilityKey, Integer contextLength, Integer maxConcurrency,
+                                      String capabilitiesJson, BigDecimal inputPrice, BigDecimal outputPrice, Currency priceCurrency,
+                                      ReasoningEffort reasoningEffort, OpenAiServiceTier serviceTier,
+                                      BigDecimal cachedInputPrice, BigDecimal fastInputPrice,
+                                      BigDecimal fastCachedInputPrice, BigDecimal fastOutputPrice,
+                                      String featureSupportJson) {
         ExternalProvider provider = requireProvider(providerId);
         if (deployments.findByExternalProviderId(providerId).stream().anyMatch(item -> item.getProviderModelId().equals(providerModelId))) {
             throw new ApiException(HttpStatus.CONFLICT, "EXTERNAL_MODEL_EXISTS", "This provider model is already registered.");
         }
         validateCapabilities(capabilitiesJson);
+        featureSupportJson = validateFeatureSupport(featureSupportJson);
         validateModelPricing(inputPrice, cachedInputPrice, outputPrice, fastInputPrice, fastCachedInputPrice, fastOutputPrice);
-        ModelDeployment deployment = deployments.save(ModelDeployment.external(providerId, providerModelId,
+        ModelDeployment deployment = ModelDeployment.external(providerId, providerModelId,
                 compatibilityKey, displayName, contextLength, maxConcurrency == null ? 20 : maxConcurrency,
                 capabilitiesJson, inputPrice, outputPrice, priceCurrency == null ? Currency.KRW : priceCurrency,
-                reasoningEffort, serviceTier, cachedInputPrice, fastInputPrice, fastCachedInputPrice, fastOutputPrice));
+                reasoningEffort, serviceTier, cachedInputPrice, fastInputPrice, fastCachedInputPrice, fastOutputPrice);
+        deployment.configureFeatureSupport(featureSupportJson);
+        deployment = deployments.save(deployment);
         audit.record(provider.getOrganizationId(), CurrentActor.userIdOrNull(), "EXTERNAL_MODEL_REGISTERED", "MODEL_DEPLOYMENT",
                 deployment.getId(), Map.of("providerModelId", providerModelId, "providerId", providerId));
         return ProviderModelView.from(deployment);
@@ -242,6 +257,7 @@ public class ExternalProviderAdministrationService {
                 throw new ApiException(HttpStatus.CONFLICT, "EXTERNAL_MODEL_EXISTS", "This provider model is already registered: " + modelId);
             }
             validateCapabilities(registration.capabilitiesJson());
+            validateFeatureSupport(registration.featureSupportJson());
             validateModelPricing(registration.inputPricePerMillion(), registration.cachedInputPricePerMillion(),
                     registration.outputPricePerMillion(), registration.fastInputPricePerMillion(),
                     registration.fastCachedInputPricePerMillion(), registration.fastOutputPricePerMillion());
@@ -249,13 +265,15 @@ public class ExternalProviderAdministrationService {
 
         List<ProviderModelView> saved = new ArrayList<>(registrations.size());
         for (ModelRegistration registration : registrations) {
-            ModelDeployment deployment = deployments.save(ModelDeployment.external(providerId,
+            ModelDeployment deployment = ModelDeployment.external(providerId,
                     registration.providerModelId().trim(), registration.compatibilityKey(), registration.displayName().trim(),
                     registration.contextLength(), registration.maxConcurrency() == null ? 20 : registration.maxConcurrency(),
                     registration.capabilitiesJson(), registration.inputPricePerMillion(), registration.outputPricePerMillion(),
                     registration.currency() == null ? Currency.KRW : registration.currency(), registration.reasoningEffort(),
                     registration.serviceTier(), registration.cachedInputPricePerMillion(), registration.fastInputPricePerMillion(),
-                    registration.fastCachedInputPricePerMillion(), registration.fastOutputPricePerMillion()));
+                    registration.fastCachedInputPricePerMillion(), registration.fastOutputPricePerMillion());
+            deployment.configureFeatureSupport(validateFeatureSupport(registration.featureSupportJson()));
+            deployment = deployments.save(deployment);
             audit.record(provider.getOrganizationId(), CurrentActor.userIdOrNull(), "EXTERNAL_MODEL_REGISTERED", "MODEL_DEPLOYMENT",
                     deployment.getId(), Map.of("providerModelId", deployment.getProviderModelId(), "providerId", providerId));
             saved.add(ProviderModelView.from(deployment));
@@ -270,16 +288,30 @@ public class ExternalProviderAdministrationService {
                                          Currency priceCurrency, Boolean enabled, ReasoningEffort reasoningEffort,
                                          OpenAiServiceTier serviceTier, BigDecimal cachedInputPrice, BigDecimal fastInputPrice,
                                          BigDecimal fastCachedInputPrice, BigDecimal fastOutputPrice, boolean clearOptionalPrices) {
+        return updateModel(providerId, modelId, displayName, compatibilityKey, contextLength, maxConcurrency,
+                capabilitiesJson, inputPrice, outputPrice, priceCurrency, enabled, reasoningEffort, serviceTier,
+                cachedInputPrice, fastInputPrice, fastCachedInputPrice, fastOutputPrice, clearOptionalPrices, null);
+    }
+
+    public ProviderModelView updateModel(UUID providerId, UUID modelId, String displayName,
+                                         String compatibilityKey, Integer contextLength, Integer maxConcurrency,
+                                         String capabilitiesJson, BigDecimal inputPrice, BigDecimal outputPrice,
+                                         Currency priceCurrency, Boolean enabled, ReasoningEffort reasoningEffort,
+                                         OpenAiServiceTier serviceTier, BigDecimal cachedInputPrice, BigDecimal fastInputPrice,
+                                         BigDecimal fastCachedInputPrice, BigDecimal fastOutputPrice, boolean clearOptionalPrices,
+                                         String featureSupportJson) {
         ExternalProvider provider = requireProvider(providerId);
         ModelDeployment deployment = deployments.findById(modelId)
                 .filter(item -> providerId.equals(item.getExternalProviderId()))
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "EXTERNAL_MODEL_NOT_FOUND",
                         "The external model does not belong to this provider."));
         validateCapabilities(capabilitiesJson);
+        featureSupportJson = validateFeatureSupport(featureSupportJson);
         validateModelPricing(inputPrice, cachedInputPrice, outputPrice, fastInputPrice, fastCachedInputPrice, fastOutputPrice);
         deployment.configureProviderModel(displayName, compatibilityKey, enabled, maxConcurrency,
                 capabilitiesJson, inputPrice, outputPrice, priceCurrency, reasoningEffort, serviceTier,
                 cachedInputPrice, fastInputPrice, fastCachedInputPrice, fastOutputPrice, clearOptionalPrices);
+        deployment.configureFeatureSupport(featureSupportJson);
         deployments.save(deployment);
         audit.record(provider.getOrganizationId(), CurrentActor.userIdOrNull(), "EXTERNAL_MODEL_UPDATED", "MODEL_DEPLOYMENT",
                 deployment.getId(), Map.of("providerModelId", deployment.getProviderModelId(),
@@ -294,6 +326,30 @@ public class ExternalProviderAdministrationService {
             if (values.stream().anyMatch(value -> value == null || value.isBlank())) throw new IllegalArgumentException();
         } catch (Exception exception) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_CAPABILITIES", "Capabilities must be a JSON string array.");
+        }
+    }
+
+    private String validateFeatureSupport(String json) {
+        if (json == null || json.isBlank()) return null;
+        try {
+            JsonNode value = objectMapper.readTree(json);
+            if (value == null || !value.isObject()) throw new IllegalArgumentException();
+            for (String feature : List.of("vision", "thinking", "fast", "reasoningLevels")) {
+                JsonNode state = value.get(feature);
+                if (state != null && (!state.isTextual() || !Set.of("SUPPORTED", "UNSUPPORTED", "UNKNOWN").contains(state.asText()))) {
+                    throw new IllegalArgumentException();
+                }
+            }
+            JsonNode efforts = value.get("reasoningEfforts");
+            if (efforts != null) {
+                if (!efforts.isArray()) throw new IllegalArgumentException();
+                Set<String> allowed = Set.of("NONE", "MINIMAL", "LOW", "MEDIUM", "HIGH", "XHIGH", "MAX");
+                for (JsonNode effort : efforts) if (!effort.isTextual() || !allowed.contains(effort.asText())) throw new IllegalArgumentException();
+            }
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception exception) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_MODEL_FEATURE_SUPPORT",
+                    "Model feature support must be a JSON object with SUPPORTED, UNSUPPORTED, or UNKNOWN values and valid reasoning effort names.");
         }
     }
 
@@ -339,14 +395,27 @@ public class ExternalProviderAdministrationService {
                                     BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Currency currency,
                                     ReasoningEffort reasoningEffort, OpenAiServiceTier serviceTier,
                                     BigDecimal cachedInputPricePerMillion, BigDecimal fastInputPricePerMillion,
-                                    BigDecimal fastCachedInputPricePerMillion, BigDecimal fastOutputPricePerMillion) { }
+                                    BigDecimal fastCachedInputPricePerMillion, BigDecimal fastOutputPricePerMillion,
+                                    String featureSupportJson) {
+        public ModelRegistration(String providerModelId, String displayName, String compatibilityKey,
+                                 Integer contextLength, Integer maxConcurrency, String capabilitiesJson,
+                                 BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Currency currency,
+                                 ReasoningEffort reasoningEffort, OpenAiServiceTier serviceTier,
+                                 BigDecimal cachedInputPricePerMillion, BigDecimal fastInputPricePerMillion,
+                                 BigDecimal fastCachedInputPricePerMillion, BigDecimal fastOutputPricePerMillion) {
+            this(providerModelId, displayName, compatibilityKey, contextLength, maxConcurrency, capabilitiesJson,
+                    inputPricePerMillion, outputPricePerMillion, currency, reasoningEffort, serviceTier,
+                    cachedInputPricePerMillion, fastInputPricePerMillion, fastCachedInputPricePerMillion,
+                    fastOutputPricePerMillion, null);
+        }
+    }
     public record ProviderModelView(UUID id, UUID externalProviderId, String providerModelId, String compatibilityKey,
                                     String displayName, Integer contextLength, boolean enabled, String healthStatus,
                                     int maxConcurrency, String capabilitiesJson, BigDecimal inputPricePerMillion,
                                     BigDecimal outputPricePerMillion, Currency currency, ReasoningEffort reasoningEffort,
                                     OpenAiServiceTier serviceTier, BigDecimal cachedInputPricePerMillion,
                                     BigDecimal fastInputPricePerMillion, BigDecimal fastCachedInputPricePerMillion,
-                                    BigDecimal fastOutputPricePerMillion) {
-        static ProviderModelView from(ModelDeployment item) { return new ProviderModelView(item.getId(), item.getExternalProviderId(), item.getProviderModelId(), item.getCompatibilityKey(), item.getDisplayName(), item.getContextLength(), item.isEnabled(), item.getHealthStatus().name(), item.getMaxConcurrency(), item.getCapabilitiesJson(), item.getProviderInputPricePerMillion(), item.getProviderOutputPricePerMillion(), item.getProviderPriceCurrency(), item.getDefaultReasoningEffort(), item.getDefaultServiceTier(), item.getProviderCachedInputPricePerMillion(), item.getFastInputPricePerMillion(), item.getFastCachedInputPricePerMillion(), item.getFastOutputPricePerMillion()); }
+                                    BigDecimal fastOutputPricePerMillion, String featureSupportJson) {
+        static ProviderModelView from(ModelDeployment item) { return new ProviderModelView(item.getId(), item.getExternalProviderId(), item.getProviderModelId(), item.getCompatibilityKey(), item.getDisplayName(), item.getContextLength(), item.isEnabled(), item.getHealthStatus().name(), item.getMaxConcurrency(), item.getCapabilitiesJson(), item.getProviderInputPricePerMillion(), item.getProviderOutputPricePerMillion(), item.getProviderPriceCurrency(), item.getDefaultReasoningEffort(), item.getDefaultServiceTier(), item.getProviderCachedInputPricePerMillion(), item.getFastInputPricePerMillion(), item.getFastCachedInputPricePerMillion(), item.getFastOutputPricePerMillion(), item.getFeatureSupportJson()); }
     }
 }

@@ -105,17 +105,24 @@ public class SpendQuotaAdminController {
     @Transactional(readOnly = true)
     public QuotaOverview overview(@PathVariable UUID organizationId,
                                   @RequestParam(required = false) LocalDate from,
-                                  @RequestParam(required = false) LocalDate to) {
+                                  @RequestParam(required = false) LocalDate to,
+                                  @RequestParam(defaultValue = "false") boolean all) {
         requireOrganization(organizationId);
         LocalDate end = to == null ? LocalDate.now(ZoneOffset.UTC) : to;
-        LocalDate start = from == null ? end.minusDays(29) : from;
-        if (end.isBefore(start)) throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_USAGE_RANGE",
-                "The quota overview end date must not be before the start date.");
-        Instant fromInstant = start.atStartOfDay().toInstant(ZoneOffset.UTC);
         Instant toExclusive = end.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
         List<Project> organizationProjects = projects.findByOrganizationId(organizationId);
         Map<UUID, Project> projectById = organizationProjects.stream().collect(Collectors.toMap(Project::getId, Function.identity()));
         List<UUID> projectIds = new ArrayList<>(projectById.keySet());
+        LocalDate start = from;
+        if (start == null) {
+            start = all && !projectIds.isEmpty() ? requests
+                    .findFirstByProjectIdInAndStartedAtLessThanOrderByStartedAtAsc(projectIds, toExclusive)
+                    .map(row -> row.getStartedAt().atZone(ZoneOffset.UTC).toLocalDate()).orElse(end)
+                    : all ? end : end.minusDays(29);
+        }
+        if (end.isBefore(start)) throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_USAGE_RANGE",
+                "The quota overview end date must not be before the start date.");
+        Instant fromInstant = start.atStartOfDay().toInstant(ZoneOffset.UTC);
         List<LlmRequest> scopedRequests = projectIds.isEmpty() ? List.of() : requests
                 .findByProjectIdInAndStartedAtAfter(projectIds, fromInstant.minusNanos(1)).stream()
                 .filter(row -> row.getStartedAt() != null && row.getStartedAt().isBefore(toExclusive))

@@ -6,89 +6,88 @@ import type { DocPage, DocsDestination } from './types'
 defineProps<{ page: DocPage }>()
 const emit = defineEmits<{ navigate: [target: DocsDestination] }>()
 const copied = ref('')
-
+const copyError = ref('')
 async function copyCode(code: string, key: string) {
+  copyError.value = ''
   try {
     await copyText(code)
     copied.value = key
     window.setTimeout(() => { if (copied.value === key) copied.value = '' }, 1600)
-  } catch {
-    copied.value = ''
-  }
+  } catch { copied.value = ''; copyError.value = '복사하지 못했습니다. 코드 영역에서 직접 선택해 복사해 주세요.' }
 }
 </script>
 
 <template>
   <article class="doc-article">
-    <header class="article-hero">
-      <div class="article-icon">{{ page.icon }}</div>
-      <div>
-        <div class="article-meta"><span>{{ page.group }}</span><i>·</i><span>{{ page.audience }}</span><i>·</i><span>약 {{ page.minutes }}분</span></div>
-        <h1>{{ page.title }}</h1>
-        <p>{{ page.description }}</p>
-      </div>
+    <header class="article-header">
+      <p class="article-meta"><span>{{ page.group }}</span><span>{{ page.audience }}</span><span>약 {{ page.minutes }}분</span></p>
+      <h2>{{ page.title }}</h2><p class="article-lead">{{ page.description }}</p>
     </header>
 
-    <section v-for="(section, sectionIndex) in page.sections" :id="`doc-section-${section.id}`" :key="section.id" class="article-section">
-      <header class="section-heading">
-        <span>{{ String(sectionIndex + 1).padStart(2, '0') }}</span>
-        <div><h2>{{ section.title }}</h2><p v-if="section.description">{{ section.description }}</p></div>
-      </header>
-
+    <section v-for="(section, sectionIndex) in page.sections" :id="'doc-section-' + section.id" :key="section.id" class="article-section">
+      <header class="section-heading"><span aria-hidden="true">{{ String(sectionIndex + 1).padStart(2, '0') }}</span><div><h3>{{ section.title }}</h3><p v-if="section.description">{{ section.description }}</p></div></header>
       <div class="section-content">
-        <template v-for="(block, blockIndex) in section.blocks" :key="`${section.id}-${blockIndex}`">
+        <template v-for="(block, blockIndex) in section.blocks" :key="section.id + '-' + blockIndex">
           <p v-if="block.type === 'paragraph'" class="body-copy">{{ block.text }}</p>
-
-          <aside v-else-if="block.type === 'callout'" class="callout" :class="block.tone">
-            <span>{{ block.tone === 'danger' ? '!' : block.tone === 'warning' ? '△' : block.tone === 'success' ? '✓' : 'i' }}</span>
-            <div><strong>{{ block.title }}</strong><p>{{ block.text }}</p></div>
-          </aside>
-
-          <ol v-else-if="block.type === 'steps'" class="steps-list">
-            <li v-for="(item, itemIndex) in block.items" :key="item.title">
-              <span>{{ itemIndex + 1 }}</span>
-              <div><strong>{{ item.title }}</strong><p>{{ item.text }}</p><button v-if="item.action" class="inline-action" @click="emit('navigate', item.action.destination)">{{ item.action.label }} →</button></div>
-            </li>
-          </ol>
-
-          <ul v-else-if="block.type === 'checklist'" class="check-list">
-            <li v-for="item in block.items" :key="item"><span>✓</span>{{ item }}</li>
-          </ul>
-
-          <div v-else-if="block.type === 'cards'" class="docs-cards">
-            <article v-for="item in block.items" :key="item.title"><span v-if="item.label">{{ item.label }}</span><h3>{{ item.title }}</h3><p>{{ item.text }}</p></article>
-          </div>
-
-          <div v-else-if="block.type === 'flow'" class="docs-flow" role="img" :aria-label="block.items.map(item => item.title).join('에서 ')">
-            <template v-for="(item, itemIndex) in block.items" :key="item.title">
-              <article><span>{{ item.label }}</span><strong>{{ item.title }}</strong><small>{{ item.text }}</small></article>
-              <i v-if="itemIndex < block.items.length - 1">→</i>
-            </template>
-          </div>
-
-          <div v-else-if="block.type === 'table'" class="docs-table-wrap">
-            <table><thead><tr><th v-for="column in block.columns" :key="column">{{ column }}</th></tr></thead><tbody><tr v-for="(row, rowIndex) in block.rows" :key="rowIndex"><td v-for="(cell, cellIndex) in row" :key="cellIndex">{{ cell }}</td></tr></tbody></table>
-          </div>
-
-          <div v-else-if="block.type === 'code'" class="code-panel">
-            <header><div><span>{{ block.language }}</span><strong>{{ block.title }}</strong></div><button @click="copyCode(block.code, `${section.id}-${blockIndex}`)">{{ copied === `${section.id}-${blockIndex}` ? '복사됨' : '코드 복사' }}</button></header>
-            <pre><code>{{ block.code }}</code></pre>
-          </div>
-
-          <div v-else-if="block.type === 'links'" class="link-list">
-            <a v-for="item in block.items" :key="item.href" :href="item.href" target="_blank" rel="noreferrer"><span>↗</span><div><strong>{{ item.label }}</strong><small>{{ item.description }}</small></div></a>
-          </div>
+          <aside v-else-if="block.type === 'callout'" class="doc-callout" :class="block.tone"><strong>{{ block.title }}</strong><p>{{ block.text }}</p></aside>
+          <ol v-else-if="block.type === 'steps'" class="steps-list"><li v-for="item in block.items" :key="item.title"><strong>{{ item.title }}</strong><p>{{ item.text }}</p><button v-if="item.action" type="button" class="inline-action" @click="emit('navigate', item.action.destination)">{{ item.action.label }} →</button></li></ol>
+          <ul v-else-if="block.type === 'checklist'" class="check-list"><li v-for="item in block.items" :key="item"><span aria-hidden="true">✓</span><span>{{ item }}</span></li></ul>
+          <div v-else-if="block.type === 'cards'" class="doc-summaries"><div v-for="item in block.items" :key="item.title"><span v-if="item.label">{{ item.label }}</span><h4>{{ item.title }}</h4><p>{{ item.text }}</p></div></div>
+          <ol v-else-if="block.type === 'flow'" class="doc-flow" aria-label="처리 순서"><li v-for="item in block.items" :key="item.title"><span>{{ item.label }}</span><div><strong>{{ item.title }}</strong><p>{{ item.text }}</p></div></li></ol>
+          <div v-else-if="block.type === 'table'" class="docs-table-wrap" role="region" :aria-label="section.title + ' 표 ' + (blockIndex + 1)" tabindex="0"><table><thead><tr><th v-for="column in block.columns" :key="column" scope="col">{{ column }}</th></tr></thead><tbody><tr v-for="(row, rowIndex) in block.rows" :key="rowIndex"><td v-for="(cell, cellIndex) in row" :key="cellIndex">{{ cell }}</td></tr></tbody></table></div>
+          <div v-else-if="block.type === 'code'" class="code-panel"><header><div><span>{{ block.language }}</span><strong>{{ block.title }}</strong></div><button type="button" @click="copyCode(block.code, section.id + '-' + blockIndex)">{{ copied === section.id + '-' + blockIndex ? '복사됨' : '코드 복사' }}</button></header><pre tabindex="0" :aria-label="block.title + ' 코드'"><code>{{ block.code }}</code></pre></div>
+          <ul v-else-if="block.type === 'links'" class="link-list"><li v-for="item in block.items" :key="item.href"><a :href="item.href" target="_blank" rel="noopener noreferrer">{{ item.label }} ↗</a><p>{{ item.description }}</p></li></ul>
         </template>
       </div>
     </section>
+    <p v-if="copyError" class="copy-error" role="status">{{ copyError }}</p>
   </article>
 </template>
 
 <style scoped>
-.doc-article{min-width:0;padding:0 0 70px}.article-hero{position:relative;overflow:hidden;display:grid;grid-template-columns:58px minmax(0,1fr);gap:22px;padding:38px;border:1px solid var(--accent-border);border-radius:22px;background:radial-gradient(circle at 92% 0,var(--accent-dim),transparent 32%),linear-gradient(135deg,var(--surface),var(--surface-2))}.article-hero:after{content:'';position:absolute;right:-90px;bottom:-120px;width:250px;height:250px;border:1px solid var(--accent-border);border-radius:50%;box-shadow:0 0 0 32px color-mix(in srgb,var(--accent-dim) 55%,transparent)}.article-icon{position:relative;z-index:1;width:58px;height:58px;display:grid;place-items:center;border:1px solid var(--accent-border);border-radius:17px;background:var(--accent-dim);color:var(--accent-strong);font:800 20px 'Space Grotesk',sans-serif}.article-hero>div:last-child{position:relative;z-index:1}.article-meta{display:flex;flex-wrap:wrap;gap:8px;color:var(--accent-strong);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}.article-meta i{color:var(--faint);font-style:normal}.article-hero h1{margin:12px 0 11px;font-size:clamp(30px,4vw,50px);letter-spacing:-.055em;line-height:1.04}.article-hero p{max-width:740px;margin:0;color:var(--text-soft);font-size:14px;line-height:1.75}.article-section{scroll-margin-top:92px;padding:48px 5px 0}.section-heading{display:grid;grid-template-columns:38px 1fr;gap:13px;align-items:start;margin-bottom:20px}.section-heading>span{padding-top:5px;color:var(--accent-strong);font:800 10px 'Space Grotesk',sans-serif;letter-spacing:.12em}.section-heading h2{margin:0;font-size:clamp(21px,2.5vw,29px);letter-spacing:-.035em}.section-heading p{margin:7px 0 0;color:var(--muted);font-size:12px}.section-content{display:grid;gap:15px;padding-left:51px}.body-copy{margin:0;color:var(--text-soft);font-size:13px;line-height:1.85}.callout{display:grid;grid-template-columns:30px 1fr;gap:12px;padding:16px 17px;border:1px solid var(--accent-border);border-radius:14px;background:var(--accent-dim)}.callout>span{width:28px;height:28px;display:grid;place-items:center;border-radius:9px;background:var(--surface);color:var(--accent-strong);font-weight:900}.callout strong{font-size:12px}.callout p{margin:5px 0 0;color:var(--text-soft);font-size:11px;line-height:1.7}.callout.warning{border-color:color-mix(in srgb,#d89528 45%,var(--border));background:color-mix(in srgb,#d89528 10%,var(--surface))}.callout.warning>span{color:#c27a10}.callout.danger{border-color:color-mix(in srgb,var(--danger) 45%,var(--border));background:color-mix(in srgb,var(--danger) 8%,var(--surface))}.callout.danger>span{color:var(--danger)}.callout.success{border-color:var(--accent-border)}.steps-list{display:grid;gap:10px;margin:0;padding:0;list-style:none}.steps-list li{display:grid;grid-template-columns:34px 1fr;gap:13px;padding:15px;border:1px solid var(--border);border-radius:14px;background:var(--surface)}.steps-list li>span{width:31px;height:31px;display:grid;place-items:center;border-radius:10px;background:var(--accent-dim);color:var(--accent-strong);font-size:11px;font-weight:900}.steps-list strong{font-size:12px}.steps-list p{margin:5px 0 0;color:var(--muted);font-size:11px;line-height:1.65}.inline-action{margin-top:9px;padding:0;border:0;background:transparent;color:var(--accent-strong);font-size:10px;font-weight:800}.check-list{display:grid;gap:8px;margin:0;padding:0;list-style:none}.check-list li{display:grid;grid-template-columns:23px 1fr;gap:10px;align-items:center;padding:11px 13px;border:1px solid var(--border);border-radius:11px;background:var(--surface);color:var(--text-soft);font-size:11px;line-height:1.55}.check-list span{width:21px;height:21px;display:grid;place-items:center;border-radius:7px;background:var(--accent-dim);color:var(--accent-strong);font-weight:900}.docs-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.docs-cards article{padding:17px;border:1px solid var(--border);border-radius:14px;background:var(--surface)}.docs-cards span{color:var(--accent-strong);font-size:9px;font-weight:900;letter-spacing:.12em}.docs-cards h3{margin:10px 0 6px;font-size:13px}.docs-cards p{margin:0;color:var(--muted);font-size:10px;line-height:1.65}.docs-flow{display:flex;align-items:stretch;gap:8px}.docs-flow article{min-width:0;flex:1;padding:15px;border:1px solid var(--accent-border);border-radius:14px;background:linear-gradient(145deg,var(--surface),var(--accent-dim))}.docs-flow article span{display:inline-grid;min-width:26px;height:24px;padding:0 7px;place-items:center;border-radius:7px;background:var(--accent-dim);color:var(--accent-strong);font-size:9px;font-weight:900}.docs-flow strong,.docs-flow small{display:block}.docs-flow strong{margin-top:13px;font-size:11px}.docs-flow small{margin-top:5px;color:var(--muted);font-size:9px;line-height:1.55}.docs-flow>i{align-self:center;color:var(--accent-strong);font-style:normal}.docs-table-wrap{overflow:auto;border:1px solid var(--border);border-radius:14px;background:var(--surface)}table{width:100%;border-collapse:collapse;font-size:10px}th,td{padding:12px 14px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top;line-height:1.55}th{background:var(--surface-2);color:var(--muted);font-size:9px;letter-spacing:.04em}td{color:var(--text-soft)}tbody tr:last-child td{border-bottom:0}td:first-child{color:var(--text);font-weight:800}.code-panel{overflow:hidden;border:1px solid var(--border);border-radius:15px;background:#0d1713;color:#d8efe2}.code-panel header{display:flex;justify-content:space-between;align-items:center;padding:10px 13px;border-bottom:1px solid rgba(190,255,214,.12);background:#111f19}.code-panel header>div{display:flex;align-items:center;gap:9px}.code-panel header span{padding:4px 7px;border-radius:6px;background:rgba(113,255,162,.1);color:#7ff1a5;font-size:8px;font-weight:900;text-transform:uppercase}.code-panel header strong{font-size:10px}.code-panel button{padding:5px 8px;border:1px solid rgba(190,255,214,.17);border-radius:7px;background:transparent;color:#a8c8b4;font-size:8px}.code-panel pre{overflow:auto;margin:0;padding:18px;font-size:10px;line-height:1.75;tab-size:2}.code-panel code{font-family:'JetBrains Mono','Cascadia Code',monospace}.link-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.link-list a{display:grid;grid-template-columns:28px 1fr;gap:10px;align-items:center;padding:13px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--text);text-decoration:none}.link-list a:hover{border-color:var(--accent-border);background:var(--accent-dim)}.link-list a>span{color:var(--accent-strong);font-weight:900}.link-list strong,.link-list small{display:block}.link-list strong{font-size:11px}.link-list small{margin-top:3px;color:var(--muted);font-size:9px}@media(max-width:850px){.article-hero{grid-template-columns:1fr;padding:27px}.article-icon{width:48px;height:48px}.section-content{padding-left:0}.docs-cards{grid-template-columns:1fr}.docs-flow{display:grid;grid-template-columns:1fr}.docs-flow>i{justify-self:center;transform:rotate(90deg)}.link-list{grid-template-columns:1fr}}@media(max-width:560px){.article-section{padding-top:35px}.section-heading{grid-template-columns:28px 1fr}.article-hero h1{font-size:30px}}
-.doc-article .article-hero { padding: 27px 29px; border-color: var(--border); border-radius: 14px; background: var(--surface); box-shadow: none; }
-.doc-article .article-hero:after { display: none; }
-.doc-article .article-icon { border-radius: 10px; background: var(--surface-2); }
-.doc-article .docs-flow article { border-color: var(--border); border-radius: 10px; background: var(--surface); }
-.doc-article .docs-cards article { border-radius: 10px; }
+.doc-article{min-width:0;overflow-wrap:anywhere}
+.article-header{padding-bottom:28px;border-bottom:1px solid var(--border)}
+.article-meta{display:flex;flex-wrap:wrap;gap:14px;margin:0 0 12px;color:var(--muted);font-size:11px;line-height:1.6}
+.article-header h2{margin:0 0 14px;font-size:30px;font-weight:750;letter-spacing:-.035em;line-height:1.3}
+.article-lead{margin:0;color:var(--text-soft);font-size:15px;line-height:1.8}
+.article-section{padding-top:34px;scroll-margin-top:88px}
+.section-heading{display:grid;grid-template-columns:26px minmax(0,1fr);gap:9px;align-items:baseline;margin-bottom:20px}
+.section-heading>span{color:var(--accent-strong);font:700 10px 'Space Grotesk',sans-serif}
+.section-heading h3{margin:0;color:var(--text);font-size:20px;line-height:1.5;letter-spacing:-.02em}
+.section-heading p{margin:7px 0 0;color:var(--muted);font-size:13px;line-height:1.7}
+.section-content{display:grid;gap:20px;min-width:0}
+.body-copy{margin:0;color:var(--text-soft);font-size:14px;line-height:1.9}
+.doc-callout{border:0;border-left:3px solid var(--accent-strong);padding:14px 18px;background:var(--surface-2)}
+.doc-callout strong{font-size:13px;line-height:1.7}.doc-callout p{margin:6px 0 0;color:var(--text-soft);font-size:13px;line-height:1.8}
+.doc-callout.warning{border-left-color:var(--warning)}.doc-callout.danger{border-left-color:var(--danger)}
+.steps-list{display:grid;gap:20px;margin:0;padding:0 0 0 24px;color:var(--text-soft);font-size:14px}
+.steps-list li{padding-left:7px}.steps-list li::marker{color:var(--accent-strong);font-weight:700}
+.steps-list strong{color:var(--text);font-size:14px}.steps-list p{margin:5px 0 0;font-size:13px;line-height:1.8}
+.inline-action{display:inline-block;margin-top:8px;border:0;border-bottom:1px solid var(--accent-border);border-radius:0;padding:3px 0;background:transparent;color:var(--accent-strong);font-size:12px;line-height:1.6;text-align:left}
+.inline-action:hover{border-bottom-color:var(--accent-strong)}
+.check-list{display:grid;gap:11px;margin:0;padding:0;list-style:none}
+.check-list li{display:grid;grid-template-columns:16px minmax(0,1fr);gap:10px;color:var(--text-soft);font-size:13px;line-height:1.8}.check-list li>span:first-child{color:var(--accent-strong)}
+.doc-summaries{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px}
+.doc-summaries>div{padding-top:13px;border-top:2px solid var(--accent-border)}.doc-summaries>div>span{color:var(--accent-strong);font-size:9px;letter-spacing:.1em;font-weight:700}
+.doc-summaries h4{margin:8px 0;font-size:14px;line-height:1.6}.doc-summaries p{margin:0;color:var(--text-soft);font-size:12px;line-height:1.8}
+.doc-flow{margin:0;padding:0;list-style:none;display:grid}
+.doc-flow li{display:grid;grid-template-columns:60px minmax(0,1fr);gap:14px;padding:0 0 20px;position:relative}
+.doc-flow li:last-child{padding-bottom:0}.doc-flow li:not(:last-child)::before{content:'';position:absolute;left:28px;top:24px;bottom:5px;border-left:1px solid var(--accent-border)}
+.doc-flow li>span{color:var(--accent-strong);font-size:10px;font-weight:800;line-height:2;text-align:center}
+.doc-flow strong{font-size:14px;line-height:1.6}.doc-flow p{margin:5px 0 0;color:var(--text-soft);font-size:12px;line-height:1.8}
+.docs-table-wrap{width:100%;min-width:0;overflow:auto;border-block:1px solid var(--border);scrollbar-width:thin}
+table{width:100%;min-width:490px;border-collapse:collapse;table-layout:auto}
+th,td{padding:13px 14px;text-align:left;vertical-align:top;border-bottom:1px solid var(--border);font-size:12px;line-height:1.8}
+th{color:var(--muted);background:var(--surface-2);font-size:11px;font-weight:700}td{color:var(--text-soft)}td:first-child{font-weight:600;color:var(--text)}tbody tr:last-child td{border-bottom:0}
+.code-panel{min-width:0;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--surface)}
+.code-panel header{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--border);background:var(--surface-2)}
+.code-panel header>div{min-width:0;display:flex;gap:10px;flex-wrap:wrap;align-items:baseline}
+.code-panel header span{color:var(--accent-strong);font-size:10px;text-transform:uppercase}.code-panel header strong{font-size:12px}
+.code-panel button{flex-shrink:0;min-height:30px;padding:4px 8px;border:1px solid var(--border-strong);border-radius:4px;background:transparent;color:var(--text-soft);font-size:11px}
+.code-panel pre{max-width:100%;overflow:auto;margin:0;padding:18px;font-size:12px;line-height:1.8;tab-size:2;color:var(--text-soft);scrollbar-width:thin}
+.code-panel code{font-family:'JetBrains Mono','Cascadia Code',monospace}
+.link-list{list-style:none;margin:0;padding:0;display:grid;gap:16px}.link-list a{color:var(--accent-strong);font-size:13px;text-underline-offset:4px}.link-list p{margin:5px 0 0;color:var(--muted);font-size:12px;line-height:1.7}
+.copy-error{color:var(--danger);font-size:12px;line-height:1.7}
+@media(max-width:1100px){.doc-summaries{grid-template-columns:minmax(0,1fr);gap:18px}}
+@media(max-width:560px){.article-header h2{font-size:25px}.article-lead{font-size:14px}.section-heading h3{font-size:18px}.body-copy{font-size:13px}.doc-callout{padding:12px 14px}.article-section{padding-top:28px}.code-panel header{padding:10px}.code-panel pre{padding:12px;font-size:11px}.doc-flow li{grid-template-columns:45px minmax(0,1fr);gap:10px}.doc-flow li:not(:last-child)::before{left:21px}}
 </style>

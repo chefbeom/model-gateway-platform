@@ -39,7 +39,7 @@ const auth = computed<AdminAuth>(() => ({ accessToken: sessionStorage.getItem('a
 const adminNavItems: NavItem[] = [
   { id: 'dashboard', label: '대시보드', description: '요청·장애·런타임 핵심 지표', keywords: 'overview health dashboard', icon: '◔', group: '운영' },
   { id: 'infrastructure', label: '인프라스트럭처', description: '노드·Runtime·배포 모델', keywords: 'server gpu lm studio endpoint model', icon: '◇', group: '운영' },
-  { id: 'system', label: 'System Structure', description: 'Infrastructure / AI / Access map', keywords: 'architecture structure topology infrastructure provider llm team project api key', icon: '~', group: 'Operations' },
+  { id: 'system', label: '시스템 구조', description: '요청 경로 · Target · 서버 연결 상태', keywords: '시스템 구조 연결도 상태 architecture structure topology infrastructure provider llm team project api key', icon: '~', group: 'Operations' },
   { id: 'external', label: '외부 AI', description: 'OpenAI·승인·수동·자동 Failover', keywords: 'openai external provider cloud approval failover', icon: '◎', group: '운영' },
   { id: 'services', label: 'LLM 서비스', description: '논리 모델과 라우팅 정책', keywords: 'service model failover routing', icon: '▣', group: '운영' },
   { id: 'teams', label: '팀과 부서', description: '부서·역할·프로젝트 소유', keywords: 'team department role audit', icon: '⌘', group: '개발자 도구' },

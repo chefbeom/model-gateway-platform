@@ -2,6 +2,8 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import BaseModal from './BaseModal.vue'
 import ModelOperationsPanel from './ModelOperationsPanel.vue'
+import ModelFeatureBadges from './ModelFeatureBadges.vue'
+import ModelFeatureSupportManager from './ModelFeatureSupportManager.vue'
 import { adminFetch, type AdminAuth, type Deployment, type Endpoint, type RuntimeType } from './api'
 
 const props = defineProps<{ organizationId: string; auth: AdminAuth }>()
@@ -367,6 +369,7 @@ function openAccelerator(device?: Accelerator | Event) {
 
 function openDeployment(deployment: Deployment) { inspectingDeployment.value = deployment; deploymentDetailOpen.value = true }
 function openDeploymentPricing(deployment: Deployment) { editing.value = { ...deployment, currency: deployment.currency ?? 'KRW' }; deploymentPricingOpen.value = true }
+function saveDeploymentFeatureSupport(model: { id:string; featureSupportJson?:string|null }) { deployments.value=deployments.value.map(item=>item.id===model.id?{...item,featureSupportJson:model.featureSupportJson}:item) }
 async function saveDeployment() {
   if (!editing.value) return
   busy.value = true
@@ -411,7 +414,8 @@ onMounted(load)
                   <strong>{{ deployment.displayName }}</strong><small class="mono">{{ deployment.providerModelId }}</small>
                   <small class="deployment-variant-summary">{{ deploymentVariantSummary(deployment) }}</small>
                   <dl><div><dt>컨텍스트</dt><dd>{{ deployment.contextLength?.toLocaleString() ?? '확인 불가' }}</dd></div><div><dt>AIConnect 요청 상한</dt><dd>{{ deployment.maxConcurrency }}</dd></div><div><dt>양자화</dt><dd>{{ deployment.quantization ?? '확인 불가' }}</dd></div></dl>
-                  <span class="capability-line">{{ deployment.capabilitiesJson }}</span>
+                  <ModelFeatureBadges :capabilities="deployment.capabilityOverridesJson || deployment.capabilitiesJson" :feature-support-json="deployment.featureSupportJson" />
+                  <span class="capability-line">Capability: {{ deployment.capabilityOverridesJson || deployment.capabilitiesJson }}</span>
                 </button>
                 <div class="deployment-card-actions"><button class="secondary-button deployment-chat-button" :disabled="busy" @click="emit('openPlayground', deployment.id)">Chat 테스트</button><button class="text-button" :disabled="busy" @click="openDeploymentPricing(deployment)">요금·라우팅 설정</button></div>
               </article>
@@ -435,6 +439,7 @@ onMounted(load)
             </div>
             <p class="unavailable-model-note">이 모델들은 현재 로드·호출 후보로 취급하지 않습니다. Runtime이 복구되면 ‘모델 동기화’로 다시 확인할 수 있으며, 기존 논리 서비스 Target은 자동으로 삭제하거나 임의 변경하지 않습니다.</p>
           </details>
+          <ModelFeatureSupportManager v-if="deployments.length" runtime :models="deployments" :auth="auth" @saved="saveDeploymentFeatureSupport" />
           <div v-if="!currentRuntimeDeployments.length && !unavailableDeployments.length" class="empty-state"><span>◈</span><h3>현재 Runtime에서 확인된 모델이 없습니다</h3><p>Runtime 서버에서 모델을 준비한 뒤 ‘모델 동기화’를 실행하세요.</p></div>
           <ModelOperationsPanel :endpoint="selected" :deployments="currentRuntimeDeployments" :auth="auth" @changed="load(selected?.id)" />
         </template>

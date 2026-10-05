@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import { adminFetch, adminResponse, type AdminAuth } from './api'
+import ModelFeatureBadges from './ModelFeatureBadges.vue'
 
 type Target = {
   id: string; sourceId: string; targetType: 'RUNTIME' | 'EXTERNAL_PROVIDER'; providerName: string; protocol: string
   endpointUrl: string; modelId: string; displayName: string; status: string; enabled: boolean; loaded: boolean; loadState: string; canChat: boolean
-  contextLength?: number | null; maxConcurrency: number; capabilities: string[]; inputPricePerMillion?: number | null
+  contextLength?: number | null; maxConcurrency: number; capabilities: string[]; featureSupportJson?: string | null; defaultReasoningEffort?: string | null; defaultServiceTier?: string | null; inputPricePerMillion?: number | null
   outputPricePerMillion?: number | null; currency?: string | null; nodeName?: string | null
 }
 type Trace = {
@@ -16,13 +17,23 @@ type Trace = {
 type Probe = { reachable: boolean; httpStatus: number; latencyMs: number; modelAvailable: boolean; modelCount: number; message?: string | null }
 type Turn = { id: string; role: 'user' | 'assistant'; content: string; files?: string[]; attachmentPayloads?: Attachment[]; status?: string; httpStatus?: number; latencyMs?: number; requestId?: string; inputTokens?: number | null; outputTokens?: number | null; totalTokens?: number | null; stream?: boolean; responseStream?: boolean; error?: string }
 type Attachment = { name: string; mediaType: string; base64: string; messageIndex?: number }
+type SavedTurn = Omit<Turn, 'attachmentPayloads'> & { createdAt: string }
+type SavedConversation = { conversationId: string; targetId: string; targetName: string; modelId: string; title: string; preview: string; messageCount: number; createdAt: string; updatedAt: string }
 
 const props = defineProps<{ organizationId?: string; auth: AdminAuth; initialTargetId?: string }>()
 const targets = ref<Target[]>([])
 const selectedTargetId = ref('')
 const conversation = ref<Turn[]>([])
 const conversationsByTarget = new Map<string, Turn[]>()
+const conversationIdsByTarget = new Map<string, string>()
 const activeConversationTargetId = ref('')
+const activeConversationId = ref('')
+const savedConversations = ref<SavedConversation[]>([])
+const historyQuery = ref('')
+const historyModelFilter = ref('ALL')
+const historyLoading = ref(false)
+const historyError = ref('')
+const restoringConversationId = ref('')
 const prompt = ref('')
 const selectedFiles = ref<File[]>([])
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -76,7 +87,7 @@ function pickInitialTarget() {
   activateTarget(nextTargetId)
 }
 async function load() {
-  if (!props.organizationId) { targets.value = []; traces.value = []; return }
+  if (!props.organizationId) { targets.value = []; traces.value = []; savedConversations.value = []; return }
   loading.value = true
   loadError.value = ''
   try {
@@ -87,6 +98,7 @@ async function load() {
     targets.value = catalog
     traces.value = history
     pickInitialTarget()
+    await loadSavedConversations()
   } catch (error) { loadError.value = error instanceof Error ? error.message : '등록된 모델 목록을 불러오지 못했습니다.' }
   finally { loading.value = false }
 }
@@ -97,6 +109,19 @@ async function loadRequests() {
   catch { /* Chat result remains available even when history refresh fails. */ }
   finally { traceLoading.value = false }
 }
+async function loadSavedConversations() {
+  if (!props.organizationId) { savedConversations.value = []; return }
+  historyLoading.value = true
+  historyError.value = ''
+  try {
+    const query = new URLSearchParams()
+    if (historyQuery.value.trim()) query.set('query', historyQuery.value.trim())
+    const suffix = query.size ? `?${query.toString()}` : ''
+    savedConversations.value = await adminFetch<SavedConversation[]>(apiPath(`conversations${suffix}`), props.auth)
+  } catch (error) {
+    historyError.value = error instanceof Error ? error.message : '저장된 대화를 불러오지 못했습니다.'
+  } finally { historyLoading.value = false }
+}
 function activateTarget(targetId: string, announce = false) {
   const previousTargetId = activeConversationTargetId.value
   if (previousTargetId === targetId) {
@@ -104,12 +129,15 @@ function activateTarget(targetId: string, announce = false) {
     return
   }
   if (previousTargetId) conversationsByTarget.set(previousTargetId, conversation.value)
+  if (previousTargetId && activeConversationId.value) conversationIdsByTarget.set(previousTargetId, activeConversationId.value)
   activeConversationTargetId.value = targetId
   selectedTargetId.value = targetId
   conversation.value = targetId ? [...(conversationsByTarget.get(targetId) ?? [])] : []
+  activeConversationId.value = targetId ? (conversationIdsByTarget.get(targetId) ?? '') : ''
   selectedFiles.value = []
   if (fileInput.value) fileInput.value.value = ''
   connection.value = null
+  if (announce) void loadSavedConversations()
   if (announce && previousTargetId && targetId) {
     notice.value = '모델별 대화는 분리되어 있습니다. 이전 대화와 첨부 파일은 새 모델로 전송되지 않습니다. 다른 모델에서 파일을 테스트하려면 다시 첨부하세요.'
   }
@@ -117,7 +145,9 @@ function activateTarget(targetId: string, announce = false) {
 function onTargetChanged() { activateTarget(selectedTargetId.value, true) }
 function resetPlaygroundSession() {
   conversationsByTarget.clear()
+  conversationIdsByTarget.clear()
   activeConversationTargetId.value = ''
+  activeConversationId.value = ''
   selectedTargetId.value = ''
   conversation.value = []
   selectedFiles.value = []
@@ -129,10 +159,62 @@ function loadStateLabel(state: string) {
 }
 function clearConversation() {
   conversation.value = []
-  if (activeConversationTargetId.value) conversationsByTarget.set(activeConversationTargetId.value, conversation.value)
+  if (activeConversationTargetId.value) {
+    conversationsByTarget.set(activeConversationTargetId.value, conversation.value)
+    conversationIdsByTarget.delete(activeConversationTargetId.value)
+  }
+  activeConversationId.value = ''
   selectedFiles.value = []
   if (fileInput.value) fileInput.value.value = ''
-  notice.value = '현재 모델의 대화와 첨부 기록을 초기화했습니다.'
+  notice.value = '새 대화를 시작합니다. 이전 대화는 저장된 대화 목록에서 계속 확인할 수 있습니다.'
+}
+async function restoreConversation(item: SavedConversation) {
+  if (sending.value) return
+  restoringConversationId.value = item.conversationId
+  historyError.value = ''
+  try {
+    const detail = await adminFetch<{ conversation: SavedConversation; turns: SavedTurn[] }>(apiPath(`conversations/${item.conversationId}`), props.auth)
+    const target = targets.value.find(candidate => candidate.id === detail.conversation.targetId)
+    if (target) activateTarget(target.id)
+    else {
+      if (activeConversationTargetId.value) {
+        conversationsByTarget.set(activeConversationTargetId.value, conversation.value)
+        if (activeConversationId.value) conversationIdsByTarget.set(activeConversationTargetId.value, activeConversationId.value)
+      }
+      selectedTargetId.value = ''
+      activeConversationTargetId.value = detail.conversation.targetId
+    }
+    activeConversationId.value = item.conversationId
+    conversationIdsByTarget.set(detail.conversation.targetId, item.conversationId)
+    conversation.value = detail.turns.map(turn => ({ ...turn, id: turn.id || newTurnId(), role: turn.role === 'assistant' ? 'assistant' : 'user' }))
+    selectedFiles.value = []
+    if (fileInput.value) fileInput.value.value = ''
+    connection.value = null
+    conversation.value = conversation.value.map(turn => turn.status === 'IN_PROGRESS'
+      ? { ...turn, status: 'FAILED', error: turn.error || '서버 응답이 완료되기 전에 연결이 끊겼습니다.' }
+      : turn)
+    conversationsByTarget.set(detail.conversation.targetId, conversation.value)
+    notice.value = !target
+      ? '저장된 기록은 열렸지만 해당 모델은 현재 등록되어 있지 않아 읽기 전용입니다.'
+      : conversation.value.some(turn => turn.files?.length)
+        ? '저장된 대화를 불러왔습니다. 첨부 파일 원본은 저장되지 않아 이어서 질문할 때 파일을 다시 첨부해야 합니다.'
+        : '저장된 대화를 불러왔습니다.'
+    await nextTick(() => { if (chatPane.value) chatPane.value.scrollTop = chatPane.value.scrollHeight })
+  } catch (error) {
+    historyError.value = error instanceof Error ? error.message : '대화를 불러오지 못했습니다.'
+  } finally { restoringConversationId.value = '' }
+}
+async function deleteSavedConversation(item: SavedConversation) {
+  if (sending.value || !globalThis.confirm(`${item.title || item.modelId} 대화를 영구 삭제할까요?`)) return
+  try {
+    const response = await adminResponse(apiPath(`conversations/${item.conversationId}`), props.auth, { method: 'DELETE' })
+    if (!response.ok) throw new Error(`대화를 삭제하지 못했습니다. (HTTP ${response.status})`)
+    if (activeConversationId.value === item.conversationId) clearConversation()
+    await loadSavedConversations()
+    notice.value = '대화 기록을 삭제했습니다.'
+  } catch (error) {
+    historyError.value = error instanceof Error ? error.message : '대화 삭제에 실패했습니다.'
+  }
 }
 async function checkConnection() {
   if (!selectedTarget.value || !props.organizationId) return
@@ -304,6 +386,7 @@ async function send() {
       maxCompletionTokens: requestMaxCompletionTokens,
       responseMode: requestResponseMode
     }
+    if (activeConversationId.value) body.conversationId = activeConversationId.value
     if (useTemperature) body.temperature = requestTemperature
     const response = await adminResponse(`/api/admin/organizations/${organizationId}/playground/chat`, props.auth, {
       method: 'POST',
@@ -312,6 +395,11 @@ async function send() {
     })
     assistantTurn.httpStatus = response.status
     assistantTurn.requestId = response.headers.get('X-Request-Id') ?? undefined
+    const savedConversationId = response.headers.get('X-Playground-Conversation-Id')
+    if (savedConversationId) {
+      activeConversationId.value = savedConversationId
+      conversationIdsByTarget.set(targetId, savedConversationId)
+    }
     assistantTurn.latencyMs = Math.round(performance.now() - started)
     if (!response.ok) {
       const errorBody = await parseResponse(response)
@@ -341,6 +429,7 @@ async function send() {
   } finally {
     sending.value = false
     await loadRequests()
+    await loadSavedConversations()
     await nextTick(() => { if (chatPane.value) chatPane.value.scrollTop = chatPane.value.scrollHeight })
   }
 }
@@ -366,7 +455,7 @@ watch(() => [props.organizationId, props.initialTargetId], () => { resetPlaygrou
       <div class="playground-top-actions"><button class="secondary-button" :disabled="loading || sending" @click="load">{{ loading ? '불러오는 중…' : '새로고침' }}</button><button class="secondary-button" :disabled="!conversation.length || sending" @click="clearConversation">새 대화</button></div>
     </div>
 
-    <div class="model-playground-warning"><strong>직접 테스트 안내</strong><span>이 경로는 관리자 직접 호출이며 프로젝트 권한·총량제·데이터 보호 정책을 거치지 않습니다. 프롬프트와 파일 내용은 저장하지 않으며, 테스트 메타데이터만 <code>PLAYGROUND</code> 이력으로 기록합니다. 민감한 운영 데이터는 입력하지 마세요.</span></div>
+    <div class="model-playground-warning"><strong>직접 테스트 안내</strong><span>이 경로는 관리자 직접 호출이며 프로젝트 권한·총량제·데이터 보호 정책을 거치지 않습니다. 대화 본문은 암호화 저장되며 조직 및 로그인 사용자 범위로 조회가 제한됩니다. 공용 Platform Admin 토큰은 같은 조직의 토큰 사용자 간 기록이 공유됩니다. 첨부 원본 파일은 저장하지 않고 파일명만 남깁니다(모델 응답에 파일 내용이 포함되면 그 응답은 대화 기록에 암호화 저장됩니다). 기록은 직접 삭제하기 전까지 보관되므로 민감한 운영 데이터는 입력하지 마세요.</span></div>
 
     <div v-if="loadError" class="inline-alert error-alert">{{ loadError }}</div>
     <article v-if="!organizationId" class="surface-card playground-empty"><strong>조직을 선택하세요</strong><p>조직에 등록된 Runtime, Deployment와 외부 Provider 모델을 불러옵니다.</p></article>
@@ -383,6 +472,7 @@ watch(() => [props.organizationId, props.initialTargetId], () => { resetPlaygrou
           <div class="target-info-row"><span>Context · 동시성</span><b>{{ selectedTarget.contextLength?.toLocaleString() ?? '-' }} · {{ selectedTarget.maxConcurrency }}</b></div>
           <div class="target-info-row"><span>요금표</span><b>{{ costLabel(selectedTarget) }}</b></div>
           <div class="target-capabilities"><span v-for="capability in selectedTarget.capabilities" :key="capability" class="capability-pill">{{ capability }}</span><span v-if="!selectedTarget.capabilities.length" class="muted">Capability 정보 없음</span></div>
+          <ModelFeatureBadges :capabilities="selectedTarget.capabilities" :feature-support-json="selectedTarget.featureSupportJson" :reasoning-effort="selectedTarget.defaultReasoningEffort" :service-tier="selectedTarget.defaultServiceTier" />
           <p v-if="selectedTarget.targetType === 'RUNTIME' && !selectedTarget.loaded" class="target-warning">모델 상태가 LOADED가 아닙니다. Runtime에 모델을 준비한 뒤에도 테스트 요청은 실행되며, 실제 오류를 그대로 표시합니다.</p>
           <p v-if="!selectedTarget.canChat" class="target-warning">이 후보는 현재 채팅 대상이 아닙니다. Infrastructure에서 모델을 로드하고 동기화하면 활성 테스트 목록으로 이동합니다.</p>
           <button class="secondary-button full-width" :disabled="probing" @click="checkConnection">{{ probing ? '확인 중…' : '연결 및 모델 확인' }}</button>
@@ -394,7 +484,7 @@ watch(() => [props.organizationId, props.initialTargetId], () => { resetPlaygrou
       <main class="surface-card chat-playground">
         <header class="chat-playground-header"><div><span class="card-kicker">LIVE MODEL SESSION</span><h2>{{ selectedTarget?.displayName ?? '모델을 선택하세요' }}</h2><small>{{ selectedTarget ? `${selectedTarget.providerName} · ${selectedTarget.endpointUrl}` : '테스트할 모델을 왼쪽에서 선택하세요.' }}</small></div><div class="chat-header-controls"><div class="stream-control"><label class="stream-toggle"><input v-model="stream" type="checkbox" :disabled="sending" /><span>{{ stream ? '스트리밍 (SSE)' : '일반 응답 (JSON)' }}</span></label><small>{{ stream ? '응답 토큰을 생성되는 대로 표시합니다. 생성 속도가 빨라지는 것은 아니며 SSE 호환 서버가 필요합니다.' : '응답이 끝난 뒤 한 번에 표시합니다. 기본 권장 모드입니다.' }}</small></div><button class="secondary-button" :disabled="!selectedTarget || probing" @click="checkConnection">연결 확인</button></div></header>
         <div ref="chatPane" class="chat-transcript" aria-live="polite">
-          <div v-if="!conversation.length" class="chat-welcome"><span>◈</span><strong>실제 모델에 테스트 요청을 보내세요</strong><p>대화는 현재 화면 메모리에만 유지됩니다. 선택 모델은 변경하지 않고 정확한 등록 모델 ID로 호출합니다.</p></div>
+          <div v-if="!conversation.length" class="chat-welcome"><span>◈</span><strong>실제 모델에 테스트 요청을 보내세요</strong><p>대화 본문은 암호화되어 저장됩니다. 파일 원본은 저장하지 않습니다.</p></div>
           <article v-for="turn in conversation" :key="turn.id" class="chat-turn" :class="[turn.role, { failed: turn.status === 'FAILED' }]">
             <div class="chat-turn-avatar">{{ turn.role === 'user' ? 'ME' : 'AI' }}</div>
             <div class="chat-turn-body"><div class="chat-turn-heading"><strong>{{ turn.role === 'user' ? '사용자' : '모델 응답' }}</strong><span v-if="turn.status" :class="turn.status === 'FAILED' ? 'bad' : turn.status === 'SUCCEEDED' ? 'good' : ''">{{ turn.status }}</span></div>
@@ -417,7 +507,22 @@ watch(() => [props.organizationId, props.initialTargetId], () => { resetPlaygrou
       </main>
     </div>
 
-    <details class="surface-card playground-history"><summary><span><b>PLAYGROUND 요청 이력</b><small>요청 내용과 파일은 저장하지 않습니다. 화면에는 최근 50건의 상태 메타데이터가 표시됩니다.</small></span><i>{{ traceLoading ? '갱신 중…' : `${traces.length}건` }}</i></summary><div v-if="traces.length" class="playground-history-table"><div class="playground-history-row history-heading"><span>시간 / 모델</span><span>상태</span><span>방식 / HTTP</span><span>응답 시간 / 토큰</span><span>오류</span></div><div v-for="trace in traces" :key="trace.requestId" class="playground-history-row"><span><b>{{ trace.modelId }}</b><small>{{ formatTime(trace.startedAt) }} · {{ trace.targetName }}</small></span><span :class="trace.status === 'SUCCEEDED' ? 'good' : trace.status === 'FAILED' ? 'bad' : ''">{{ trace.status }}</span><span>{{ trace.stream ? 'SSE' : 'JSON' }} · HTTP {{ trace.httpStatus ?? '-' }}</span><span>{{ trace.latencyMs?.toLocaleString() ?? '-' }}ms · {{ trace.inputTokens ?? '-' }}/{{ trace.outputTokens ?? '-' }}</span><code>{{ trace.errorCode ?? trace.requestId }}</code></div></div><p v-else class="history-empty">아직 테스트 요청이 없습니다.</p></details>
+    <section class="surface-card saved-conversations">
+      <header class="saved-conversations-header"><div><span class="card-kicker">SAVED PLAYGROUND CHATS</span><h2>저장된 모델 대화</h2><p>모델별 테스트 대화를 검색하고 다시 열 수 있습니다. 전체 기록을 최신순으로 표시합니다.</p></div><span class="count-pill">{{ savedConversations.length }}</span></header>
+      <div class="saved-conversation-search"><input v-model="historyQuery" type="search" placeholder="대화 제목·질문·응답 내용 검색" @keydown.enter.prevent="loadSavedConversations" /><button class="secondary-button" :disabled="historyLoading" @click="loadSavedConversations">{{ historyLoading ? '검색 중…' : '검색' }}</button><button v-if="historyQuery" class="secondary-button" @click="historyQuery=''; loadSavedConversations()">초기화</button></div>
+      <p class="saved-conversation-privacy">대화 본문은 암호화 저장됩니다. 첨부 파일은 이름만 남고 원본은 저장되지 않지만, 모델 답변에 포함된 내용은 답변 본문과 함께 기록됩니다. 대화는 직접 삭제하기 전까지 보관됩니다.</p>
+      <p v-if="historyError" class="history-error">{{ historyError }}</p>
+      <div v-if="historyLoading && !savedConversations.length" class="history-empty">대화 기록을 불러오는 중입니다.</div>
+      <div v-else-if="savedConversations.length" class="saved-conversation-list">
+        <article v-for="item in savedConversations" :key="item.conversationId" class="saved-conversation-item" :class="{ selected: item.conversationId === activeConversationId }">
+          <button class="saved-conversation-open" :disabled="sending || restoringConversationId === item.conversationId" @click="restoreConversation(item)"><span class="saved-conversation-model">{{ item.targetName }} · {{ item.modelId }}</span><strong>{{ item.title || '첨부 파일 테스트' }}</strong><small>{{ item.preview }}<template v-if="item.messageCount"> · {{ item.messageCount }}개 메시지</template></small><time>{{ formatTime(item.updatedAt) }}</time></button>
+          <button class="saved-conversation-delete" :disabled="sending" title="대화 영구 삭제" @click="deleteSavedConversation(item)">삭제</button>
+        </article>
+      </div>
+      <p v-else-if="!historyLoading" class="history-empty">{{ historyQuery ? '검색 결과가 없습니다.' : '저장된 대화가 없습니다. 모델과의 테스트 대화가 여기에 나타납니다.' }}</p>
+    </section>
+
+    <details class="surface-card playground-history"><summary><span><b>PLAYGROUND 요청 이력</b><small>요청 ID·상태·모델·토큰 사용량 등 메타데이터입니다.</small></span><i>{{ traceLoading ? '갱신 중…' : `${traces.length}건` }}</i></summary><div v-if="traces.length" class="playground-history-table"><div class="playground-history-row history-heading"><span>시간 / 모델</span><span>상태</span><span>방식 / HTTP</span><span>응답 시간 / 토큰</span><span>오류</span></div><div v-for="trace in traces" :key="trace.requestId" class="playground-history-row"><span><b>{{ trace.modelId }}</b><small>{{ formatTime(trace.startedAt) }} · {{ trace.targetName }}</small></span><span :class="trace.status === 'SUCCEEDED' ? 'good' : trace.status === 'FAILED' ? 'bad' : ''">{{ trace.status }}</span><span>{{ trace.stream ? 'SSE' : 'JSON' }} · HTTP {{ trace.httpStatus ?? '-' }}</span><span>{{ trace.latencyMs?.toLocaleString() ?? '-' }}ms · {{ trace.inputTokens ?? '-' }}/{{ trace.outputTokens ?? '-' }}</span><code>{{ trace.errorCode ?? trace.requestId }}</code></div></div><p v-else class="history-empty">아직 테스트 요청이 없습니다.</p></details>
   </section>
 </template>
 
@@ -426,4 +531,6 @@ watch(() => [props.organizationId, props.initialTargetId], () => { resetPlaygrou
 /* Keep inherited app typography valid; `font: size/line-height inherit` is not valid CSS. */
 .chat-turn-content{font:inherit;font-size:12px;line-height:1.7}.chat-composer textarea{font:inherit;font-size:12px;line-height:1.6}
 .stream-control{max-width:320px;display:grid;gap:4px}.stream-control>small{color:var(--muted);font-size:8px;line-height:1.4}.stream-toggle input:disabled{opacity:.6}
+.saved-conversations{overflow:hidden}.saved-conversations-header{padding:16px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid var(--border)}.saved-conversations-header h2{margin:5px 0;font-size:15px}.saved-conversations-header p{margin:0;color:var(--muted);font-size:9px}.saved-conversation-search{padding:12px 16px;display:flex;gap:8px;border-bottom:1px solid var(--border)}.saved-conversation-search input{flex:1;min-width:150px;padding:9px 11px;border:1px solid var(--border);border-radius:9px;background:var(--surface-2);color:var(--text);font:inherit;font-size:10px}.saved-conversation-search .secondary-button{min-height:34px;padding-inline:11px;font-size:9px}.saved-conversation-privacy{margin:0;padding:8px 16px;border-bottom:1px solid var(--border);color:var(--muted);font-size:9px;line-height:1.5}.history-error{margin:0;padding:10px 16px;color:var(--danger);font-size:10px}.saved-conversation-list{max-height:520px;overflow:auto}.saved-conversation-item{padding:9px 13px;display:flex;align-items:stretch;gap:9px;border-bottom:1px solid var(--border)}.saved-conversation-item.selected{background:var(--surface-2)}.saved-conversation-open{flex:1;min-width:0;padding:4px;display:grid;gap:4px;text-align:left;border:0;background:transparent;color:var(--text);cursor:pointer}.saved-conversation-open:disabled{opacity:.65}.saved-conversation-model{overflow:hidden;color:var(--accent-strong);font-size:8px;font-weight:800;text-overflow:ellipsis;white-space:nowrap}.saved-conversation-open strong{overflow:hidden;font-size:10px;text-overflow:ellipsis;white-space:nowrap}.saved-conversation-open small{display:-webkit-box;overflow:hidden;color:var(--muted);font-size:9px;line-height:1.45;-webkit-box-orient:vertical;-webkit-line-clamp:2}.saved-conversation-open time{color:var(--muted);font-size:8px}.saved-conversation-delete{align-self:center;padding:6px 9px;border:1px solid var(--border);border-radius:8px;background:transparent;color:var(--danger);font-size:9px;cursor:pointer}.saved-conversation-delete:disabled{opacity:.5;cursor:default}
+@media(max-width:700px){.saved-conversation-search{flex-wrap:wrap}.saved-conversation-search input{flex-basis:100%}.saved-conversation-search .secondary-button{flex:1}.saved-conversation-item{padding-inline:9px}}
 </style>

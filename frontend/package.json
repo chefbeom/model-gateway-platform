@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build"
+    "build": "vue-tsc --noEmit && vite build",
+    "test:quota": "node --test tests/quotaVisualization.test.mjs",
+    "test:topology": "node --test tests/systemTopology.test.mjs",
+    "test:docs": "node --test tests/devDocs.test.mjs"
   },
   "dependencies": {
     "vue": "^3.5.13"

@@ -1,4 +1,9 @@
 import type { DocPage } from './types'
+import { currentGuides } from './currentGuides'
+import { runtimeDiagnosticsDoc } from './runtimeDiagnostics'
+import { searchDocuments } from './navigation'
+
+export const DOCS_REVIEWED_AT = '2026. 10. 05.'
 
 const curlExample = `curl "https://ai.company.example/v1/chat/completions" \\
   -H "Authorization: Bearer $AICONNECT_API_KEY" \\
@@ -8,7 +13,6 @@ const curlExample = `curl "https://ai.company.example/v1/chat/completions" \\
     "messages": [
       {"role": "user", "content": "회의 내용을 세 문장으로 요약해 주세요."}
     ],
-    "temperature": 0.2,
     "stream": false
   }'`
 
@@ -48,14 +52,14 @@ console.log(response.choices[0].message.content)`
 export const devDocs: DocPage[] = [
   {
     id: 'overview', group: '시작하기', title: 'AICONNECT 시작하기', shortTitle: '개요',
-    description: '여러 LM Studio 서버를 하나의 안전한 OpenAI 호환 API로 제공하는 방식을 이해합니다.',
+    description: '로컬 Runtime과 외부 AI를 하나의 관리 체계와 OpenAI 호환 Gateway로 연결합니다.',
     audience: '공통', minutes: 4, icon: '◎', keywords: ['개요', 'gateway', 'runtime', 'tailscale', '구조'],
     sections: [
       {
         id: 'what-is-aiconnect', title: 'AICONNECT가 하는 일',
         blocks: [
-          { type: 'paragraph', text: 'AICONNECT는 GPU나 모델을 직접 실행하는 프로그램이 아닙니다. 이미 준비된 LM Studio Runtime을 등록하고, 인증·권한·논리 모델·라우팅·사용량·장애 대응을 중앙에서 관리하는 Control Plane 겸 API Gateway입니다.' },
-          { type: 'callout', tone: 'success', title: '현재 문서 기준: 2026. 08. 13.', text: 'Standalone 자동 설치, 역할별 사용량 범위, 외부 OpenAI Provider 승인·수동 사용·선택형 자동 Failover까지 현재 main 브랜치 구현을 기준으로 정리했습니다.' },
+          { type: 'paragraph', text: 'AICONNECT는 등록된 LM Studio, Ollama, llama.cpp, OpenAI 호환 Runtime과 외부 Provider를 연결하는 Control Plane 겸 API Gateway입니다. 모델 실행은 해당 서버가 담당하고, AICONNECT가 인증·권한·논리 서비스·라우팅·데이터 보호·사용량·장애 진단을 관리합니다. 지원되는 Runtime에는 모델 관리 API로 로드·언로드 작업을 요청할 수 있습니다.' },
+          { type: 'callout', tone: 'info', title: `구현 검토 기준: ${DOCS_REVIEWED_AT}`, text: 'Runtime별 모델 상태, 직접 모델 테스트·대화 기록, 외부 모델의 추론·Fast 설정과 요금, 데이터 보호, 요청 실패 진단과 사용량 통계를 현재 프로젝트 코드에 맞춰 정리했습니다. 운영 서버의 배포 버전과 설정에 따라 제공 범위는 다를 수 있습니다.' },
           { type: 'cards', items: [
             { label: 'CONTROL', title: '관리', text: '조직, 팀, 사용자, 프로젝트, API 키, Runtime과 논리 서비스를 구성합니다.' },
             { label: 'GATEWAY', title: '중계', text: '사용자 요청과 모델 응답을 중계하고 실제 모델 ID를 외부에서 숨깁니다.' },
@@ -69,20 +73,22 @@ export const devDocs: DocPage[] = [
         blocks: [
           { type: 'flow', items: [
             { label: '1', title: '사용자 애플리케이션', text: 'Gateway Base URL, API 키, 논리 모델명으로 요청' },
-            { label: '2', title: 'AICONNECT Gateway', text: '인증·권한·한도 확인 후 사용할 배포 선택' },
-            { label: '3', title: '사설망 연결', text: '현재는 Tailscale을 기본으로 사용하며 라우팅 가능한 사내망도 지원' },
-            { label: '4', title: 'LM Studio Runtime', text: '실제 모델 추론 후 결과를 Gateway로 반환' }
+            { label: '2', title: 'AICONNECT Gateway', text: '인증·권한·한도·데이터 보호 정책 평가' },
+            { label: '3', title: '논리 서비스와 Target', text: '기능·상태·우선순위·전환 정책에 맞는 모델 선택' },
+            { label: '4', title: 'Runtime / Provider', text: '사설망 로컬 모델 또는 승인된 외부 API에서 추론' }
           ] },
           { type: 'callout', tone: 'info', title: '프롬프트가 Gateway를 통과한다는 의미', text: '프롬프트와 결과는 중계를 위해 Gateway 메모리를 통과합니다. 원문을 DB에 저장하는지는 프로젝트 보관 정책(METADATA 또는 암호화 원문)에 따라 별도로 결정됩니다.' }
         ]
       },
       {
-        id: 'terms', title: '먼저 알아둘 네 가지 용어',
+        id: 'terms', title: '먼저 알아둘 용어',
         blocks: [
           { type: 'table', columns: ['용어', '의미', '예시'], rows: [
-            ['Runtime Endpoint', 'Gateway가 접근하는 LM Studio API 주소', 'http://gpu-node.tailnet:1234'],
+            ['Runtime Endpoint', 'Gateway가 접근하는 로컬 추론 서버의 종류·주소·인증', 'LM Studio / Ollama / llama.cpp'],
             ['Model Deployment', '특정 Runtime에서 제공되는 실제 모델', 'google/gemma-4-e4b'],
             ['논리 서비스', '사용자에게 공개하는 안정적인 model 이름', 'text-pro'],
+            ['Target', '논리 서비스에서 실제 배포를 선택하는 연결·정책', 'P1 로컬, P2 외부'],
+            ['외부 Provider', 'API 키를 한 번 저장하고 여러 외부 모델을 등록하는 공급자', 'OPEN-AI-API'],
             ['프로젝트 API 키', '프로젝트 권한과 사용량을 식별하는 비밀 키', 'sk_llmg_…']
           ] }
         ]
@@ -98,7 +104,7 @@ export const devDocs: DocPage[] = [
         id: 'before-start', title: '시작 전에 받을 정보',
         blocks: [
           { type: 'checklist', items: ['AICONNECT 로그인 계정', '사용할 프로젝트 또는 프로젝트 생성 권한', '허용된 논리 모델명', '호출 환경에 맞는 Gateway Base URL'] },
-          { type: 'callout', tone: 'warning', title: 'GPU 서버 주소를 사용하지 마세요', text: '100.x.x.x:1234 같은 LM Studio 주소는 관리자가 Runtime으로 등록하는 내부 주소입니다. 사용자 애플리케이션은 AICONNECT Gateway 주소의 /v1 경로를 사용합니다.' }
+          { type: 'callout', tone: 'warning', title: 'GPU 서버 주소를 사용하지 마세요', text: 'LM Studio·Ollama·llama.cpp의 내부 주소는 관리자가 Runtime으로 등록합니다. 사용자 애플리케이션은 AICONNECT Gateway 주소의 /v1 경로를 사용합니다.' }
         ]
       },
       {
@@ -231,7 +237,7 @@ export const devDocs: DocPage[] = [
         blocks: [
           { type: 'code', language: 'bash', title: 'GET /v1/models', code: `curl "https://ai.company.example/v1/models" \\
   -H "Authorization: Bearer $AICONNECT_API_KEY"` },
-          { type: 'paragraph', text: '응답의 data[].id 값만 chat/completions의 model로 사용합니다. 여기에는 실제 LM Studio 모델 ID가 아니라 프로젝트에 허용된 논리 서비스 키가 표시됩니다.' }
+          { type: 'paragraph', text: '응답의 data[].id 값만 chat/completions의 model로 사용합니다. 여기에는 실제 Runtime / Provider 모델 ID가 아니라 프로젝트에 허용된 논리 서비스 키가 표시됩니다.' }
         ]
       },
       {
@@ -251,13 +257,14 @@ export const devDocs: DocPage[] = [
         blocks: [
           { type: 'code', language: 'bash', title: 'cURL', code: curlExample },
           { type: 'code', language: 'python', title: 'Python', code: pythonExample },
-          { type: 'code', language: 'typescript', title: 'TypeScript', code: typescriptExample }
+          { type: 'code', language: 'typescript', title: 'TypeScript', code: typescriptExample },
+          { type: 'callout', tone: 'info', title: '선택 옵션은 모델 지원 범위를 확인한 뒤 추가', text: '최소 예제에서는 temperature를 생략합니다. 모델에 따라 사용자 지정 temperature, 추론 수준, 토큰 필드와 응답 형식이 제한됩니다. AICONNECT의 논리 서비스 및 외부 모델 기본값이 요청 옵션을 조정할 수 있습니다.' }
         ]
       },
       {
         id: 'streaming', title: '스트리밍 요청',
         blocks: [
-          { type: 'paragraph', text: 'stream: true를 사용하면 Gateway가 LM Studio의 SSE 조각을 버퍼링하지 않고 전달합니다. 클라이언트가 연결을 끊으면 Runtime 요청도 취소됩니다.' },
+          { type: 'paragraph', text: 'stream: true를 사용하면 지원되는 Runtime / Provider의 SSE 응답 조각을 중계합니다. 일반 응답이 성공해도 서버·프록시·클라이언트의 스트리밍 지원은 별도로 검증해야 합니다.' },
           { type: 'callout', tone: 'warning', title: '스트리밍 중 장애 전환의 한계', text: '첫 토큰을 사용자에게 전달하기 전에는 다른 배포로 전환할 수 있습니다. 일부 토큰이 이미 전달된 뒤에는 중복·깨진 JSON을 막기 위해 현재 스트림을 오류로 종료하고 다음 요청부터 대체 배포를 사용합니다.' }
         ]
       },
@@ -267,6 +274,7 @@ export const devDocs: DocPage[] = [
           { type: 'table', columns: ['HTTP', '의미', '확인할 것'], rows: [
             ['401', 'API 키가 잘못됐거나 폐기·만료됨', 'Authorization Bearer 값과 키 상태'],
             ['403', '프로젝트에 모델 권한이 없음', '서비스 권한과 /v1/models 결과'],
+            ['400', '요청 형식·입력·출력·컨텍스트 조건 불일치', '실패 진단과 Provider 오류, 모델별 옵션'],
             ['429', '요청·토큰·동시성 한도 초과', '프로젝트 정책과 Retry-After'],
             ['503', '사용 가능한 Target이 없음', 'Runtime, 모델 로드, Target 활성 상태'],
             ['504', 'Runtime 응답 제한 시간 초과', '출력 길이, 모델 성능, Gateway timeout']
@@ -288,7 +296,7 @@ export const devDocs: DocPage[] = [
             { title: '기본 워크스페이스 확인', text: '최초 관리자 부트스트랩에서 Default Workspace가 자동 생성·선택됩니다. 여러 조직을 운영할 때만 추가 조직을 만들고 전환합니다.' },
             { title: '팀·부서 생성', text: '비용과 책임을 나눌 부서를 팀으로 만들고 기본 워크스페이스에 배치합니다.', action: { label: '팀과 부서 열기', destination: 'teams' } },
             { title: '사용자와 역할 배정', text: '조직 관리자, 팀 관리자, 프로젝트 소유자, 개발자를 최소 권한으로 배정합니다.' },
-            { title: 'LM Studio Runtime 등록', text: 'Tailscale에서 접근 가능한 Endpoint를 등록하고 모델을 동기화합니다.', action: { label: '인프라 열기', destination: 'infrastructure' } },
+            { title: 'Runtime 또는 외부 Provider 등록', text: 'Runtime 종류에 맞는 Endpoint를 등록하고 모델을 동기화하거나 외부 Provider의 조회 모델을 등록합니다.', action: { label: '인프라 열기', destination: 'infrastructure' } },
             { title: '논리 서비스와 Target 구성', text: '외부에 공개할 model 키와 실제 배포의 우선순위를 연결합니다.', action: { label: 'LLM 서비스 열기', destination: 'services' } },
             { title: '프로젝트와 서비스 권한 설정', text: '팀 소유 프로젝트를 만들고 필요한 논리 서비스만 허용합니다.', action: { label: '프로젝트 열기', destination: 'projects' } },
             { title: '테스트 계정으로 검증', text: '일반 사용자 화면에서 키 발급, /v1/models, 짧은 Chat Completion, 사용량 기록을 확인합니다.' }
@@ -320,14 +328,14 @@ export const devDocs: DocPage[] = [
     ]
   },
   {
-    id: 'runtime', group: '관리자 가이드', title: 'LM Studio Runtime과 모델', shortTitle: 'Runtime·모델',
-    description: 'Tailscale Endpoint 등록, 모델 동기화와 로드·언로드·다운로드를 운영합니다.',
-    audience: '관리자', minutes: 14, icon: '◈', keywords: ['lm studio', 'tailscale', 'endpoint', 'load', 'unload', 'download'],
+    id: 'runtime', group: '관리자 가이드', title: 'LLM Runtime과 모델 운영', shortTitle: 'Runtime·모델',
+    description: 'Runtime 종류별 연결, 현재 로드 상태와 등록 모델, 실제 실행 설정을 구분해 관리합니다.',
+    audience: '관리자', minutes: 10, icon: '◈', keywords: ['lm studio', 'ollama', 'llama.cpp', 'tailscale', 'endpoint', 'load', 'unload', 'download', '캐시', 'gpu offload', 'q4', 'q8'],
     sections: [
       {
         id: 'prepare', title: 'GPU 서버 준비',
         blocks: [
-          { type: 'checklist', items: ['GPU 서버와 AICONNECT 서버를 같은 Tailnet에 연결', 'LM Studio Developer Server 실행', 'Tailscale 인터페이스에서 접근 가능한 Listen 설정', '가능하면 LM Studio API Token 인증 활성화', 'Tailnet ACL에서 Gateway만 TCP 1234 접근 허용', '공개 NAT·포트 포워딩 사용 금지'] },
+          { type: 'checklist', items: ['Runtime 서버와 AICONNECT 사이의 사설망 / Tailscale 경로 확보', 'LM Studio·Ollama·llama.cpp 등 실제 추론 서버 실행', 'Gateway에서 접근 가능한 Listen 주소와 포트 확인', '지원되는 서버 인증을 활성화하고 Token을 관리자 설정에 저장', '방화벽·Tailnet ACL에서 Gateway가 필요한 포트만 접근하도록 제한', '추론 서버를 공개 NAT·포트 포워딩으로 무인증 노출하지 않기'] },
           { type: 'callout', tone: 'info', title: 'GPU는 선택적 메타데이터입니다', text: '라우팅은 RTX 5090, H100 같은 제품명이 아니라 Endpoint 상태, 모델 Capability, 우선순위와 동시성으로 결정됩니다.' }
         ]
       },
@@ -336,25 +344,34 @@ export const devDocs: DocPage[] = [
         blocks: [
           { type: 'callout', tone: 'info', title: '워크스페이스가 소유 단위입니다', text: 'GPU 노드와 Runtime Endpoint는 선택한 워크스페이스에 귀속됩니다. 선택된 워크스페이스가 없으면 등록 버튼이 비활성화됩니다.' },
           { type: 'steps', items: [
-            { title: 'Runtime 연결', text: '노드 이름, LM Studio Base URL과 선택적 API Token을 입력합니다.', action: { label: '인프라 열기', destination: 'infrastructure' } },
-            { title: '연결 확인', text: 'Gateway가 LM Studio native /api/v1/models에 접근할 수 있는지 검사합니다.' },
+            { title: 'Runtime 종류와 주소 저장', text: 'LM Studio, Ollama, llama.cpp, OpenAI-compatible 중 실제 서버 종류를 선택하고 이름·Base URL·선택적 Token을 입력합니다.', action: { label: '인프라 열기', destination: 'infrastructure' } },
+            { title: '연결 확인', text: 'Runtime 종류에 맞는 API로 검사합니다. 연결 성공은 모델이 메모리에 로드되었거나 모든 요청이 성공한다는 의미가 아닙니다.' },
             { title: '모델 동기화', text: '모델과 로드 인스턴스를 Model Deployment로 반영합니다. 동기화 자체는 다운로드나 로드를 실행하지 않습니다.' },
             { title: 'HEALTHY·LOADED 확인', text: 'Endpoint와 사용할 모델 상태를 확인한 뒤 논리 서비스 Target으로 연결합니다.' }
           ] }
         ]
       },
       {
-        id: 'operations', title: '모델 작업과 로드 설정',
+        id: 'operations', title: 'Runtime별 조회와 작업 지원',
         blocks: [
-          { type: 'table', columns: ['작업·설정', '의미', '주의'], rows: [
-            ['다운로드', '모델 식별자와 양자화를 LM Studio에 요청', '완료 후 모델 동기화'],
-            ['Context Length', '요청 문맥 크기. 클수록 메모리 사용 증가', '업무에 필요한 최소값부터'],
-            ['Flash Attention', '지원 모델의 Attention 최적화', '사전 점검 후 활성화'],
-            ['Evaluation Batch Size', '프롬프트 평가 배치', '비우면 LM Studio 기본값'],
-            ['Offload KV Cache to GPU', 'KV Cache를 GPU에 배치', 'VRAM 여유 확인'],
-            ['언로드', '로드된 instance_id를 제거', 'model key만 보내면 HTTP 400 가능']
+          { type: 'table', columns: ['Runtime', '모델 조회', 'AICONNECT의 관리 범위'], rows: [
+            ['LM Studio', 'native /api/v1/models, 필요 시 /v1/models', '지원되는 native 로드·언로드·다운로드 API'],
+            ['Ollama', '/api/tags 다운로드 목록 + /api/ps 메모리 상태', '현재 코드에서 로드·언로드 관리 API는 미지원. Ollama에서 관리'],
+            ['llama.cpp', 'router /models + /v1/models, 제공 시 /props', '모델 관리 API를 제공하는 router에서 로드·언로드. 일반 단일 프로세스 서버는 직접 관리'],
+            ['OpenAI-compatible', '/v1/models', '호환 Chat API 연결. 임의 서버의 파일 목록·로드 설정을 알아낼 수는 없음']
           ] },
-          { type: 'callout', tone: 'warning', title: 'Node Agent 없는 현재 범위', text: 'GPU Offload layer, CPU Thread Pool, Unified KV Cache, K/V Cache 양자화처럼 native REST에서 적용을 보장하기 어려운 값은 GPU 서버의 LM Studio에서 직접 관리합니다.' }
+          { type: 'callout', tone: 'warning', title: '프로필 저장과 실제 적용은 다릅니다', text: 'LM Studio native REST의 적용 항목은 Context Length, Evaluation Batch Size, Flash Attention, expert 수, KV Cache GPU offload 등으로 제한됩니다. GPU layer·CPU thread·K/V 양자화·TTL 등 고급값은 프로필에 저장되어도 적용되지 않을 수 있습니다. 사전 점검의 경고·지원 항목을 확인하세요. 동일 모델의 Q4/Q8 소스 변경도 native API가 지원하지 않으면 LM Studio에서 선택한 뒤 다시 동기화해야 합니다.' }
+        ]
+      },
+      {
+        id: 'live-and-saved', title: '현재 로드 모델과 과거 등록 모델',
+        blocks: [
+          { type: 'paragraph', text: '인프라의 기본 화면은 현재 로드된 모델을 중심으로 보여줍니다. 미로드 후보와 과거 등록 모델은 접힌 목록에서 확인합니다. 서버가 다운되거나 조회가 실패했다고 등록 레코드와 논리 서비스 Target을 삭제하지 않습니다. 반대로 과거에 로드됐다는 기록을 지금의 LOADED 상태로 표시하지 않습니다.' },
+          { type: 'steps', items: [
+            { title: '모델 동기화', text: '서버의 최신 목록·로드 상태를 반영합니다. 현재 목록에서 사라진 모델은 마지막 확인 정보와 함께 구분하고 실제 요청 후보에 포함되는지 점검합니다.' },
+            { title: '현재 모델 상세 확인', text: '로드 모델을 클릭해 Runtime이 제공한 Context, 캐시 종류, GPU offload, 메모리 등 실행 설정을 확인합니다. 서버가 반환하지 않은 값은 미확인으로 취급합니다. 저장한 프로필 값을 실제 실행값으로 단정하지 않습니다.' },
+            { title: '현재 모델 테스트', text: '로드된 모델을 직접 호출해 실제 준비 상태를 검증하고 논리 서비스 경로는 API 테스트에서 다시 확인합니다.', action: { label: '모델 테스트 콘솔 열기', destination: 'model-playground' } }
+          ] }
         ]
       },
       {
@@ -401,6 +418,18 @@ export const devDocs: DocPage[] = [
         ]
       },
       {
+        id: 'request-defaults', title: 'Temperature·추론·Fast 기본값',
+        blocks: [
+          { type: 'table', columns: ['설정', '위치', '동작'], rows: [
+            ['Temperature', 'LLM 서비스 정책 편집', '요청 값 사용 / 고정값 / 필드 생략 중 선택'],
+            ['추론 수준·Fast', '논리 서비스 또는 외부 AI 모델 수정', '지원되는 외부 Chat Completions에 적용'],
+            ['외부 모델 기본값', '외부 AI → 모델 수정', '명시한 추론 수준·표준/Fast는 호출자·논리 서비스 설정보다 우선'],
+            ['요청/논리 서비스 설정 사용', '외부 모델 설정', '모델이 덮어쓰지 않고 기존 요청·서비스 정책을 따름']
+          ] },
+          { type: 'callout', tone: 'warning', title: '허용되지 않는 값을 강제하지 마세요', text: 'temperature를 받지 않는 모델에는 필드 생략을 사용하세요. 추론 수준과 Fast 지원은 모델별로 검증해야 합니다. 실제 적용 결과는 요청 상세에서 확인합니다.' }
+        ]
+      },
+      {
         id: 'failover', title: 'Failover와 삭제 원칙',
         blocks: [
           { type: 'flow', items: [
@@ -409,6 +438,7 @@ export const devDocs: DocPage[] = [
             { label: 'P2', title: 'Secondary 호출', text: '정책에 맞는 다음 Target 선택' },
             { label: 'OK', title: '최종 기록', text: '실제 배포·토큰·Failover 저장' }
           ] },
+          { type: 'callout', tone: 'info', title: '모든 오류가 같은 전환 조건은 아닙니다', text: '컨텍스트·입출력 한도·요청 형식 오류도 진단에 남습니다. 다음 후보 선택은 오류 정책, 호환성·Capability, 외부 승인·데이터 보호 조건을 따르며 응답이 시작된 스트리밍은 중간 교체가 제한됩니다.' },
           { type: 'table', columns: ['삭제 차단 원인', '해결'], rows: [
             ['프로젝트 서비스 권한', '프로젝트 & API 키 → 서비스 권한에서 관계만 해제'],
             ['Service Target', '서비스에서 Target 제거'],
@@ -539,7 +569,7 @@ export const devDocs: DocPage[] = [
             { title: '실제 Runtime 승인', text: '비스트리밍·SSE·관측 기록을 확인하고, 두 물리 Runtime이 준비된 경우 Primary 장애와 복귀까지 검증합니다.' }
           ] },
           { type: 'checklist', items: ['최종 도메인의 신뢰된 TLS 인증서', 'LM Studio Token 인증', 'GPU 호스트 방화벽과 최소 사설망 권한', '실제 Discord·Telegram 장애·복구 알림', '프롬프트 보관 정책과 관리자 열람 권한 승인'] },
-          { type: 'callout', tone: 'warning', title: '두 번째 GPU가 없으면 자동 Failover를 승인하지 마세요', text: 'Mock 검증과 실제 물리 장비 검증은 다릅니다. 두 번째 Runtime이 준비되기 전에는 단일 Runtime 운영 제한을 명시하세요.' }
+          { type: 'callout', tone: 'warning', title: '실제 대체 Target을 검증한 뒤 Failover를 승인하세요', text: 'Mock 검증과 실제 서버 검증은 다릅니다. 로컬 또는 승인된 외부 대체 모델을 준비해 장애·복구·정책·비용을 확인하세요. 대체 Target이 없으면 단일 모델 운영의 제한을 명시합니다.' }
         ]
       }
     ]
@@ -579,7 +609,7 @@ export const devDocs: DocPage[] = [
         ] },
         { type: 'code', language: 'bash', title: 'LM Studio 경로까지 검사', code: 'AICONNECT_LM_STUDIO_URL=http://100.92.170.22:1234 \\\n  ./quickstart_standalone.sh' },
         { type: 'code', language: 'bash', title: '신뢰된 사내 LAN에서 직접 접속', code: 'AICONNECT_LAN_IP=192.168.35.101 \\\n  ./quickstart_standalone.sh --lan\n# 관리 화면: http://192.168.35.101\n# OpenAI Base URL: http://192.168.35.101/v1' },
-        { type: 'code', language: 'bash', title: '설치 직후 상태 점검', code: 'docker compose ps\ncurl -fsS http://127.0.0.1/actuator/health/readiness\ncurl -i http://127.0.0.1/v1/models\ntailscale status' },
+        { type: 'code', language: 'bash', title: '설치 직후 상태 점검', code: 'docker compose ps\n# 키 없이 /v1/models의 401은 인증 경로 도달 확인용입니다.\n# 모델 준비 상태는 인증된 요청으로 별도 검증하세요.\ncurl -i http://127.0.0.1/v1/models\ntailscale status' },
         { type: 'callout', tone: 'success', title: 'LAN 모드는 실제 접속 주소로 최초 관리자를 생성합니다', text: '--lan 실행 시 127.0.0.1이 아니라 AICONNECT_LAN_IP로 지정한 URL을 사용해 Bootstrap합니다. 내부 PC에서는 출력된 관리 화면과 /v1 Base URL을 그대로 사용합니다.' },
         { type: 'callout', tone: 'warning', title: 'LAN HTTP 모드는 인터넷에 공개하면 안 됩니다', text: '--lan은 HTTP 로그인을 위해 AUTH_COOKIE_SECURE=false를 설정하고 Nginx를 지정한 내부 IP에 바인딩합니다. 신뢰된 사내 대역만 방화벽으로 허용하고 외부 공개 시에는 HTTPS와 Secure Cookie로 복귀하세요.' },
         { type: 'callout', tone: 'warning', title: '일반 HTTP Tailscale IP로 로그인하지 마세요', text: 'Refresh Cookie는 Secure입니다. 스크립트가 출력하는 https://<host>.<tailnet>.ts.net 주소를 사용해야 로그인 갱신이 정상 동작합니다.' },
@@ -596,7 +626,7 @@ export const devDocs: DocPage[] = [
         { type: 'code', language: 'bash', title: 'Tailnet과 OCI Private IP만 허용', code: 'docker compose -p aiconnect-ha --env-file deploy/ha/.env -f deploy/ha/docker-compose.yml -f deploy/ha/docker-compose.external-monitoring.yml -f deploy/ha/docker-compose.private-only.yml up -d mariadb redis api-1 api-2 frontend load-balancer\nsudo env AICONNECT_PRIVATE_CIDR=10.0.0.0/16 bash deploy/ha/private-only-firewall.sh --install' },
         { type: 'callout', tone: 'success', title: '공개 IP의 웹 포트를 차단합니다', text: 'Private-only override는 LB를 Loopback, Tailscale IP와 OCI Private IP에만 연결합니다. OCI Public IP NAT를 통한 우회는 영구 DOCKER-USER 필터가 차단합니다. Tailnet은 Tailscale IP를, 같은 OCI VCN은 인스턴스 Private IP /v1을 사용합니다.' },
         { type: 'callout', tone: 'warning', title: 'HTTPS Serve는 Tailnet에서 먼저 활성화해야 합니다', text: 'Serve가 꺼져 있으면 Tailnet IP HTTP를 사용하되 인터넷에는 공개하지 않습니다. Tailnet 관리자가 Serve를 활성화한 뒤 ts.net HTTPS와 Secure Cookie로 전환할 수 있습니다. 자세한 절차는 docs/private-only-deployment.md를 확인하세요.' },
-        { type: 'code', language: 'bash', title: '외부 모니터링을 사용하는 단일 호스트 HA', code: 'docker compose --env-file deploy/ha/.env \\\n+  -f deploy/ha/docker-compose.yml \\\n+  -f deploy/ha/docker-compose.external-monitoring.yml \\\n+  up -d --build mariadb redis api-1 api-2 frontend load-balancer\n# Prometheus Target: Gateway-IP:18081, Gateway-IP:18082' },
+        { type: 'code', language: 'bash', title: '외부 모니터링을 사용하는 단일 호스트 HA', code: 'docker compose --env-file deploy/ha/.env \\\n  -f deploy/ha/docker-compose.yml \\\n  -f deploy/ha/docker-compose.external-monitoring.yml \\\n  up -d --build mariadb redis api-1 api-2 frontend load-balancer\n# Prometheus Target: Gateway-IP:18081, Gateway-IP:18082' },
         { type: 'callout', tone: 'info', title: 'Gateway 두 개를 각각 감시합니다', text: 'AICONNECT_METRICS_PORT_1=18081, AICONNECT_METRICS_PORT_2=18082로 구분합니다. 외부 Prometheus를 쓰면 내장 Prometheus·Grafana는 기동하지 않습니다.' },
         { type: 'callout', tone: 'warning', title: '한 호스트 Compose는 호스트 HA가 아닙니다', text: '물리 장애 대응은 서로 다른 호스트, Redis HA와 DB 복제가 필요합니다.' }
       ] },
@@ -635,11 +665,24 @@ export const devDocs: DocPage[] = [
           { type: 'callout', tone: 'info', title: '외부 AI도 워크스페이스 자원입니다', text: '외부 API Key, 비용과 프로젝트 권한은 선택한 워크스페이스에 귀속됩니다. GPU Runtime과 동일하게 워크스페이스 선택 후 등록합니다.' },
           { type: 'steps', items: [
             { title: 'Provider 등록', text: '외부 AI에서 표시 이름, OpenAI 호환 Base URL, API 키를 등록합니다.', action: { label: '외부 AI 열기', destination: 'external' } },
-            { title: '연결 확인', text: '저장된 자격 증명으로 Provider 인증과 네트워크 상태를 검사합니다.' },
-            { title: '허용 모델 등록', text: '사용할 모델 ID만 등록하고 Capability, 컨텍스트, 동시 요청 수, 입력·출력 단가를 설정합니다.' },
+            { title: '키 기준 모델 조회', text: 'API 키 저장·변경 시 모델 목록을 자동 조회합니다. Provider 하나에 키를 한 번 저장하고 필요한 모델을 선택해 등록하므로 모델마다 같은 키를 반복 등록하지 않습니다.' },
+            { title: '사용할 모델과 옵션 등록', text: '조회 목록에서 필요한 모델을 등록하고 Capability·기능 지원, 컨텍스트, 동시 요청 수, 추론 수준·서비스 티어와 단가를 확인합니다. 목록에 보인다는 것만으로 모든 옵션의 실제 호출 권한을 보장하지는 않습니다.' },
             { title: '프로젝트 승인', text: '사용자 요청을 검토하거나 관리자가 직접 프로젝트를 선택하고 수동 사용, 자동 Failover, 월 비용 상한, 만료일을 승인합니다.' },
             { title: '논리 서비스 Target 연결', text: '수동 전용 서비스에는 외부 Target만, 자동 전환 서비스에는 로컬 우선·외부 후순위 Target을 연결합니다.', action: { label: 'LLM 서비스 열기', destination: 'services' } }
           ] }
+        ]
+      },
+      {
+        id: 'model-settings-and-prices', title: '모델별 추론·Fast·가격',
+        blocks: [
+          { type: 'paragraph', text: '외부 AI의 모델 수정에서 추론 수준과 서비스 티어를 지정할 수 있습니다. 모델에 명시한 값은 호출자·논리 서비스 설정을 덮어쓰며, 요청/논리 서비스 설정 사용을 고르면 덮어쓰지 않습니다. 지원 여부는 모델의 기능 정보와 실제 테스트로 검증합니다.' },
+          { type: 'table', columns: ['가격 정보', '설정과 계산', '주의'], rows: [
+            ['표준 입력·캐시 입력·출력', '100만 토큰 단가와 통화를 모델에 등록', 'Provider가 명시적으로 제공하지 않는 가격은 수동 확인'],
+            ['Fast 입력·캐시 입력·출력', '별도 Fast 가격을 등록', 'Fast 가격이 없으면 잘못 계산하지 않도록 미산정'],
+            ['추론 토큰', 'Provider usage 정보와 적용 단가로 계산', '추론 수준마다 임의 배수를 붙이지 않음'],
+            ['비용 이력', '요청 당시 적용 가격·모드·토큰 정보로 추적', '현재 모델 가격만 보고 과거 비용을 재해석하지 않기']
+          ] },
+          { type: 'callout', tone: 'warning', title: '설정과 공급자 청구는 구분하세요', text: '요청한 Fast / 추론 수준과 실제 적용·반환된 정보가 다를 수 있습니다. AICONNECT 비용은 등록 가격 기준 추정치이며 공급자 청구서가 아닙니다. 모델 이름만으로 최신 가격이나 처리 티어를 추정하지 않습니다.' }
         ]
       },
       {
@@ -851,7 +894,8 @@ export const devDocs: DocPage[] = [
         title: '사용량 확인 순서',
         blocks: [
           { type: 'steps', items: [
-            { title: '쿼터 화면에서 기간 선택', text: '최근 7일·30일·이번 달·전체 기간을 선택하고 일별 선형 그래프와 월간 캘린더를 확인합니다.', action: { label: '요금·쿼터 열기', destination: 'quotas' } },
+            { title: '요금·한도 화면에서 기간·지표 선택', text: '최근 7일·30일·이번 달·전체 기간을 선택합니다. 비용·요청·토큰 지표를 바꿔 상대 높이와 실제 값을 함께 확인합니다. 소액 비용도 선택 기간의 최댓값 기준으로 비교할 수 있습니다.', action: { label: '요금·한도 열기', destination: 'quotas' } },
+            { title: '월간 캘린더 확인', text: '월을 이동해 일별 요청·토큰·통화별 비용을 봅니다. 선택 범위 밖 또는 조회되지 않은 날짜를 사용량 0으로 단정하지 않습니다. 등록된 지출 한도가 없어도 사용량은 별도 표시됩니다.' },
             { title: '프로젝트·팀·API 키별 분해', text: '어느 소유 단위가 토큰과 비용을 사용했는지 표에서 비교합니다.' },
             { title: '요청 이력으로 원인 확인', text: 'Request ID, 실제 배포, Provider, Failover와 비용 통화를 함께 확인합니다.', action: { label: '관측성 열기', destination: 'observability' } }
           ] }
@@ -888,12 +932,15 @@ export const devDocs: DocPage[] = [
         title: '현재 시스템 구조 읽기',
         blocks: [
           { type: 'flow', items: [
-            { label: '1', title: 'AICONNECT Gateway', text: 'API 키 인증과 요청 정책을 적용합니다.' },
-            { label: '2', title: '논리 LLM 서비스', text: '외부에 공개할 model과 Failover 정책입니다.' },
-            { label: '3', title: 'Runtime Endpoint 또는 Provider', text: '실제 Local LLM·외부 AI 연결 대상입니다.' },
-            { label: '4', title: '팀·프로젝트·API 키', text: '누가 어떤 모델을 사용할지 결정하는 접근 범위입니다.' }
+            { label: '1', title: '프로젝트·API 키', text: '팀에 속한 프로젝트의 키로 허용된 논리 서비스를 호출합니다.' },
+            { label: '2', title: 'AICONNECT Gateway', text: '인증, 권한, 요금 한도와 데이터 보호 정책을 적용합니다.' },
+            { label: '3', title: '논리 LLM 서비스', text: '외부에 공개할 model과 Retry/Failover 정책입니다.' },
+            { label: '4', title: '모델 Target', text: 'P 우선순위, 상대 가중치, 활성·Degraded 설정에 따라 실행 후보를 선택합니다.' },
+            { label: '5', title: 'Runtime 또는 외부 Provider', text: '등록된 실제 모델 ID로 Local LLM 또는 외부 API를 호출합니다.' }
           ] },
-          { type: 'paragraph', text: '시스템 구조 화면의 실행 가능한 AI 자원 카드는 실제 호출 대상인 Runtime Endpoint와 외부 Provider만 표시합니다. GPU·Inference Node는 인프라 메타데이터로 관리하므로 실행 자원 수에 중복 합산하지 않습니다.' },
+          { type: 'paragraph', text: '연결도는 현재 워크스페이스에 저장된 실제 Target 참조를 사용합니다. 노드·연결선을 선택하면 관련 경로를 강조하고 Endpoint, 모델 상태, 우선순위·가중치, 권한과 상태 사유를 확인할 수 있습니다. 프로젝트·서비스 필터, 확대·축소, 미연결 모델 포함 옵션으로 복잡한 구성을 좁혀 보세요. 팀·키 등의 전체 목록은 접힌 구성 목록에서 확인합니다.' },
+          { type: 'callout', tone: 'warning', title: '저장된 구성과 실시간 성공은 다릅니다', text: '초록은 정상 검사 기록 또는 활성 설정, 노랑은 미로드·복구·Degraded, 빨강은 장애·권한 확인, 회색은 비활성·미확인입니다. 선은 실제 트래픽이 아닌 저장된 요청 후보입니다. P 숫자가 작을수록 우선이며 가중치는 확률(%)이 아닙니다. 실제 요청의 Capability·Quota·데이터 보호 정책 등은 Gateway에서 다시 평가됩니다.' },
+          { type: 'paragraph', text: 'Gateway 아래에는 영속 저장소, 배포 프로필에 따른 Redis 또는 프로세스 로컬 공유 상태, 요청 추적·Usage의 기능 관계를 별도로 표시합니다. Redis 설정 여부를 통신 정상으로 표시하지 않으며 GPU·Inference Node도 실행 자원 수에 중복 합산하지 않습니다. 오프라인 모델과 Target 참조는 삭제하지 않고 장애·미확인 상태로 유지합니다.' },
           { type: 'steps', items: [
             { title: '구성 맵 열기', text: '현재 연결된 Runtime, Provider, 논리 서비스, 팀, 프로젝트, API 키의 관계를 한 화면에서 확인합니다.', action: { label: '시스템 구조 열기', destination: 'system' } },
             { title: '세부 설정으로 이동', text: '이름·Endpoint·가격·통화는 인프라 또는 외부 AI 화면에서, Target과 정책은 LLM 서비스 화면에서 수정합니다.', action: { label: '외부 AI 열기', destination: 'external' } }
@@ -902,6 +949,8 @@ export const devDocs: DocPage[] = [
       }
     ]
   },
+  ...currentGuides,
+  runtimeDiagnosticsDoc,
 ]
 
 export const docGroups = ['시작하기', '사용자 가이드', '관리자 가이드', '운영과 참조'] as const
@@ -911,10 +960,5 @@ export function findDoc(id: string | null | undefined) {
 }
 
 export function searchDocs(query: string) {
-  const normalized = query.trim().toLocaleLowerCase('ko-KR')
-  if (!normalized) return []
-  return devDocs.filter(doc => {
-    const sectionText = doc.sections.map(section => section.title + ' ' + (section.description ?? '')).join(' ')
-    return (doc.title + ' ' + doc.description + ' ' + doc.keywords.join(' ') + ' ' + sectionText).toLocaleLowerCase('ko-KR').includes(normalized)
-  })
+  return searchDocuments(devDocs, query)
 }

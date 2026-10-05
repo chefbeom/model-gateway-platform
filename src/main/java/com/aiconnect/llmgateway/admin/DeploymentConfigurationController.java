@@ -37,10 +37,11 @@ public class DeploymentConfigurationController {
             String capabilityOverridesJson,
             @jakarta.validation.constraints.DecimalMin("0") BigDecimal inputPricePerMillion,
             @jakarta.validation.constraints.DecimalMin("0") BigDecimal outputPricePerMillion,
-            Currency currency
+            Currency currency,
+            @Size(max = 2000) String featureSupportJson
     ) {
         public UpdateDeployment(String compatibilityKey, Boolean enabled, Integer maxConcurrency, String capabilityOverridesJson) {
-            this(null, compatibilityKey, enabled, maxConcurrency, capabilityOverridesJson, null, null, null);
+            this(null, compatibilityKey, enabled, maxConcurrency, capabilityOverridesJson, null, null, null, null);
         }
     }
 }

@@ -54,12 +54,14 @@ class ExternalProviderModelPricingIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"displayName\":\"External Model Updated\",\"compatibilityKey\":\"text-updated\","
                                 + "\"contextLength\":64000,\"maxConcurrency\":4,\"inputPricePerMillion\":0.45,"
-                                + "\"outputPricePerMillion\":1.75,\"currency\":\"USD\",\"enabled\":true}"))
+                                + "\"outputPricePerMillion\":1.75,\"currency\":\"USD\",\"enabled\":true,"
+                                + "\"featureSupportJson\":\"{\\\"vision\\\":\\\"SUPPORTED\\\",\\\"thinking\\\":\\\"UNKNOWN\\\",\\\"fast\\\":\\\"UNSUPPORTED\\\",\\\"reasoningLevels\\\":\\\"SUPPORTED\\\",\\\"reasoningEfforts\\\":[\\\"LOW\\\",\\\"HIGH\\\"]}\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.displayName").value("External Model Updated"))
                 .andExpect(jsonPath("$.inputPricePerMillion").value(0.45))
                 .andExpect(jsonPath("$.outputPricePerMillion").value(1.75))
-                .andExpect(jsonPath("$.currency").value("USD"));
+                .andExpect(jsonPath("$.currency").value("USD"))
+                .andExpect(jsonPath("$.featureSupportJson").value(org.hamcrest.Matchers.containsString("reasoningEfforts")));
 
         ModelDeployment saved = deployments.findById(model.getId()).orElseThrow();
         assertThat(saved.getDisplayName()).isEqualTo("External Model Updated");
@@ -67,5 +69,8 @@ class ExternalProviderModelPricingIntegrationTest {
         assertThat(saved.getProviderInputPricePerMillion()).isEqualByComparingTo("0.45");
         assertThat(saved.getProviderOutputPricePerMillion()).isEqualByComparingTo("1.75");
         assertThat(saved.getProviderPriceCurrency()).isEqualTo(Currency.USD);
+        assertThat(saved.getFeatureSupportJson()).contains("\"vision\":\"SUPPORTED\"")
+                .contains("\"fast\":\"UNSUPPORTED\"")
+                .contains("\"reasoningEfforts\":[\"LOW\",\"HIGH\"]");
     }
 }
