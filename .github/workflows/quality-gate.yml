@@ -21,7 +21,19 @@ jobs:
     env:
       TEST_REDIS_HOST: 127.0.0.1
       TEST_REDIS_PORT: "6379"
+      TEST_MARIADB_URL: jdbc:mariadb://127.0.0.1:3306/aiconnect_migration_test
+      TEST_MARIADB_USERNAME: root
+      TEST_MARIADB_PASSWORD: ci-migration-test-only-password
     services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: ci-migration-test-only-password
+          MARIADB_DATABASE: aiconnect_migration_test
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s --health-timeout 3s --health-retries 20
       redis:
         image: redis:7.4-alpine
         ports: ["6379:6379"]

@@ -1,3 +1,4 @@
+-- V36 is already deployed; new features must migrate after that version.
 CREATE TABLE playground_conversation (
     id CHAR(36) NOT NULL PRIMARY KEY,
     organization_id CHAR(36) NOT NULL,
