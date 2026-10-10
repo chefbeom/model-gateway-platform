@@ -24,7 +24,10 @@ public final class AdminDtos {
     private AdminDtos() { }
 
     public record CreateOrganization(@NotBlank @Size(max = 120) String name) { }
-    public record CreateProject(@NotNull UUID organizationId, UUID teamId, @NotBlank @Size(max = 120) String name) { }
+    public record CreateProject(@NotNull UUID organizationId, UUID teamId, @NotBlank @Size(max = 120) String name,
+                                Boolean externalAiBlocked) {
+        public CreateProject(UUID organizationId, UUID teamId, String name) { this(organizationId, teamId, name, false); }
+    }
     public record CreateNode(@NotNull UUID organizationId, @NotBlank @Size(max = 120) String name,
                              @Size(max = 500) String description, String connectionMode, String labelsJson) { }
     public record CreateEndpoint(@NotNull UUID nodeId, @Size(max = 160) String displayName, @NotNull RuntimeType runtimeType,

@@ -25,6 +25,73 @@ class DataProtectionPolicyServiceTest {
             policies, mock(ApiKeyRepository.class), new DataProtectionScanner(new ObjectMapper()), new ObjectMapper());
 
     @Test
+    void projectBoundaryEnforcesLocalOnlyWithoutSensitiveDataOrEnabledDetectors() throws Exception {
+        UUID organizationId = UUID.randomUUID();
+        Project project = new Project(organizationId, "local-only");
+        project.configureExternalAiBlocked(true);
+        ReflectionTestUtils.setField(project, "id", UUID.randomUUID());
+        DataProtectionPolicy off = new DataProtectionPolicy(organizationId, DataProtectionScopeType.PROJECT,
+                project.getId(), DataProtectionMode.OFF, DataProtectionLevel.RELAXED, DataProtectionAction.ALLOW,
+                true, false, false, false, false, false, "[]");
+        when(policies.findByScopeTypeAndOrganizationIdAndScopeId(DataProtectionScopeType.PROJECT, organizationId, project.getId()))
+                .thenReturn(Optional.of(off));
+        var request = new ObjectMapper().readTree("{\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}");
+
+        DataProtectionDecision decision = service.inspect(project, null, null, request, "OFF,ALLOW");
+
+        assertThat(decision.scan().hasSensitiveData()).isFalse();
+        assertThat(decision.action()).isEqualTo(DataProtectionAction.LOCAL_ONLY);
+        assertThat(decision.externalAllowed()).isFalse();
+        assertThat(decision.externalFailoverAllowed()).isFalse();
+        assertThat(decision.policy().mode()).isEqualTo(DataProtectionMode.ENFORCE);
+        assertThat(decision.policy().appliedScopes()).contains("PROJECT_LOCAL_ONLY");
+        assertThat(decision.reasonCodes()).contains("PROJECT_EXTERNAL_AI_BLOCKED");
+        assertThat(decision.unavailableCode()).isEqualTo("LOCAL_MODEL_UNAVAILABLE");
+    }
+
+    @Test
+    void projectBoundaryDoesNotWeakenAnExistingSensitiveDataBlock() throws Exception {
+        UUID organizationId = UUID.randomUUID();
+        Project project = new Project(organizationId, "blocked");
+        ReflectionTestUtils.setField(project, "id", UUID.randomUUID());
+        project.configureExternalAiBlocked(true);
+        DataProtectionPolicy block = new DataProtectionPolicy(organizationId, DataProtectionScopeType.PROJECT,
+                project.getId(), DataProtectionMode.ENFORCE, DataProtectionLevel.STRICT, DataProtectionAction.BLOCK,
+                false, false, true, false, false, false, "[]");
+        when(policies.findByScopeTypeAndOrganizationIdAndScopeId(DataProtectionScopeType.PROJECT, organizationId, project.getId()))
+                .thenReturn(Optional.of(block));
+        var request = new ObjectMapper().readTree("{\"messages\":[{\"role\":\"user\",\"content\":\"jane@example.com\"}]}");
+        assertThat(service.inspect(project, null, null, request, null).blocked()).isTrue();
+    }
+
+    @Test
+    void anUnrestrictedProjectKeepsTheExistingBehaviorForCleanInput() throws Exception {
+        Project project = new Project(UUID.randomUUID(), "normal");
+        var request = new ObjectMapper().readTree("{\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}");
+        DataProtectionDecision decision = service.inspect(project, null, null, request, null);
+        assertThat(decision.externalAllowed()).isTrue();
+        assertThat(decision.projectLocalOnly()).isFalse();
+    }
+
+    @Test
+    void projectBoundaryDoesNotActivateADormantMonitorBlockAction() throws Exception {
+        UUID organizationId = UUID.randomUUID();
+        Project project = new Project(organizationId, "monitor");
+        ReflectionTestUtils.setField(project, "id", UUID.randomUUID());
+        project.configureExternalAiBlocked(true);
+        DataProtectionPolicy monitor = new DataProtectionPolicy(organizationId, DataProtectionScopeType.PROJECT,
+                project.getId(), DataProtectionMode.MONITOR, DataProtectionLevel.BALANCED, DataProtectionAction.BLOCK,
+                true, false, true, false, false, false, "[]");
+        when(policies.findByScopeTypeAndOrganizationIdAndScopeId(DataProtectionScopeType.PROJECT, organizationId, project.getId()))
+                .thenReturn(Optional.of(monitor));
+        var request = new ObjectMapper().readTree("{\"messages\":[{\"role\":\"user\",\"content\":\"jane@example.com\"}]}");
+        DataProtectionDecision decision = service.inspect(project, null, null, request, null);
+        assertThat(decision.action()).isEqualTo(DataProtectionAction.LOCAL_ONLY);
+        assertThat(decision.blocked()).isFalse();
+        assertThat(decision.externalAllowed()).isFalse();
+    }
+
+    @Test
     void mergesScopesUsingTheMostRestrictiveModeActionAndFailoverBoundary() {
         UUID organizationId = UUID.randomUUID();
         DataProtectionPolicy organization = new DataProtectionPolicy(

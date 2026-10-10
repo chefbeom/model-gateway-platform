@@ -60,12 +60,23 @@ public class RoutingService {
 
     private RoutingDecision evaluateInternal(LlmService service, Set<String> requestCapabilities,
                                              UUID projectId, List<ServiceTarget> configured) {
+        return evaluateInternal(service, requestCapabilities, projectId, configured, RoutingConstraint.unrestricted());
+    }
+
+    private RoutingDecision evaluateInternal(LlmService service, Set<String> requestCapabilities,
+                                             UUID projectId, List<ServiceTarget> configured, RoutingConstraint constraint) {
         Set<String> requiredCapabilities = new TreeSet<>(readCapabilities(service.getRequiredCapabilitiesJson()));
         if (requestCapabilities != null) requiredCapabilities.addAll(requestCapabilities);
 
         boolean degradedAllowed = service.isAllowDegraded() || service.getFailoverPolicy() == FailoverPolicy.DEGRADED;
+        boolean localConfigured = configured.stream()
+                .map(target -> deployments.findById(target.getDeploymentId()).orElse(null))
+                .anyMatch(deployment -> deployment != null && !deployment.isExternal());
+        boolean blockExternal = !constraint.externalAllowed() || (localConfigured && !constraint.externalFailoverAllowed());
+        // A prohibited external primary must not become the STRICT reference and
+        // make otherwise usable local models ineligible.
         String strictCompatibilityKey = service.getFailoverPolicy() == FailoverPolicy.STRICT
-                ? referenceCompatibilityKey(configured, degradedAllowed) : null;
+                ? referenceCompatibilityKey(configured, degradedAllowed, blockExternal) : null;
         boolean serviceHasLocalTargets = configured.stream()
                 .filter(ServiceTarget::isEnabled)
                 .map(target -> deployments.findById(target.getDeploymentId()).orElse(null))
@@ -102,7 +113,11 @@ public class RoutingService {
             }
 
             if (deployment != null && deployment.isExternal()) {
-                if (providers == null || externalAccess == null) reasons.add("EXTERNAL_ACCESS_UNAVAILABLE");
+                if (blockExternal) {
+                    reasons.add(!constraint.externalAllowed() ? "DATA_PROTECTION_EXTERNAL_BLOCKED" : "DATA_PROTECTION_EXTERNAL_FAILOVER_BLOCKED");
+                    if (constraint.reasons().contains("PROJECT_EXTERNAL_AI_BLOCKED")) reasons.add("PROJECT_EXTERNAL_AI_BLOCKED");
+                    provider = providers == null ? null : providers.findById(deployment.getExternalProviderId()).orElse(null);
+                } else if (providers == null || externalAccess == null) reasons.add("EXTERNAL_ACCESS_UNAVAILABLE");
                 else {
                     provider = deployment.getExternalProviderId() == null ? null
                             : providers.findById(deployment.getExternalProviderId()).orElse(null);
@@ -153,11 +168,11 @@ public class RoutingService {
     public boolean acquire(ResolvedTarget target) { return activeRequests.tryAcquire(target.deployment().getId(), target.maxConcurrency()); }
     public void release(ResolvedTarget target) { activeRequests.release(target.deployment().getId()); }
 
-    private String referenceCompatibilityKey(List<ServiceTarget> configured, boolean degradedAllowed) {
+    private String referenceCompatibilityKey(List<ServiceTarget> configured, boolean degradedAllowed, boolean localOnly) {
         for (ServiceTarget target : configured) {
             if (!target.isEnabled() || (target.isDegraded() && !degradedAllowed)) continue;
             ModelDeployment deployment = deployments.findById(target.getDeploymentId()).orElse(null);
-            if (deployment != null && deployment.isEnabled()) return deployment.getCompatibilityKey();
+            if (deployment != null && deployment.isEnabled() && (!localOnly || !deployment.isExternal())) return deployment.getCompatibilityKey();
         }
         return null;
     }
@@ -191,30 +206,8 @@ public class RoutingService {
     /** Evaluate with a request-scoped privacy boundary while preserving the legacy API. */
     public RoutingDecision evaluate(LlmService service, Set<String> requestCapabilities, UUID projectId,
                                     RoutingConstraint constraint) {
-        RoutingDecision base = evaluate(service, requestCapabilities, projectId);
-        if (constraint == null || (constraint.externalAllowed() && constraint.externalFailoverAllowed())) return base;
-        boolean localConfigured = base.evaluations().stream().anyMatch(item -> !"EXTERNAL".equals(item.providerType()));
-        boolean blockExternal = !constraint.externalAllowed() || (localConfigured && !constraint.externalFailoverAllowed());
-        if (!blockExternal) return base;
-        String reason = !constraint.externalAllowed()
-                ? "DATA_PROTECTION_EXTERNAL_BLOCKED" : "DATA_PROTECTION_EXTERNAL_FAILOVER_BLOCKED";
-        List<ResolvedTarget> eligible = base.eligibleTargets().stream()
-                .filter(target -> !target.external()).toList();
-        List<RoutingDecision.TargetEvaluation> evaluations = base.evaluations().stream()
-                .map(item -> item.providerType().equals("EXTERNAL")
-                        ? withReason(item, reason) : item)
-                .toList();
-        return new RoutingDecision(eligible, base.requiredCapabilities(), base.degradedAllowed(),
-                base.failoverPolicy(), base.retryPolicy(), evaluations);
-    }
-
-    private RoutingDecision.TargetEvaluation withReason(RoutingDecision.TargetEvaluation item, String reason) {
-        List<String> reasons = new ArrayList<>(item.reasonCodes());
-        if (!reasons.contains(reason)) reasons.add(reason);
-        return new RoutingDecision.TargetEvaluation(item.targetId(), item.deploymentId(), item.displayName(),
-                item.providerType(), item.priority(), item.weight(), item.targetEnabled(), item.degraded(),
-                item.deploymentEnabled(), item.loaded(), item.deploymentHealth(), item.endpointDisplayName(),
-                item.providerDisplayName(), item.activeRequests(), item.maxConcurrency(), item.requiredCapabilities(),
-                item.availableCapabilities(), item.missingCapabilities(), false, List.copyOf(reasons));
+        return evaluateInternal(service, requestCapabilities, projectId,
+                targets.findByServiceIdOrderByPriorityAsc(service.getId()),
+                constraint == null ? RoutingConstraint.unrestricted() : constraint);
     }
 }

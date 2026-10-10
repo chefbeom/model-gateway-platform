@@ -45,10 +45,19 @@ export const currentGuides: DocPage[] = [
   },
   {
     id: 'data-protection', group: '관리자 가이드', title: '데이터 보호 정책', shortTitle: '데이터 보호',
-    description: '민감정보 탐지와 외부 전송 정책을 조직·프로젝트·서비스·API 키별로 적용합니다.',
+    description: '프로젝트 로컬 전용 경계와 민감정보 탐지 정책을 구분해 외부 전송을 제한합니다.',
     audience: '관리자', minutes: 8, icon: '◆',
     keywords: ['DLP', '데이터 보호', '보안', '민감정보', '개인정보', 'secret', '외부 전송', 'local only', 'redact'],
     sections: [
+      { id: 'project-local-only', title: '프로젝트 전체의 외부 AI 전송 금지', blocks: [
+        { type: 'paragraph', text: '프로젝트 & API 키에서 생성·수정할 때 외부 AI 전송 금지를 켜면 모든 프로젝트 API 키의 Gateway 요청이 로컬 전용이 됩니다. 민감정보 탐지 여부와 관계없이 외부 Provider를 호출 전에 제외하며, 키·서비스의 보호 모드를 OFF로 바꿔도 제한을 풀 수 없습니다.' },
+        { type: 'callout', tone: 'warning', title: '로컬 모델이 없으면 외부로 우회하지 않습니다', text: '요청한 논리 서비스에 정상·로드된 로컬 Target이 필요합니다. Vision 등 요청 기능을 지원하는 로컬 Target이 없으면 503 LOCAL_MODEL_UNAVAILABLE을 반환합니다. 로컬 사이의 전환은 기존 Retry/Failover 정책을 따르며, 외부 GPT가 정상이어도 호출하지 않습니다. 프로젝트 API 키를 사용하지 않는 관리자 직접 모델 테스트는 별도 경로입니다.' },
+        { type: 'steps', items: [
+          { title: '프로젝트 외부 전송 금지 설정', text: '프로젝트 생성·수정에서 체크하고 저장합니다. 체크 해제는 기존 민감정보 정책·Provider 승인까지 해제하는 동작이 아닙니다.', action: { label: '프로젝트 설정 열기', destination: 'projects' } },
+          { title: '로컬 Target과 기능 준비', text: '해당 논리 서비스에 신뢰할 수 있는 자체 Runtime의 로컬 모델을 연결하고 로드 상태와 Capability를 확인합니다.', action: { label: '서비스 Target 확인', destination: 'services' } },
+          { title: '프로젝트 키로 검증', text: '일반·스트리밍 요청을 테스트하고 요청 상세의 LOCAL_ONLY 처리 및 외부 Target 제외 사유를 확인합니다.', action: { label: 'API 테스트 열기', destination: 'playground' } }
+        ] }
+      ] },
       { id: 'policy-scopes', title: '적용 범위와 정책 합성', blocks: [
         { type: 'paragraph', text: '플랫폼 → 조직 → 프로젝트 → 논리 서비스·API 키의 정책을 합쳐 Gateway 요청에 적용합니다. 더 엄격한 제한이 우선하며 하위 범위에서 상위 보호 기준을 완화할 수 없습니다. 프로젝트 전체 보호와 특정 기능·키만 보호하는 구성을 나눌 수 있습니다.' },
         { type: 'steps', items: [
@@ -61,9 +70,9 @@ export const currentGuides: DocPage[] = [
         { type: 'table', columns: ['설정', '동작', '주의'], rows: [
           ['OFF', '해당 범위의 보호 기능 해제', '상위 범위의 제한은 유지'],
           ['MONITOR', '탐지 결과를 기록하는 관찰 모드', '차단을 기대하지 말고 외부 전송 가능성을 검토'],
-          ['ENFORCE', '설정된 보호 조치를 요청에 적용', '로컬 전용이면 사용 가능한 로컬 Target 필요'],
+          ['ENFORCE', '민감정보 감지 시 설정된 보호 조치 적용', '프로젝트 외부 전송 금지는 감지 여부와 무관하게 적용'],
           ['ALLOW', '탐지 시에도 허용', '기존 프로젝트·Provider 승인 조건은 별도'],
-          ['LOCAL_ONLY', '외부 후보를 제외하고 로컬로 제한', '로컬 후보가 없으면 실패. 외부로 조용히 전환하지 않음'],
+          ['LOCAL_ONLY', '민감정보 감지 시 외부 후보를 제외', '모든 요청을 로컬로 제한하려면 프로젝트 외부 AI 전송 금지 사용'],
           ['BLOCK', '요청 차단', '실패 진단에서 보호 결정 확인'],
           ['REDACT', '현재 구현에서는 안전하게 로컬 전용으로 처리', '외부로 완전히 마스킹된 본문을 보내는 기능으로 해석하면 안 됨']
         ] },

@@ -43,6 +43,7 @@ public class DataProtectionPolicyService {
         List<String> reasons = new ArrayList<>();
         for (String label : scan.labels()) reasons.add("DATA_DETECTED_" + label);
 
+        boolean projectLocalOnly = project != null && project.isExternalAiBlocked();
         DataProtectionAction action = DataProtectionAction.ALLOW;
         if (scan.hasSensitiveData()) {
             if (effective.mode() == DataProtectionMode.MONITOR) {
@@ -57,6 +58,19 @@ public class DataProtectionPolicyService {
                 }
                 reasons.add("DATA_PROTECTION_ENFORCED");
             }
+        }
+        if (projectLocalOnly) {
+            // The hard routing boundary must not activate an otherwise dormant
+            // MONITOR/OFF sensitive-data BLOCK action.
+            action = strongerAction(action, DataProtectionAction.LOCAL_ONLY);
+            reasons.add("PROJECT_EXTERNAL_AI_BLOCKED");
+            List<String> scopes = new ArrayList<>(effective.appliedScopes());
+            scopes.add("PROJECT_LOCAL_ONLY");
+            DataProtectionAction effectiveAction = effective.mode() == DataProtectionMode.ENFORCE
+                    ? strongerAction(effective.externalAction(), DataProtectionAction.LOCAL_ONLY) : DataProtectionAction.LOCAL_ONLY;
+            effective = new EffectiveDataProtectionPolicy(DataProtectionMode.ENFORCE, DataProtectionLevel.STRICT,
+                    effectiveAction, false, effective.detectSecrets(), effective.detectPii(), effective.detectFinancial(),
+                    effective.detectConfidential(), effective.detectMedia(), effective.customPatterns(), List.copyOf(scopes));
         }
         boolean externalAllowed = action == DataProtectionAction.ALLOW;
         boolean externalFailoverAllowed = externalAllowed && effective.allowExternalFailover();

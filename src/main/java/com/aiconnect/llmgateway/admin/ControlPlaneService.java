@@ -67,7 +67,9 @@ public class ControlPlaneService {
     public Project create(AdminDtos.CreateProject request) {
         requireOrganization(request.organizationId());
         if (request.teamId() != null) requireTeam(request.organizationId(), request.teamId());
-        return projects.save(new Project(request.organizationId(), request.teamId(), request.name()));
+        Project project = new Project(request.organizationId(), request.teamId(), request.name());
+        project.configureExternalAiBlocked(Boolean.TRUE.equals(request.externalAiBlocked()));
+        return projects.save(project);
     }
 
     @Transactional

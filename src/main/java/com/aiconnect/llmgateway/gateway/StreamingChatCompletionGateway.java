@@ -96,6 +96,14 @@ public class StreamingChatCompletionGateway {
                     objectMapper.valueToTree(OpenAiError.of("The request was blocked by the active data-protection policy (" + protection.classificationSummary() + ").",
                             "invalid_request_error", "DATA_POLICY_BLOCKED", requestId)));
         }
+        if (decision.eligibleTargets().isEmpty()) {
+            String code = protection.unavailableCode();
+            audit.fail(code, HttpStatus.SERVICE_UNAVAILABLE.value(), elapsed(audit.getStartedAt()), 0);
+            requests.save(audit);
+            diagnostics.recordFailure(audit.getId(), request, service, decision, code, HttpStatus.SERVICE_UNAVAILABLE.value(), 0,
+                    protection.unavailableMessage(), null, false);
+            return error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, code, protection.unavailableMessage());
+        }
         int failures = 0;
         int attemptedCount = 0;
         boolean sawCapacity = false;
@@ -201,12 +209,14 @@ public class StreamingChatCompletionGateway {
                     capacityMessage, capacityFailure == null ? null : capacityFailure.providerMessage(), false);
             return error(HttpStatus.TOO_MANY_REQUESTS.value(), requestId, "MODEL_AT_CAPACITY", capacityMessage);
         }
-        audit.fail("MODEL_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), elapsed(audit.getStartedAt()), failures);
+        String unavailableCode = protection.unavailableCode();
+        audit.fail(unavailableCode, HttpStatus.SERVICE_UNAVAILABLE.value(), elapsed(audit.getStartedAt()), failures);
         requests.save(audit);
-        diagnostics.recordFailure(audit.getId(), request, service, decision, "MODEL_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), attemptedCount,
+        diagnostics.recordFailure(audit.getId(), request, service, decision, unavailableCode, HttpStatus.SERVICE_UNAVAILABLE.value(), attemptedCount,
                 lastFailure == null ? null : lastFailure.message(), lastFailure == null ? null : lastFailure.providerMessage(), false);
-        return error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, "MODEL_UNAVAILABLE",
-                lastFailure == null ? "No compatible deployment could start a stream."
+        return error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, unavailableCode,
+                protection.projectLocalOnly() ? "사용 가능한 로컬 Target이 스트리밍을 시작하지 못했습니다. 프로젝트의 외부 AI 전송 금지 정책에 따라 외부로 전환하지 않았습니다."
+                : lastFailure == null ? "No compatible deployment could start a stream."
                         : "No compatible deployment could start a stream. Last failure: " + lastFailure.message());
     }
 

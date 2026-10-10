@@ -31,6 +31,10 @@ public class Project {
     @Column(nullable = false, length = 24)
     private String status = "ACTIVE";
 
+    /** Hard project boundary, independent of sensitive-data detection. */
+    @Column(nullable = false)
+    private boolean externalAiBlocked;
+
     @Column(nullable = false)
     private Instant createdAt = Instant.now();
 
@@ -59,6 +63,8 @@ public class Project {
     public UUID getTeamId() { return teamId; }
     public String getName() { return name; }
     public String getStatus() { return status; }
+    public boolean isExternalAiBlocked() { return externalAiBlocked; }
+    public void configureExternalAiBlocked(boolean blocked) { externalAiBlocked = blocked; }
 
     /**
      * Retains request and usage history after an owning team is removed, while

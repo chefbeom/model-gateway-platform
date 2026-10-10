@@ -50,19 +50,22 @@ public class ProjectLifecycleService {
     }
 
     @Transactional
-    public ProjectView update(UUID projectId, String name, UUID teamId) {
+    public ProjectView update(UUID projectId, String name, UUID teamId, Boolean externalAiBlocked) {
         Project project = requireProject(projectId);
         String normalizedName = name.trim();
         if (teamId != null) requireTeam(project.getOrganizationId(), teamId);
-        entityManager.createQuery("update Project p set p.name = :name, p.teamId = :teamId where p.id = :projectId")
+        // An older client omitting the new field must never clear a security boundary.
+        boolean blocked = externalAiBlocked == null ? project.isExternalAiBlocked() : externalAiBlocked;
+        entityManager.createQuery("update Project p set p.name = :name, p.teamId = :teamId, p.externalAiBlocked = :blocked where p.id = :projectId")
                 .setParameter("name", normalizedName)
                 .setParameter("teamId", teamId)
+                .setParameter("blocked", blocked)
                 .setParameter("projectId", projectId)
                 .executeUpdate();
         entityManager.clear();
         Project updated = requireProject(projectId);
         audit.record(updated.getOrganizationId(), CurrentActor.userIdOrNull(), "PROJECT_UPDATED", "PROJECT", projectId,
-                Map.of("name", normalizedName, "teamId", String.valueOf(teamId)));
+                Map.of("name", normalizedName, "teamId", String.valueOf(teamId), "externalAiBlocked", blocked));
         return ProjectView.from(updated);
     }
 
@@ -127,8 +130,8 @@ public class ProjectLifecycleService {
         }
     }
 
-    public record ProjectView(UUID id, UUID organizationId, UUID teamId, String name, String status) {
-        static ProjectView from(Project project) { return new ProjectView(project.getId(), project.getOrganizationId(), project.getTeamId(), project.getName(), project.getStatus()); }
+    public record ProjectView(UUID id, UUID organizationId, UUID teamId, String name, String status, boolean externalAiBlocked) {
+        static ProjectView from(Project project) { return new ProjectView(project.getId(), project.getOrganizationId(), project.getTeamId(), project.getName(), project.getStatus(), project.isExternalAiBlocked()); }
     }
     public record ApiKeyReference(UUID id, String name, String keyPrefix, String status) {
         static ApiKeyReference from(ApiKey key) { return new ApiKeyReference(key.getId(), key.getName(), key.getKeyPrefix(), key.getStatus().name()); }

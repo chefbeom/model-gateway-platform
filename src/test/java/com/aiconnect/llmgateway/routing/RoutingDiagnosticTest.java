@@ -34,6 +34,31 @@ class RoutingDiagnosticTest {
             new WeightedTargetSelector(active), new ObjectMapper());
 
     @Test
+    void prohibitedExternalPrimaryDoesNotDetermineStrictLocalCompatibility() {
+        UUID serviceId = UUID.randomUUID();
+        LlmService service = new LlmService(UUID.randomUUID(), "private", "Private", FailoverPolicy.STRICT,
+                RetryPolicy.AGGRESSIVE, false, "[]", BigDecimal.ZERO, BigDecimal.ZERO);
+        ReflectionTestUtils.setField(service, "id", serviceId);
+        RuntimeEndpoint endpoint = endpoint();
+        ModelDeployment local = deployment(endpoint, "local-gemma", "[]", true, HealthStatus.HEALTHY);
+        ModelDeployment external = ModelDeployment.external(UUID.randomUUID(), "external-gpt", "external-gpt",
+                "GPT", 8192, 4, "[]", BigDecimal.ZERO, BigDecimal.ZERO);
+        ReflectionTestUtils.setField(external, "id", UUID.randomUUID());
+        when(targets.findByServiceIdOrderByPriorityAsc(serviceId)).thenReturn(List.of(
+                target(serviceId, external, false, true), target(serviceId, local, false, true)));
+        when(deployments.findById(local.getId())).thenReturn(Optional.of(local));
+        when(deployments.findById(external.getId())).thenReturn(Optional.of(external));
+        when(endpoints.findById(endpoint.getId())).thenReturn(Optional.of(endpoint));
+
+        RoutingDecision decision = routing.evaluate(service, Set.of(), UUID.randomUUID(),
+                new RoutingConstraint(false, false, List.of("PROJECT_EXTERNAL_AI_BLOCKED")));
+
+        assertThat(decision.eligibleTargets()).extracting(item -> item.deployment().getId()).containsExactly(local.getId());
+        assertThat(decision.evaluations().get(0).reasonCodes()).contains("PROJECT_EXTERNAL_AI_BLOCKED", "DATA_PROTECTION_EXTERNAL_BLOCKED");
+        assertThat(decision.evaluations().get(1).reasonCodes()).doesNotContain("COMPATIBILITY_MISMATCH");
+    }
+
+    @Test
     void evaluateRetainsWhyConfiguredTargetsWereExcluded() {
         UUID serviceId = UUID.randomUUID();
         LlmService service = new LlmService(UUID.randomUUID(), "vision-service", "Vision", FailoverPolicy.COMPATIBLE,

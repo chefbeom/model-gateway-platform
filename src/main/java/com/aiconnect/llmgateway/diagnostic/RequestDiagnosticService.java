@@ -160,6 +160,10 @@ public class RequestDiagnosticService {
                     "모델이 처리 한도에 도달했습니다. 잠시 후 재시도하거나 다른 정상 Target을 추가하세요.");
             case "MODEL_UNAVAILABLE" -> new RequestDiagnosticPayload.Recommendation(code, "라우팅 조건 확인",
                     "아래 Target별 제외 사유를 확인하고 적어도 하나의 정상·호환·승인된 Target을 준비하세요.");
+            case "LOCAL_MODEL_UNAVAILABLE" -> new RequestDiagnosticPayload.Recommendation(code, "사용 가능한 로컬 Target 준비",
+                    "프로젝트가 외부 AI 전송을 금지합니다. 요청한 논리 서비스에 정상·로드된 로컬 Target을 연결하고 요청 기능(Vision·Structured Output 등), 호환성 및 동시성 한도를 확인하세요. 외부 Provider로 우회하지 않습니다.");
+            case "PROJECT_EXTERNAL_AI_BLOCKED" -> new RequestDiagnosticPayload.Recommendation(code, "프로젝트 로컬 전용 정책 적용",
+                    "프로젝트의 외부 AI 전송 금지가 모든 API 키에 적용되어 외부 Target을 제외했습니다. API 키·서비스의 보호 설정을 OFF로 바꿔도 이 제한은 해제되지 않습니다. 인프라에서 로컬 모델을 준비하고 해당 논리 서비스의 Target에 연결하세요.");
             case "DATA_POLICY_BLOCKED" -> new RequestDiagnosticPayload.Recommendation(code, "데이터 보호 정책 확인",
                     "요청에 민감정보가 감지되어 외부 전송이 차단되었습니다. 프로젝트·API 키·서비스의 보호 모드와 허용 동작을 확인하거나 민감정보를 제거하세요.");
             case "DATA_PROTECTION_EXTERNAL_BLOCKED" -> new RequestDiagnosticPayload.Recommendation(code, "외부 전송 차단 정책 확인",
@@ -191,6 +195,7 @@ public class RequestDiagnosticService {
     private String summary(String code, List<RequestDiagnosticPayload.Target> targets) {
         long eligible = targets.stream().filter(RequestDiagnosticPayload.Target::eligible).count();
         long excluded = targets.size() - eligible;
+        if ("LOCAL_MODEL_UNAVAILABLE".equals(code)) return "프로젝트가 외부 AI 전송을 금지하고 있으며, 요청을 처리할 로컬 Target이 없거나 호출에 실패했습니다. 외부 AI로 전환하지 않았습니다.";
         if ("MODEL_UNAVAILABLE".equals(code)) return "호환되고 정상이며 승인된 Target이 없습니다. 평가 대상 " + targets.size() + "개 중 " + excluded + "개가 제외되었습니다.";
         if ("UPSTREAM_REJECTED".equals(code)) return "선택된 Provider가 요청을 거부했고 현재 Retry 정책에서 Failover가 허용되지 않았습니다.";
         if ("DATA_POLICY_BLOCKED".equals(code)) return "민감정보 보호 정책이 요청의 외부 전송을 차단했습니다. 원문은 저장하지 않고 분류명만 기록했습니다.";

@@ -1,0 +1,1 @@
+ALTER TABLE project ADD COLUMN external_ai_blocked BOOLEAN NOT NULL DEFAULT FALSE;

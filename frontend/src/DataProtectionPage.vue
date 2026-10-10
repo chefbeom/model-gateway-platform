@@ -23,7 +23,7 @@ type Policy = {
   detectMedia: boolean
   customPatternsJson: string
 }
-type Project = { id: string; name: string; status: string }
+type Project = { id: string; name: string; status: string; externalAiBlocked: boolean }
 type Service = { id: string; serviceKey: string; displayName: string; enabled: boolean }
 type ApiKey = { id: string; name: string; keyPrefix: string; status: string }
 type Overview = { organizationId: string; policies: Policy[]; effective: Omit<Policy, 'scopeType'> & { scopeType?: string } }
@@ -168,6 +168,7 @@ onMounted(() => { void load() })
         </article>
       </div>
       <article class="surface-card protection-editor">
+        <div v-if="(editorScope === 'PROJECT' || editorScope === 'API_KEY') && projects.find(project => project.id === selectedProjectId)?.externalAiBlocked" class="project-boundary-notice" role="status"><strong>프로젝트 외부 AI 전송 금지 적용 중</strong><p>민감정보가 감지되지 않아도 로컬 Target만 사용합니다. 아래 설정을 OFF로 바꾸거나 외부 전송을 허용해도 프로젝트의 강제 제한은 해제되지 않습니다. 변경은 ‘프로젝트 & API 키 → 프로젝트 수정’에서 가능합니다.</p></div>
         <header class="card-header"><div><span class="card-kicker">{{ policyTitle(editorScope).toUpperCase() }}</span><h2>{{ policyTitle(editorScope) }}</h2><p>하위 범위에서 더 엄격하게 덮어쓸 수 있습니다.</p></div><span class="status-chip" :class="editor.mode === 'ENFORCE' ? 'unhealthy' : editor.mode === 'MONITOR' ? 'unknown' : 'healthy'">{{ editor.mode }}</span></header>
         <div class="preset-row" role="group" aria-label="보호 정책 프리셋">
           <button type="button" :class="{ active: editor.level === 'RELAXED' }" :aria-pressed="editor.level === 'RELAXED'" @click="applyPreset('RELAXED')"><strong>Relaxed</strong><small>기존 호환 동작</small></button>
@@ -198,6 +199,9 @@ onMounted(() => { void load() })
 </template>
 
 <style scoped>
+.project-boundary-notice { padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }
+.project-boundary-notice strong { font-size: 13px; }
+.project-boundary-notice p { margin: 7px 0 0; color: var(--muted); font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
 .data-protection-page { min-width:0; container:protection-page / inline-size; }
 .protection-explainer { display:flex; justify-content:space-between; gap:24px; align-items:center; padding:20px; }
 .protection-explainer > div { min-width:0; }

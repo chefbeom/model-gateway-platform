@@ -85,9 +85,11 @@ public class ChatCompletionGateway {
         }
         List<ResolvedTarget> candidates = decision.eligibleTargets();
         if (candidates.isEmpty()) {
-            audit.fail("MODEL_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), elapsed(audit.getStartedAt()), 0); requests.save(audit);
-            diagnostics.recordFailure(audit.getId(), request, service, decision, "MODEL_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), 0);
-            return error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, "model_unavailable", "MODEL_UNAVAILABLE", "No compatible, healthy or approved deployment is available.");
+            String code = protection.unavailableCode();
+            audit.fail(code, HttpStatus.SERVICE_UNAVAILABLE.value(), elapsed(audit.getStartedAt()), 0); requests.save(audit);
+            diagnostics.recordFailure(audit.getId(), request, service, decision, code, HttpStatus.SERVICE_UNAVAILABLE.value(), 0,
+                    protection.unavailableMessage(), null, false);
+            return error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, "model_unavailable", code, protection.unavailableMessage());
         }
 
         int failures = 0;
@@ -201,12 +203,14 @@ public class ChatCompletionGateway {
             return error(HttpStatus.TOO_MANY_REQUESTS.value(), requestId, "rate_limit_error", "MODEL_AT_CAPACITY",
                     capacityMessage);
         }
-        audit.fail("MODEL_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), elapsed(audit.getStartedAt()), failures);
+        String unavailableCode = protection.unavailableCode();
+        audit.fail(unavailableCode, HttpStatus.SERVICE_UNAVAILABLE.value(), elapsed(audit.getStartedAt()), failures);
         requests.save(audit);
-        diagnostics.recordFailure(audit.getId(), request, service, decision, "MODEL_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), attemptedCount,
+        diagnostics.recordFailure(audit.getId(), request, service, decision, unavailableCode, HttpStatus.SERVICE_UNAVAILABLE.value(), attemptedCount,
                 lastFailure == null ? null : lastFailure.message(), lastFailure == null ? null : lastFailure.providerMessage(), false);
-        return error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, "model_unavailable", "MODEL_UNAVAILABLE",
-                lastFailure == null ? "All eligible deployments failed before producing a response."
+        return error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, "model_unavailable", unavailableCode,
+                protection.projectLocalOnly() ? "사용 가능한 로컬 Target이 응답하지 못했습니다. 프로젝트의 외부 AI 전송 금지 정책에 따라 외부로 전환하지 않았습니다."
+                : lastFailure == null ? "All eligible deployments failed before producing a response."
                         : "All eligible deployments failed before producing a response. Last failure: " + lastFailure.message());
     }
 

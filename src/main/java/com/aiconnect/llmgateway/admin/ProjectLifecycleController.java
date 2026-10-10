@@ -26,7 +26,7 @@ public class ProjectLifecycleController {
 
     @PatchMapping("/{projectId}")
     public ProjectLifecycleService.ProjectView update(@PathVariable UUID projectId, @Valid @RequestBody UpdateProject request) {
-        return lifecycle.update(projectId, request.name(), request.teamId());
+        return lifecycle.update(projectId, request.name(), request.teamId(), request.externalAiBlocked());
     }
 
     /** POST intentionally requires project-management permission; it does not mutate data. */
@@ -41,5 +41,5 @@ public class ProjectLifecycleController {
         lifecycle.delete(projectId);
     }
 
-    public record UpdateProject(@NotBlank @Size(max = 120) String name, UUID teamId) { }
+    public record UpdateProject(@NotBlank @Size(max = 120) String name, UUID teamId, Boolean externalAiBlocked) { }
 }
