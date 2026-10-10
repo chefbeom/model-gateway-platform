@@ -75,7 +75,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - name: Frontend behavior tests
-        run: npm run test:docs && npm run test:quota && npm run test:topology
+        run: npm run test:docs && npm run test:quota && npm run test:topology && npm run test:project-security
       - run: npm run build
 
   deployment-contract:
