@@ -44,6 +44,9 @@ public class LmStudioModelDiscovery {
     public List<DiscoveredRuntimeModel> discover(JsonNode body, RuntimeType runtimeType) {
         if (body == null) return List.of();
         if (runtimeType == RuntimeType.LLAMA_CPP) return discoverLlamaCpp(body);
+        if (runtimeType == RuntimeType.LM_STUDIO && body.path("models").isArray()) {
+            return discoverNativeV1(body.path("models"), body.path("lm_studio_legacy_models"));
+        }
         // Some OpenAI-compatible servers (including llama.cpp) return both a
         // provider-specific "models" array and the canonical OpenAI "data"
         // array. Prefer the canonical list when it contains usable model IDs;
@@ -54,7 +57,7 @@ public class LmStudioModelDiscovery {
             List<DiscoveredRuntimeModel> compatible = discoverCompatibleList(body.path("data"), runtimeType != RuntimeType.LM_STUDIO, runtimeType);
             if (!compatible.isEmpty() || !body.path("models").isArray()) return compatible;
         }
-        if (body.path("models").isArray()) return discoverNativeV1(body.path("models"));
+        if (body.path("models").isArray()) return discoverNativeV1(body.path("models"), body.path("lm_studio_legacy_models"));
         return List.of();
     }
 
@@ -156,10 +159,26 @@ public class LmStudioModelDiscovery {
         Integer contextLength = positiveInt(settings.path("contextLength"),
                 positiveInt(model.path("context_length"), positiveInt(model.path("max_context_length"),
                         positiveInt(metadata.path("n_ctx"), null))));
+        if (runtimeType == RuntimeType.LM_STUDIO) {
+            Integer maximum = positiveInt(model.path("max_context_length"), null);
+            if (maximum != null) settings.put("maxContextLength", maximum);
+            Integer loadedContext = positiveInt(model.path("loaded_context_length"), null);
+            if (loaded && loadedContext != null) {
+                contextLength = loadedContext;
+                settings.put("contextLength", loadedContext);
+                settings.put("contextLengthSource", "LM_STUDIO_V0");
+            } else if (loaded) {
+                contextLength = positiveInt(settings.path("contextLength"), null);
+            }
+        }
         String displayName = text(model, "display_name", id);
+        ObjectNode enriched = enrichMetadata(model, runtimeState, settings);
+        if (runtimeType == RuntimeType.LM_STUDIO && model.hasNonNull("state") && !enriched.has("loadStateEvidence")) {
+            enriched.set("loadStateEvidence", loadStateEvidence("UNKNOWN", runtimeState));
+        }
         return new DiscoveredRuntimeModel(id, id, displayName, family, quantization, contextLength,
                 loaded, positiveInt(settings.path("parallelSlots"), 1), json(capabilities),
-                json(enrichMetadata(model, runtimeState, settings)));
+                json(enriched));
     }
 
     private String loadState(JsonNode model) {
@@ -173,39 +192,100 @@ public class LmStudioModelDiscovery {
         return null;
     }
 
-    private List<DiscoveredRuntimeModel> discoverNativeV1(JsonNode models) {
+    private List<DiscoveredRuntimeModel> discoverNativeV1(JsonNode models, JsonNode legacyModels) {
         List<DiscoveredRuntimeModel> discovered = new ArrayList<>();
+        Set<String> matchedLegacyIds = new LinkedHashSet<>();
         for (JsonNode model : models) {
             String key = text(model, "key", null);
             if (key == null || key.isBlank()) continue;
-            String displayName = text(model, "display_name", key);
-            String family = text(model, "architecture", null);
-            String quantization = text(model.path("quantization"), "name", text(model, "selected_variant", null));
-            Set<String> capabilities = nativeCapabilities(model);
+            // A legacy catalog key must not become a duplicate active entry
+            // when v1 already provides this model's custom instance IDs.
+            rememberLegacyId(matchingLegacyModel(legacyModels, key), matchedLegacyIds);
             JsonNode instances = model.path("loaded_instances");
             if (!instances.isArray() || instances.isEmpty()) {
-                ObjectNode settings = runtimeSettings(model.path("config"), RuntimeType.LM_STUDIO);
-                settings.put("source", "LM_STUDIO_API");
-                Integer maximumContext = positiveInt(model.path("max_context_length"), null);
-                if (maximumContext != null) settings.put("maxContextLength", maximumContext);
-                String state = instances.isArray() ? normalizedRuntimeState(loadState(model)) : "UNKNOWN";
-                discovered.add(new DiscoveredRuntimeModel(key, key, displayName, family, quantization,
-                        maximumContext, false, 1, json(capabilities),
-                        json(enrichMetadata(model, state, settings))));
+                JsonNode legacy = matchingLegacyModel(legacyModels, key);
+                discovered.add(nativeModel(model, null, legacy));
                 continue;
             }
             for (JsonNode instance : instances) {
                 String instanceId = text(instance, "id", key);
-                JsonNode config = instance.path("config");
-                ObjectNode settings = runtimeSettings(config, RuntimeType.LM_STUDIO);
-                settings.put("source", "LM_STUDIO_API");
-                discovered.add(new DiscoveredRuntimeModel(instanceId, key, displayName, family, quantization,
-                        positiveInt(config.path("context_length"), positiveInt(model.path("max_context_length"), null)),
-                        true, positiveInt(config.path("parallel"), 1), json(capabilities),
-                        json(enrichMetadata(model, "LOADED", settings))));
+                JsonNode legacy = matchingLegacyModel(legacyModels, instanceId);
+                rememberLegacyId(legacy, matchedLegacyIds);
+                discovered.add(nativeModel(model, instance, legacy));
             }
         }
+        // A custom active API identifier can be absent from the v1 catalog.
+        // Retain only explicitly active/preparing v0 entries in that case; do
+        // not turn the legacy downloaded catalog into duplicate candidates.
+        if (legacyModels.isArray()) for (JsonNode legacy : legacyModels) {
+            String id = text(legacy, "id", null);
+            String state = normalizedRuntimeState(loadState(legacy));
+            if (id == null || id.isBlank() || matchedLegacyIds.contains(id)
+                    || !Set.of("LOADED", "LOADING", "UNLOADING", "DOWNLOADING").contains(state)) continue;
+            ObjectNode supplemental = ((ObjectNode) legacy).deepCopy();
+            supplemental.set("loadStateEvidence", loadStateEvidence("UNKNOWN", state));
+            discovered.add(compatibleModel(supplemental, id, false, RuntimeType.LM_STUDIO));
+        }
         return discovered;
+    }
+
+    private JsonNode matchingLegacyModel(JsonNode models, String id) {
+        if (!models.isArray()) return null;
+        // Only exact documented identifiers are safe. Basename/quantization
+        // stripping could accidentally associate another model or Q4/Q8 file.
+        for (JsonNode model : models) if (id.equals(text(model, "id", null))) return model;
+        return null;
+    }
+
+    private void rememberLegacyId(JsonNode legacy, Set<String> ids) {
+        if (legacy != null) ids.add(text(legacy, "id", ""));
+    }
+
+    private DiscoveredRuntimeModel nativeModel(JsonNode model, JsonNode instance, JsonNode legacy) {
+        String key = text(model, "key", "");
+        String nativeState = instance == null ? normalizedRuntimeState(loadState(model)) : "LOADED";
+        String legacyState = legacy == null ? "UNKNOWN" : normalizedRuntimeState(loadState(legacy));
+        // v0 is queried after v1 and explicitly reports the current lifecycle.
+        // Unknown/absent legacy state never overrides native loaded evidence.
+        String state = legacyState.equals("UNKNOWN") ? nativeState : legacyState;
+        boolean loaded = state.equals("LOADED");
+        // Model-level defaults are not proof of the active instance's settings.
+        JsonNode config = instance == null ? objectMapper.createObjectNode() : instance.path("config");
+        ObjectNode settings = runtimeSettings(loaded ? config : objectMapper.createObjectNode(), RuntimeType.LM_STUDIO);
+        Integer maximum = positiveInt(model.path("max_context_length"), null);
+        if (maximum != null) settings.put("maxContextLength", maximum);
+        Integer context = loaded ? positiveInt(config.path("context_length"), null) : maximum;
+        Integer legacyContext = legacy == null ? null : positiveInt(legacy.path("loaded_context_length"), null);
+        if (loaded && legacyContext != null) {
+            context = legacyContext;
+            settings.put("contextLength", context);
+            settings.put("contextLengthSource", "LM_STUDIO_V0");
+        }
+        String id = instance == null ? (loaded && legacy != null ? text(legacy, "id", key) : key) : text(instance, "id", key);
+        ObjectNode metadata = enrichMetadata(model, state, settings);
+        metadata.set("loadStateEvidence", loadStateEvidence(nativeState, legacyState));
+        String quantization = text(model.path("quantization"), "name", text(model, "selected_variant", null));
+        Set<String> capabilities = nativeCapabilities(model);
+        if (legacy != null) {
+            // Preserve the native feature/configuration information while
+            // supplementing explicit legacy VLM and tool-use evidence.
+            compatibleCapabilities(legacy).stream()
+                    .filter(feature -> Set.of("VISION", "TOOL_CALLING", "REASONING").contains(feature))
+                    .forEach(capabilities::add);
+            if (loaded) quantization = text(legacy, "quantization", quantization);
+        }
+        return new DiscoveredRuntimeModel(id, key, text(model, "display_name", key), text(model, "architecture", null),
+                quantization, context, loaded, loaded ? positiveInt(config.path("parallel"), 1) : 1,
+                json(capabilities), json(metadata));
+    }
+
+    private ObjectNode loadStateEvidence(String nativeState, String legacyState) {
+        ObjectNode evidence = objectMapper.createObjectNode();
+        evidence.put("source", legacyState.equals("UNKNOWN") ? "LM_STUDIO_V1" : "LM_STUDIO_V0");
+        evidence.put("nativeState", nativeState);
+        evidence.put("legacyState", legacyState);
+        evidence.put("conflict", !nativeState.equals("UNKNOWN") && !legacyState.equals("UNKNOWN") && !nativeState.equals(legacyState));
+        return evidence;
     }
 
     private List<DiscoveredRuntimeModel> discoverCompatibleList(JsonNode data, boolean missingStateMeansLoaded) {

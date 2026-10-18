@@ -52,3 +52,11 @@ test('new states have visible colors and infrastructure shows explicit descripti
   assert.match(page, /setInterval\(refreshEndpointStates, 15000\)/)
   assert.match(page, /clearInterval\(statusTimer\)/)
 })
+
+test('LM Studio details distinguish actual loaded context from the model maximum and explain reconciled state', () => {
+  const page = readFileSync(new URL('../src/InfrastructurePage.vue', import.meta.url), 'utf8')
+  assert.match(page, /label: '실제 로드 컨텍스트 길이', keys: \['context_length', 'contextLength', 'loaded_context_length', 'n_ctx'\]/)
+  assert.match(page, /label: '모델 최대 지원 컨텍스트'/)
+  assert.match(page, /modelMetadata\(inspectingDeployment.value\).loadStateEvidence/)
+  assert.match(page, /v-if="inspectingLoadStateNote"/)
+})

@@ -18,11 +18,15 @@ Runtime 상태는 프로그램 창의 실행 여부가 아니라 AIConnect에서
 
 ## 프로그램별 확인
 
-- LM Studio: `/api/v1/models`의 `loaded_instances`를 사용합니다. 구버전은 `/api/v0/models`의 명시적인 state를 확인합니다. 최후의 `/v1/models` 목록은 JIT 때문에 다운로드 목록일 수 있어 로드 여부가 없으면 CONNECTED로 남깁니다.
+- LM Studio: `/api/v1/models`의 모델 목록·인스턴스 설정을 가져오고 `/api/v0/models`의 명시적 state를 추가 조회합니다. 일부 버전에서 v1이 `loaded_instances: []`를 반환해도 v0는 실제 모델을 `loaded`로 보고하므로, 정확히 일치하는 모델/인스턴스 ID에 한해 나중에 조회한 v0 상태로 보완합니다. 같은 방식으로 v0의 명시적인 언로드 상태도 반영합니다. v0가 미지원·오류·상태 미보고이면 정상적인 v1 정보를 유지합니다. 최후의 `/v1/models` 목록은 JIT 때문에 다운로드 목록일 수 있어 로드 여부가 없으면 CONNECTED로 남깁니다.
 - Ollama: `/api/tags`는 다운로드 목록, `/api/ps`는 메모리 로드 여부의 기준입니다. `/api/ps`를 확인하지 못했으면 로드 상태를 추정하지 않습니다.
 - llama.cpp: router의 명시적 상태 및 standalone `/v1/models`를 사용합니다. HTTP 503 중 정확한 `Loading model` 응답만 LOADING으로 취급하며 일반 503·인증 실패는 정상 연결로 바꾸지 않습니다.
 
 자동 검사 기본 주기는 30초이며 인프라 화면은 저장된 검사 결과를 15초마다 조회합니다. ‘연결 확인’은 즉시 검사합니다. 로드된 모델이 없는 정상 Runtime에는 복구용 추론을 보내거나 장애 알림을 만들지 않습니다. 과거 모델 등록·서비스 Target·요금·요청 기록은 삭제하지 않습니다.
+
+### LM Studio 상태 불일치 진단
+
+모델 메타데이터의 `loadStateEvidence`에 사용한 API, v1·v0 상태 및 충돌 여부를 보관합니다. 모델 정보 창에서도 상태를 보완한 이유를 확인할 수 있습니다. v0의 `loaded_context_length`는 실제 로드 컨텍스트이며 `max_context_length`는 모델의 최대 지원 길이입니다. 실제 길이를 보고하지 않으면 최대 길이를 대신 표시하지 않습니다. 캐시·GPU 오프로딩 등도 API가 반환한 값만 표시하며, v0로 로드 상태를 확인했다고 네이티브 로드 인스턴스 ID나 설정을 만들어 내지 않습니다.
 
 공식 형식: [LM Studio 모델 목록](https://lmstudio.ai/docs/developer/rest/list), [LM Studio OpenAI 목록과 JIT](https://lmstudio.ai/docs/developer/openai-compat/models), [Ollama 실행 모델](https://docs.ollama.com/api/ps), [llama.cpp 서버](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md).
 

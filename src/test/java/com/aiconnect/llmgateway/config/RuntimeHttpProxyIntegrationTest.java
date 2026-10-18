@@ -29,7 +29,10 @@ class RuntimeHttpProxyIntegrationTest {
             byte[] body;
             String contentType;
             if (exchange.getRequestMethod().equals("GET")) {
-                body = "{\"models\":[{\"key\":\"proxy/model\",\"loaded_instances\":[]}]}".getBytes(StandardCharsets.UTF_8);
+                String json = exchange.getRequestURI().getPath().equals("/api/v0/models")
+                        ? "{\"data\":[{\"id\":\"proxy/model\",\"state\":\"loaded\"}]}"
+                        : "{\"models\":[{\"key\":\"proxy/model\",\"loaded_instances\":[]}]}";
+                body = json.getBytes(StandardCharsets.UTF_8);
                 contentType = "application/json";
             } else {
                 exchange.getRequestBody().readAllBytes();
@@ -55,7 +58,9 @@ class RuntimeHttpProxyIntegrationTest {
 
             LmStudioRuntimeClient nonStreaming = new LmStudioRuntimeClient(
                     new HttpClientConfig().runtimeRestClient(properties, proxySettings), objectMapper, cipher);
-            assertThat(nonStreaming.listModels(endpoint).statusCode()).isEqualTo(200);
+            var inventory = nonStreaming.listModels(endpoint);
+            assertThat(inventory.statusCode()).isEqualTo(200);
+            assertThat(inventory.body().path("lm_studio_legacy_models").path(0).path("state").asText()).isEqualTo("loaded");
 
             StreamingLmStudioRuntimeClient streaming = new StreamingLmStudioRuntimeClient(
                     objectMapper, cipher, properties, proxySettings);
@@ -66,8 +71,10 @@ class RuntimeHttpProxyIntegrationTest {
             assertThat(result.statusCode()).isEqualTo(200);
             assertThat(new String(result.body().readAllBytes(), StandardCharsets.UTF_8)).contains("data: [DONE]");
 
-            assertThat(proxyTargets).hasSize(2);
-            assertThat(proxyTargets).allMatch(target -> target.contains("tailnet-only.invalid:1234"));
+            assertThat(proxyTargets).containsExactly(
+                    "http://tailnet-only.invalid:1234/api/v1/models",
+                    "http://tailnet-only.invalid:1234/api/v0/models",
+                    "http://tailnet-only.invalid:1234/v1/chat/completions");
         } finally {
             proxy.stop(0);
         }

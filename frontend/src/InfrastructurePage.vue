@@ -87,7 +87,8 @@ function runtimeSettingSections(type?: RuntimeType): RuntimeSettingSection[] {
   if (type === 'LM_STUDIO') {
     return [
       { title: '모델·컨텍스트', fields: [
-        { label: '컨텍스트 길이', keys: ['context_length', 'max_context_length', 'n_ctx'] },
+        { label: '실제 로드 컨텍스트 길이', keys: ['context_length', 'contextLength', 'loaded_context_length', 'n_ctx'] },
+        { label: '모델 최대 지원 컨텍스트', keys: ['maxContextLength', 'max_context_length'] },
         { label: '평가 배치 크기', keys: ['eval_batch_size'] },
         { label: '물리 배치 크기', keys: ['physical_batch_size'] },
         { label: '동시 예측 수', keys: ['parallel', 'max_concurrent_predictions'] },
@@ -180,6 +181,13 @@ function deploymentRuntimeSettingSections(deployment: Deployment): RuntimeSettin
   }))
 }
 const inspectingRuntimeSettings = computed(() => inspectingDeployment.value ? deploymentRuntimeSettingSections(inspectingDeployment.value) : [])
+const inspectingLoadStateNote = computed(() => {
+  const evidence = objectValue(modelMetadata(inspectingDeployment.value).loadStateEvidence)
+  if (evidence?.source !== 'LM_STUDIO_V0') return ''
+  return evidence.conflict
+    ? `LM Studio API 간 로드 상태가 다릅니다(v1: ${evidence.nativeState}, v0: ${evidence.legacyState}). 뒤에 조회한 v0의 명시적인 상태로 보완했습니다. 실제 인스턴스 ID나 미보고 설정은 생성하지 않습니다.`
+    : '로드 상태는 LM Studio v0 API에서도 확인했습니다. 실제 컨텍스트 길이는 보고된 경우에만 표시합니다.'
+})
 function runtimeState(deployment: Deployment): string {
   const metadata = modelMetadata(deployment)
   const runtimeState = metadata.runtimeState ?? metadata.runtime_state
@@ -214,7 +222,7 @@ function formatRuntimeFieldValue(field: RuntimeSettingField, value: unknown): st
   return formatRuntimeValue(value)
 }
 function runtimeDetailNote(type?: RuntimeType): string {
-  if (type === 'LM_STUDIO') return 'LM Studio가 동기화 시 반환한 loaded instance 설정을 표시합니다. 응답에 포함되지 않은 값은 추정하지 않습니다.'
+  if (type === 'LM_STUDIO') return 'LM Studio의 로드 인스턴스 설정과 v0에서 확인한 실제 컨텍스트 길이를 표시합니다. 모델 기본 설정이나 최대 지원 길이를 실제 실행 값으로 추정하지 않습니다.'
   if (type === 'LLAMA_CPP') return 'llama.cpp의 router/API 응답으로 확인 가능한 정보만 표시합니다. 프로세스 시작 인자나 서버 API가 보고하지 않는 캐시·GPU 설정은 여기서 확인할 수 없습니다.'
   if (type === 'OLLAMA') return 'Ollama가 반환한 실행 모델 정보만 표시합니다. API 응답에 없는 캐시·오프로딩 세부 설정은 추정하지 않습니다.'
   return 'Runtime 응답에 포함된 정보만 표시합니다. 응답에 포함되지 않은 값은 확인할 수 없습니다.'
@@ -484,6 +492,7 @@ onUnmounted(() => { if (statusTimer) clearInterval(statusTimer) })
       <div v-if="inspectingDeployment" class="runtime-model-detail">
         <div class="runtime-detail-summary"><div><span>모델 식별자</span><strong class="mono">{{ inspectingDeployment.providerModelId }}</strong></div><div><span>상태</span><strong>{{ inspectingDeployment.loaded ? '현재 로드됨' : runtimeStateLabel(inspectingDeployment) }}</strong></div><div><span>Runtime</span><strong>{{ runtimeLabel(selected?.runtimeType) }}</strong></div><div><span>양자화</span><strong>{{ inspectingDeployment.quantization ?? '런타임 응답에 포함되지 않음' }}</strong></div></div>
         <p class="runtime-detail-note">{{ runtimeDetailNote(selected?.runtimeType) }}</p>
+        <p v-if="inspectingLoadStateNote" class="runtime-detail-note">{{ inspectingLoadStateNote }}</p>
         <section v-for="section in inspectingRuntimeSettings" :key="section.title" class="runtime-setting-section">
           <h3>{{ section.title }}</h3>
           <dl><div v-for="field in section.fields" :key="field.label" :class="{ unreported: !field.reported }"><dt>{{ field.label }}</dt><dd>{{ field.reported ? formatRuntimeFieldValue(field, field.value) : '런타임 응답에 포함되지 않음' }}</dd></div></dl>
