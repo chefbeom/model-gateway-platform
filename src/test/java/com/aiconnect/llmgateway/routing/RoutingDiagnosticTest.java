@@ -34,6 +34,26 @@ class RoutingDiagnosticTest {
             new WeightedTargetSelector(active), new ObjectMapper());
 
     @Test
+    void standbyLoadingAndUnknownLoadStateAreNotMislabeledAsRuntimeFailures() {
+        UUID serviceId = UUID.randomUUID();
+        LlmService service = new LlmService(UUID.randomUUID(), "runtime-state", "Runtime state", FailoverPolicy.COMPATIBLE,
+                RetryPolicy.SAFE, false, "[]", BigDecimal.ZERO, BigDecimal.ZERO);
+        ReflectionTestUtils.setField(service, "id", serviceId);
+        RuntimeEndpoint endpoint = endpoint();
+        ModelDeployment model = deployment(endpoint, "gemma", "[]", false, HealthStatus.UNKNOWN);
+        when(targets.findByServiceIdOrderByPriorityAsc(serviceId)).thenReturn(List.of(target(serviceId, model, false, true)));
+        when(deployments.findById(model.getId())).thenReturn(Optional.of(model));
+        when(endpoints.findById(endpoint.getId())).thenReturn(Optional.of(endpoint));
+        for (var state : List.of(HealthStatus.STANDBY, HealthStatus.LOADING, HealthStatus.CONNECTED)) {
+            ReflectionTestUtils.setField(endpoint, "healthStatus", state);
+            var decision = routing.evaluate(service, Set.of(), UUID.randomUUID());
+            assertThat(decision.eligibleTargets()).isEmpty();
+            String expected = state == HealthStatus.CONNECTED ? "ENDPOINT_MODEL_STATE_UNKNOWN" : "ENDPOINT_" + state;
+            assertThat(decision.evaluations().get(0).reasonCodes()).contains(expected).doesNotContain("ENDPOINT_UNHEALTHY");
+        }
+    }
+
+    @Test
     void prohibitedExternalPrimaryDoesNotDetermineStrictLocalCompatibility() {
         UUID serviceId = UUID.randomUUID();
         LlmService service = new LlmService(UUID.randomUUID(), "private", "Private", FailoverPolicy.STRICT,

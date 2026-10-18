@@ -64,7 +64,7 @@ public class OllamaRuntimeAdapter implements RuntimeProviderAdapter {
 
     private RuntimeResult get(RuntimeEndpoint endpoint, String path) {
         try {
-            return client.get().uri(RuntimeUrl.append(endpoint.getBaseUrl(), path))
+            return client.get().uri(RuntimeUrl.root(endpoint.getBaseUrl(), path))
                     .headers(headers -> applyAuthorization(headers, endpoint))
                     .exchange((request, response) -> toResult(response.getStatusCode().value(), response.getBody()));
         } catch (RestClientException exception) {
@@ -74,6 +74,7 @@ public class OllamaRuntimeAdapter implements RuntimeProviderAdapter {
 
     private ObjectNode normalizeModels(JsonNode body, JsonNode running) {
         ObjectNode normalized = objectMapper.createObjectNode().put("object", "list");
+        normalized.put("load_state_known", running != null);
         ArrayNode data = normalized.putArray("data");
         java.util.Map<String, JsonNode> runningByName = new java.util.LinkedHashMap<>();
         for (JsonNode model : running == null ? objectMapper.createArrayNode() : running.path("models")) {
@@ -86,7 +87,7 @@ public class OllamaRuntimeAdapter implements RuntimeProviderAdapter {
             if (name.isBlank()) continue;
             String key = name.toLowerCase(java.util.Locale.ROOT);
             JsonNode live = runningByName.get(key);
-            ObjectNode item = normalizedModel(model, live);
+            ObjectNode item = normalizedModel(model, live, running != null);
             data.add(item);
             emitted.add(key);
         }
@@ -95,16 +96,16 @@ public class OllamaRuntimeAdapter implements RuntimeProviderAdapter {
         for (JsonNode live : runningByName.values()) {
             String name = modelName(live);
             String key = name.toLowerCase(java.util.Locale.ROOT);
-            if (!name.isBlank() && emitted.add(key)) data.add(normalizedModel(live, live));
+            if (!name.isBlank() && emitted.add(key)) data.add(normalizedModel(live, live, true));
         }
         return normalized;
     }
 
-    private ObjectNode normalizedModel(JsonNode model, JsonNode live) {
+    private ObjectNode normalizedModel(JsonNode model, JsonNode live, boolean runningStateKnown) {
         String name = modelName(model);
         ObjectNode item = objectMapper.createObjectNode().put("id", name).put("object", "model").put("owned_by", "ollama");
         boolean loaded = live != null;
-        item.put("state", loaded ? "loaded" : "unloaded");
+        item.put("state", loaded ? "loaded" : runningStateKnown ? "unloaded" : "unknown");
         JsonNode details = model.path("details").isObject() ? model.path("details") : live == null ? objectMapper.createObjectNode() : live.path("details");
         if (details.isObject()) {
             if (details.hasNonNull("family")) item.put("arch", details.path("family").asText());

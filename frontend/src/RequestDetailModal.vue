@@ -20,6 +20,7 @@ function reasonLabel(code: string) {
   const labels: Record<string, string> = {
     PROJECT_EXTERNAL_AI_BLOCKED: '프로젝트 외부 AI 전송 금지', LOCAL_MODEL_UNAVAILABLE: '사용 가능한 로컬 모델 없음',
     CAPABILITY_MISSING: '필수 기능 미지원', ENDPOINT_UNHEALTHY: 'Endpoint 비정상', ENDPOINT_MISSING: 'Endpoint 없음', ENDPOINT_DISABLED: 'Endpoint 비활성',
+    ENDPOINT_STANDBY: 'Runtime 모델 대기', ENDPOINT_LOADING: 'Runtime 모델 준비 중', ENDPOINT_MODEL_STATE_UNKNOWN: 'Runtime 로드 상태 미확인', ENDPOINT_RECOVERING: 'Runtime 복구 확인 중', ENDPOINT_DRAINING: 'Runtime 신규 요청 중지',
     DEPLOYMENT_UNHEALTHY: '배포 비정상', DEPLOYMENT_NOT_LOADED: '모델 미로드', DEPLOYMENT_MISSING: '배포 없음', DEPLOYMENT_DISABLED: '배포 비활성', TARGET_MODEL_STALE: 'Target 모델 변경 필요',
     TARGET_DISABLED: 'Target 비활성', DEGRADED_NOT_ALLOWED: 'Degraded 제외', COMPATIBILITY_MISMATCH: '호환성 불일치', CONCURRENCY_LIMIT_REACHED: '동시성 한도',
     EXTERNAL_AUTO_FAILOVER_NOT_ALLOWED: '자동 Failover 미승인', EXTERNAL_MANUAL_ACCESS_NOT_ALLOWED: '수동 사용 미승인', EXTERNAL_PROVIDER_UNHEALTHY: 'Provider 비정상',

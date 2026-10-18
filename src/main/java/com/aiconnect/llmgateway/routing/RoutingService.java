@@ -140,7 +140,14 @@ public class RoutingService {
                 if (endpoint == null) reasons.add("ENDPOINT_MISSING");
                 else {
                     if (!endpoint.isEnabled()) reasons.add("ENDPOINT_DISABLED");
-                    if (endpoint.getHealthStatus() != HealthStatus.HEALTHY) reasons.add("ENDPOINT_UNHEALTHY");
+                    if (endpoint.getHealthStatus() != HealthStatus.HEALTHY) reasons.add(switch (endpoint.getHealthStatus()) {
+                        case STANDBY -> "ENDPOINT_STANDBY";
+                        case LOADING -> "ENDPOINT_LOADING";
+                        case CONNECTED -> "ENDPOINT_MODEL_STATE_UNKNOWN";
+                        case RECOVERING -> "ENDPOINT_RECOVERING";
+                        case DRAINING -> "ENDPOINT_DRAINING";
+                        default -> "ENDPOINT_UNHEALTHY";
+                    });
                 }
             }
 

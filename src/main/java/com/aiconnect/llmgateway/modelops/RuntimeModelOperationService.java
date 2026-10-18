@@ -229,7 +229,20 @@ public class RuntimeModelOperationService {
     }
 
     private String recover(RuntimeEndpoint endpoint, String modelKey, boolean loading) {
+        // Release the temporary Drain owned by this completed model operation.
         endpoint.beginRecovery();
+        if (!loading) {
+            Optional<ModelDeployment> remaining = deployments.findByRuntimeEndpointId(endpoint.getId()).stream()
+                    .filter(ModelDeployment::isLoaded).findFirst();
+            if (remaining.isEmpty()) {
+                // A successful unload is normal standby, including router mode.
+                // Do not report a failed runtime or autoload a model to warm it.
+                endpoint.recordInventoryHealth(false, false);
+                endpoints.save(endpoint);
+                return "Model unloaded. The runtime API remains available in STANDBY until a model is loaded.";
+            }
+            modelKey = remaining.get().getProviderModelId();
+        }
         endpoints.save(endpoint);
         if (isLlamaCpp(endpoint)) {
             if (loading) {
@@ -246,17 +259,6 @@ public class RuntimeModelOperationService {
             endpoints.save(endpoint);
             return loading ? "llama.cpp router confirms the model is loaded." : "llama.cpp model unload completed; the router remains available.";
         }
-        if (!loading) {
-            Optional<ModelDeployment> remaining = deployments.findByRuntimeEndpointId(endpoint.getId()).stream()
-                    .filter(ModelDeployment::isLoaded).findFirst();
-            if (remaining.isEmpty()) {
-                endpoint.failRecovery();
-                endpoints.save(endpoint);
-                return "Model unloaded. No loaded models remain, so this endpoint stays unavailable until a model is loaded.";
-            }
-            modelKey = remaining.get().getProviderModelId();
-        }
-
         ObjectNode warm = mapper.createObjectNode().put("model", modelKey).put("stream", false)
                 .put("max_tokens", 1).put("temperature", 0);
         warm.putArray("messages").addObject().put("role", "user").put("content", "OK");

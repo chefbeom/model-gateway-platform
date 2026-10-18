@@ -163,12 +163,23 @@ public class ControlPlaneService {
         try {
             RuntimeResult result = runtimeClient.listModels(endpoint);
             boolean healthy = result.isSuccessful();
-            endpoint.recordHealth(healthy);
+            // A standalone llama.cpp process can answer 503 while loading. This
+            // exact native response is preparation, not an unreachable server.
+            boolean loading = endpoint.getRuntimeType() == RuntimeType.LLAMA_CPP && result.statusCode() == 503
+                    && result.body() != null && "Loading model".equalsIgnoreCase(result.body().path("error").path("message").asText());
+            List<DiscoveredRuntimeModel> discovered = healthy
+                    ? modelDiscovery.discover(result.body(), endpoint.getRuntimeType()) : List.of();
+            List<String> loaded = discovered.stream().filter(DiscoveredRuntimeModel::loaded)
+                    .map(DiscoveredRuntimeModel::providerModelId).toList();
+            if (healthy || loading) endpoint.recordInventoryHealth(!loaded.isEmpty(), loading || modelDiscovery.hasPreparingModel(discovered),
+                    !modelDiscovery.hasUnknownLoadState(result.body(), discovered));
+            else endpoint.recordHealth(false);
             endpoints.save(endpoint);
-            List<DiscoveredRuntimeModel> discovered = modelDiscovery.discover(result.body(), endpoint.getRuntimeType());
             syncDeploymentHealth(endpoint, discovered, healthy);
-            return healthy
-                    ? new ProbeResult(true, result.statusCode(), modelIds(discovered), null)
+            return healthy || loading
+                    ? new ProbeResult(true, result.statusCode(), modelIds(discovered), null, loaded,
+                            discovered.stream().filter(model -> model.loaded() && model.capabilitiesJson().contains("\"CHAT_COMPLETION\""))
+                                    .map(DiscoveredRuntimeModel::providerModelId).toList())
                     : new ProbeResult(false, result.statusCode(), modelIds(discovered),
                     runtimeLabel(endpoint) + " returned HTTP " + result.statusCode() + ".");
         } catch (RuntimeUnavailableException exception) {
@@ -198,9 +209,10 @@ public class ControlPlaneService {
         if (!result.isSuccessful()) {
             throw new ApiException(HttpStatus.BAD_GATEWAY, "RUNTIME_PROBE_FAILED", "The runtime rejected the model-list request.");
         }
-        endpoint.recordHealth(true);
-        endpoints.save(endpoint);
         List<DiscoveredRuntimeModel> discovered = modelDiscovery.discover(result.body(), endpoint.getRuntimeType());
+        endpoint.recordInventoryHealth(discovered.stream().anyMatch(DiscoveredRuntimeModel::loaded), modelDiscovery.hasPreparingModel(discovered),
+                !modelDiscovery.hasUnknownLoadState(result.body(), discovered));
+        endpoints.save(endpoint);
         List<ModelDeployment> existing = deployments.findByRuntimeEndpointId(endpointId);
         Map<String, List<ModelDeployment>> existingById = existing.stream()
                 .collect(Collectors.groupingBy(ModelDeployment::getProviderModelId, LinkedHashMap::new, Collectors.toList()));
@@ -365,7 +377,11 @@ public class ControlPlaneService {
         }
     }
 
-    public record ProbeResult(boolean reachable, int httpStatus, List<String> modelIds, String errorMessage) {
+    public record ProbeResult(boolean reachable, int httpStatus, List<String> modelIds, String errorMessage,
+                              List<String> loadedModelIds, List<String> loadedChatModelIds) {
+        public ProbeResult(boolean reachable, int httpStatus, List<String> modelIds, String errorMessage) {
+            this(reachable, httpStatus, modelIds, errorMessage, List.of(), List.of());
+        }
         /** Preserves compatibility for existing callers that only need reachability, status, and discovered model IDs. */
         public ProbeResult(boolean reachable, int httpStatus, List<String> modelIds) {
             this(reachable, httpStatus, modelIds, null);

@@ -126,6 +126,24 @@ public class RuntimeEndpoint {
         healthStatus = healthStatus == HealthStatus.UNHEALTHY ? HealthStatus.RECOVERING : HealthStatus.HEALTHY;
     }
 
+    /** A responding runtime without a loaded model is not a failed runtime. */
+    public void recordInventoryHealth(boolean hasLoadedModel, boolean preparingModel) {
+        recordInventoryHealth(hasLoadedModel, preparingModel, true);
+    }
+
+    public void recordInventoryHealth(boolean hasLoadedModel, boolean preparingModel, boolean modelStateKnown) {
+        if (hasLoadedModel) {
+            recordHealth(true);
+            return;
+        }
+        lastCheckedAt = Instant.now();
+        lastSuccessAt = lastCheckedAt;
+        consecutiveFailures = 0;
+        if (healthStatus != HealthStatus.DRAINING) {
+            healthStatus = preparingModel ? HealthStatus.LOADING : modelStateKnown ? HealthStatus.STANDBY : HealthStatus.CONNECTED;
+        }
+    }
+
     public void beginDraining() { healthStatus = HealthStatus.DRAINING; }
     public void beginRecovery() { if (enabled) healthStatus = HealthStatus.RECOVERING; }
     public void completeRecovery() {

@@ -120,7 +120,15 @@ public class RequestDiagnosticService {
             case "CAPABILITY_MISSING" -> new RequestDiagnosticPayload.Recommendation(code, "모델 기능 등록 확인",
                     "요청에 필요한 기능(" + missing + ")이 대상 모델에 등록되어 있지 않습니다. 외부 AI 또는 배포 모델 설정에서 실제 지원 여부를 확인한 뒤 Capability를 등록하세요.");
             case "ENDPOINT_UNHEALTHY", "ENDPOINT_MISSING", "ENDPOINT_DISABLED" -> new RequestDiagnosticPayload.Recommendation(code, "Runtime 연결 확인",
-                    "LM Studio Endpoint의 실행 상태, 주소, 방화벽과 포트 연결을 확인한 뒤 인프라 연결 확인을 다시 실행하세요.");
+                    "Runtime API 서버의 실행 상태, 주소, 인증, 방화벽과 포트 연결을 확인한 뒤 인프라 연결 확인을 다시 실행하세요.");
+            case "ENDPOINT_STANDBY" -> new RequestDiagnosticPayload.Recommendation(code, "로컬 모델 로드",
+                    "Runtime API 연결은 정상이지만 로드된 모델이 없습니다. 인프라에서 사용할 모델을 로드하고 Target을 확인하세요.");
+            case "ENDPOINT_LOADING" -> new RequestDiagnosticPayload.Recommendation(code, "모델 준비 완료 대기",
+                    "Runtime이 모델을 준비하고 있습니다. 로드·다운로드·언로드 완료 후 연결 상태와 모델 동기화를 확인하세요.");
+            case "ENDPOINT_MODEL_STATE_UNKNOWN" -> new RequestDiagnosticPayload.Recommendation(code, "실제 로드 상태 확인",
+                    "API는 응답하지만 실제 모델 로드 여부를 확인할 수 없습니다. Runtime 종류·버전과 네이티브 모델 API 지원을 확인하세요.");
+            case "ENDPOINT_RECOVERING", "ENDPOINT_DRAINING" -> new RequestDiagnosticPayload.Recommendation(code, "Runtime 투입 상태 확인",
+                    "Runtime이 복구 검증 중이거나 관리자 Drain 상태입니다. 복구 완료 또는 재투입을 확인하세요.");
             case "TARGET_MODEL_STALE" -> new RequestDiagnosticPayload.Recommendation(code, "Target 모델 동기화 확인",
                     "인프라 모델이 변경되어 Target이 이전 Deployment를 참조하고 있습니다. 모델 동기화를 다시 실행하거나 Target의 모델 변경 자동 추적 설정을 확인하세요.");
             case "DEPLOYMENT_UNHEALTHY", "DEPLOYMENT_NOT_LOADED" -> new RequestDiagnosticPayload.Recommendation(code, "모델 배포 상태 확인",

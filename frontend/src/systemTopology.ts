@@ -44,7 +44,10 @@ export function safeEndpoint(value: string) {
 export function resourceStatus(resource: { enabled: boolean; healthStatus: string }): TopologyStatus {
   if (!resource.enabled) return disabled('관리 설정에서 비활성화되어 있습니다.')
   const health = resource.healthStatus.toUpperCase()
-  if (['HEALTHY', 'READY', 'ACTIVE', 'CONNECTED'].includes(health)) return ok('정상 기록', '마지막 저장된 연결 검사 상태가 정상입니다. 현재 요청의 성공을 보장하지 않습니다.')
+  if (['HEALTHY', 'READY', 'ACTIVE'].includes(health)) return ok('정상 기록', '마지막 저장된 연결 검사 상태가 정상입니다. 현재 요청의 성공을 보장하지 않습니다.')
+  if (health === 'STANDBY') return warning('모델 대기', 'API 연결은 정상이지만 현재 로드된 모델이 없습니다. Runtime 장애가 아닙니다.')
+  if (health === 'LOADING') return warning('모델 준비 중', 'Runtime에서 모델 상태 전환이 진행 중이며 추론 준비가 끝나지 않았습니다.')
+  if (health === 'CONNECTED') return uncertain('API 연결은 정상이지만 서버가 실제 모델 로드 상태를 보고하지 않습니다.', '연결됨 · 모델 미확인')
   if (['UNHEALTHY', 'FAILED', 'ERROR'].includes(health)) return failed('연결 실패', '마지막 연결 검사에서 장애 상태가 기록되었습니다.')
   if (health === 'DRAINING') return warning('Drain', '신규 요청 후보에서 제외하는 Drain 상태입니다.')
   if (['RECOVERING', 'DEGRADED', 'SUSPECT'].includes(health)) return warning('복구·주의', '복구 또는 불안정 상태가 기록되었습니다.')

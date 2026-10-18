@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import BaseModal from './BaseModal.vue'
 import ModelOperationsPanel from './ModelOperationsPanel.vue'
 import ModelFeatureBadges from './ModelFeatureBadges.vue'
 import ModelFeatureSupportManager from './ModelFeatureSupportManager.vue'
 import { adminFetch, type AdminAuth, type Deployment, type Endpoint, type RuntimeType } from './api'
+import { runtimeStatus } from './runtimeStatus'
 
 const props = defineProps<{ organizationId: string; auth: AdminAuth }>()
 const emit = defineEmits<{ openPlayground: [targetId: string] }>()
@@ -52,6 +53,7 @@ const currentRuntimeDeployments = computed(() => deployments.value.filter(item =
 const unavailableDeployments = computed(() => deployments.value.filter(item => item.healthStatus === 'UNHEALTHY'))
 const loadedDeployments = computed(() => currentRuntimeDeployments.value.filter(item => item.loaded))
 const candidateDeployments = computed(() => currentRuntimeDeployments.value.filter(item => !item.loaded))
+let stateGeneration = 0
 
 type RuntimeSettingField = { label: string; keys: string[]; fallback?: unknown; source?: string }
 type RuntimeSettingSection = { title: string; fields: RuntimeSettingField[] }
@@ -218,7 +220,6 @@ function runtimeDetailNote(type?: RuntimeType): string {
   return 'Runtime 응답에 포함된 정보만 표시합니다. 응답에 포함되지 않은 값은 확인할 수 없습니다.'
 }
 
-function healthClass(value?: string) { return (value ?? 'unknown').toLowerCase() }
 function endpointLabel(endpoint: Endpoint) { return endpoint.displayName || endpoint.baseUrl.replace(/^https?:\/\//, '') }
 function deploymentVariantSummary(deployment: Deployment) {
   if (!deployment.metadataJson) return deployment.quantization || '-'
@@ -232,6 +233,7 @@ function deploymentVariantSummary(deployment: Deployment) {
   } catch { return deployment.quantization || '-' }
 }
 async function selectEndpoint(endpoint: Endpoint) {
+  stateGeneration++
   selected.value = endpoint
   const [models, devices] = await Promise.all([
     adminFetch<Deployment[]>(`/api/admin/runtime-endpoints/${endpoint.id}/deployments`, props.auth),
@@ -242,6 +244,7 @@ async function selectEndpoint(endpoint: Endpoint) {
 }
 
 async function load(preferredId?: string) {
+  stateGeneration++
   busy.value = true
   message.value = ''
   try {
@@ -275,13 +278,13 @@ async function action(name: 'probe' | 'sync-models' | 'drain' | 'resume') {
   message.value = ''
   try {
     if (name === 'probe') {
-      const result = await adminFetch<{ reachable: boolean; httpStatus: number; modelIds: string[]; errorMessage?: string | null }>(
+      const result = await adminFetch<{ reachable: boolean; httpStatus: number; modelIds: string[]; loadedModelIds: string[]; errorMessage?: string | null }>(
         `/api/admin/runtime-endpoints/${selected.value.id}/probe`, props.auth, { method: 'POST' }
       )
-      message.value = result.reachable
-        ? `연결 성공 · ${result.modelIds.length}개 모델을 확인했습니다.`
-        : `연결 실패${result.httpStatus ? ` · HTTP ${result.httpStatus}` : ''}${result.errorMessage ? ` · ${result.errorMessage}` : ''}`
       await load(selected.value.id)
+      message.value = result.reachable
+        ? `API 연결 확인 · ${selected.value ? runtimeStatus(selected.value).label : '상태 확인 필요'} · 발견 ${result.modelIds.length}개 / 로드 ${result.loadedModelIds?.length ?? 0}개`
+        : `연결 실패${result.httpStatus ? ` · HTTP ${result.httpStatus}` : ''}${result.errorMessage ? ` · ${result.errorMessage}` : ''}`
       return
     }
     await adminFetch<unknown>(`/api/admin/runtime-endpoints/${selected.value.id}/${name}`, props.auth, { method: 'POST' })
@@ -383,7 +386,29 @@ async function saveDeployment() {
 }
 
 watch(() => props.organizationId, () => { selected.value = null; load() })
-onMounted(load)
+let statusTimer: ReturnType<typeof setInterval> | undefined
+let refreshingStatus = false
+async function refreshEndpointStates() {
+  if (busy.value || refreshingStatus || !props.organizationId || endpointSettingsOpen.value || deploymentOpen.value || deploymentPricingOpen.value) return
+  const organizationId = props.organizationId
+  const selectedId = selected.value?.id
+  const generation = stateGeneration
+  refreshingStatus = true
+  try {
+    const next = await adminFetch<Endpoint[]>(`/api/admin/organizations/${organizationId}/runtime-endpoints`, props.auth)
+    if (props.organizationId !== organizationId || busy.value || generation !== stateGeneration) return
+    endpoints.value = next
+    if (selected.value?.id !== selectedId) return
+    const current = next.find(item => item.id === selectedId)
+    if (!current) return
+    selected.value = current
+    const models = await adminFetch<Deployment[]>(`/api/admin/runtime-endpoints/${current.id}/deployments`, props.auth)
+    if (props.organizationId === organizationId && selected.value?.id === current.id && !busy.value && generation === stateGeneration) deployments.value = models
+  } catch { /* Keep the last recorded state and its timestamp when a console read fails. */ }
+  finally { refreshingStatus = false }
+}
+onMounted(() => { load(); statusTimer = setInterval(refreshEndpointStates, 15000) })
+onUnmounted(() => { if (statusTimer) clearInterval(statusTimer) })
 </script>
 
 <template>
@@ -394,12 +419,12 @@ onMounted(load)
     <div class="split-layout infrastructure-layout">
       <article class="surface-card list-panel">
         <header class="card-header"><div><span class="card-kicker">RUNTIME ENDPOINTS</span><h2>연결된 Runtime</h2></div><span class="count-badge">{{ endpoints.length }}</span></header>
-        <div v-if="endpoints.length" class="endpoint-list"><article v-for="endpoint in endpoints" :key="endpoint.id" class="endpoint-list-row" :class="{ active: selected?.id === endpoint.id }"><button class="endpoint-select" @click="selectEndpoint(endpoint)"><span class="node-light" :class="healthClass(endpoint.healthStatus)"></span><span><strong>{{ endpointLabel(endpoint) }}</strong><small>{{ endpoint.runtimeType }} · {{ endpoint.healthStatus }}</small></span><b>›</b></button><button class="endpoint-settings-button" :aria-label="`${endpointLabel(endpoint)} 설정`" :disabled="busy" @click="openEndpointSettings(endpoint)">⚙</button></article></div>
+        <div v-if="endpoints.length" class="endpoint-list"><article v-for="endpoint in endpoints" :key="endpoint.id" class="endpoint-list-row" :class="{ active: selected?.id === endpoint.id }"><button class="endpoint-select" :title="runtimeStatus(endpoint).description" @click="selectEndpoint(endpoint)"><span class="node-light" :class="runtimeStatus(endpoint).className"></span><span><strong>{{ endpointLabel(endpoint) }}</strong><small>{{ runtimeLabel(endpoint.runtimeType) }} · {{ runtimeStatus(endpoint).code }} · {{ runtimeStatus(endpoint).label }}</small></span><b>›</b></button><button class="endpoint-settings-button" :aria-label="`${endpointLabel(endpoint)} 설정`" :disabled="busy" @click="openEndpointSettings(endpoint)">⚙</button></article></div>
         <div v-else class="empty-state"><span>◌</span><h3>등록된 Runtime이 없습니다</h3><p>Tailscale에서 접근 가능한 AI Runtime URL을 연결하세요.</p><button class="text-button" :disabled="!organizationId" @click="createOpen = true">첫 Runtime 연결</button></div>
       </article>
       <article class="surface-card detail-panel">
         <template v-if="selected">
-          <header class="detail-header"><div><span class="status-chip" :class="healthClass(selected.healthStatus)"><i></i>{{ selected.healthStatus }}</span><h2>{{ selected.baseUrl }}</h2><p>{{ selected.runtimeType }} · 마지막 확인 {{ selected.lastCheckedAt ? new Date(selected.lastCheckedAt).toLocaleString() : '기록 없음' }}</p></div><div class="action-menu"><button class="secondary-button" :disabled="busy || !deployments.some(item => item.loaded)" @click="emit('openPlayground', selected.id)">로드된 모델 테스트</button><button class="secondary-button" :disabled="busy" @click="openEndpointSettings()">Endpoint 설정</button><button class="secondary-button" :disabled="busy" @click="action('probe')">연결 확인</button><button class="secondary-button" :disabled="busy" @click="action('sync-models')">모델 동기화</button><button class="ghost-button" :disabled="busy" @click="action(selected.healthStatus === 'DRAINING' ? 'resume' : 'drain')">{{ selected.healthStatus === 'DRAINING' ? '복구 재투입' : 'Drain' }}</button></div></header>
+          <header class="detail-header"><div><span class="status-chip" :class="runtimeStatus(selected).className"><i></i>{{ runtimeStatus(selected).code }} · {{ runtimeStatus(selected).label }}</span><h2>{{ selected.baseUrl }}</h2><p>{{ selected.runtimeType }} · 마지막 확인 {{ selected.lastCheckedAt ? new Date(selected.lastCheckedAt).toLocaleString() : '기록 없음' }}</p><p class="runtime-state-description">{{ runtimeStatus(selected).description }}</p><p class="field-help">서버 검사 결과를 약 15초마다 갱신합니다. 프로그램만 켜져 있어도 API 서버가 중지되어 있거나 접근할 수 없으면 연결 실패로 표시됩니다.</p></div><div class="action-menu"><button class="secondary-button" :disabled="busy || !selected.enabled || selected.healthStatus !== 'HEALTHY' || !deployments.some(item => item.loaded)" @click="emit('openPlayground', selected.id)">로드된 모델 테스트</button><button class="secondary-button" :disabled="busy" @click="openEndpointSettings()">Endpoint 설정</button><button class="secondary-button" :disabled="busy" @click="action('probe')">연결 확인</button><button class="secondary-button" :disabled="busy" @click="action('sync-models')">모델 동기화</button><button class="ghost-button" :disabled="busy" @click="action(selected.healthStatus === 'DRAINING' ? 'resume' : 'drain')">{{ selected.healthStatus === 'DRAINING' ? '복구 재투입' : 'Drain' }}</button></div></header>
           <div class="section-divider"><span>ACCELERATOR INVENTORY</span><button class="text-button" @click="openAccelerator">+ 장치 등록</button></div>
           <div v-if="accelerators.length" class="hardware-strip"><article v-for="device in accelerators" :key="device.id" class="accelerator-card"><span class="accelerator-index">{{ device.deviceIndex }}</span><div><span class="card-kicker">{{ device.vendor || 'UNKNOWN VENDOR' }}</span><h3>{{ device.productName || '이름 없는 Accelerator' }}</h3><p>{{ device.memoryTotalMb ? `${device.memoryTotalMb.toLocaleString()} MB` : '메모리 정보 없음' }} · {{ device.driverVersion || '드라이버 정보 없음' }}</p></div><small class="mono">{{ device.deviceUuid || device.id }}</small></article></div>
           <div v-if="accelerators.length" class="hardware-actions"><span>Hardware inventory is optional metadata. It does not change routing capacity automatically.</span><div><button v-for="device in accelerators" :key="`${device.id}-actions`" class="text-button" :disabled="busy" @click="openAccelerator(device)">Edit {{ device.deviceIndex }}</button><button v-for="device in accelerators" :key="`${device.id}-delete`" class="danger-text-button" :disabled="busy" @click="deleteAccelerator(device)">Delete {{ device.deviceIndex }}</button></div></div>
@@ -483,7 +508,8 @@ onMounted(load)
 .endpoint-select { min-width: 0; min-height: 59px; padding: 10px; display: grid; grid-template-columns: auto 1fr auto; gap: 11px; align-items: center; border: 0; background: transparent; color: var(--muted); text-align: left; }
 .endpoint-list-row.active .endpoint-select { color: var(--text); }
 .endpoint-select > span:nth-child(2) { min-width: 0; display: grid; gap: 5px; }
-.endpoint-select strong, .endpoint-select small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.endpoint-select strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.endpoint-select small { white-space: normal; overflow-wrap: anywhere; line-height: 1.6; }
 .endpoint-select strong { font-size: 11px; }.endpoint-select small { color: var(--muted); font-size: 8px; }.endpoint-select b { color: var(--faint); }.deployment-variant-summary { display: block; margin-top: 3px; color: var(--accent-strong); font-size: 9px; }
 .endpoint-settings-button { width: 34px; height: 34px; margin: auto 3px auto 0; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--muted); }
 .endpoint-settings-button:hover { border-color: var(--accent-border); background: var(--accent-dim); color: var(--accent-strong); }

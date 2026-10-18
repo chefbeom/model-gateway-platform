@@ -284,6 +284,8 @@ kbd { padding: 3px 6px; border: 1px solid var(--border-strong); border-radius: 5
 .node-light.healthy, .node-light.ready { background: var(--accent-strong); box-shadow: 0 0 10px var(--accent-strong); }
 .node-light.unhealthy, .node-light.failed { background: var(--danger); box-shadow: 0 0 10px var(--danger); }
 .node-light.suspect, .node-light.recovering, .node-light.draining { background: var(--warning); }
+.node-light.standby, .node-light.connected { background: #6eb2d0; box-shadow: none; }
+.node-light.loading { background: var(--warning); }
 .activity-list { padding: 8px; display: grid; }
 .activity-list button { padding: 10px; display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 9px; border: 0; border-radius: 10px; background: transparent; text-align: left; }
 .activity-list button:hover { background: var(--surface-2); }
@@ -398,6 +400,9 @@ kbd { padding: 3px 6px; border: 1px solid var(--border-strong); border-radius: 5
 .status-chip.healthy, .status-chip.ready { border-color: var(--accent-border); background: var(--accent-dim); color: var(--accent-strong); }
 .status-chip.unhealthy, .status-chip.failed { border-color: color-mix(in srgb, var(--danger) 32%, transparent); background: var(--danger-dim); color: var(--danger); }
 .status-chip.suspect, .status-chip.recovering, .status-chip.draining { background: var(--warning-dim); color: var(--warning); }
+.status-chip.standby, .status-chip.connected { color: color-mix(in srgb, var(--text) 75%, #4687a4); border-color: #497387; background: color-mix(in srgb, #6eb2d0 10%, var(--surface-2)); }
+.status-chip.loading { background: var(--warning-dim); color: var(--warning); }
+.runtime-state-description { max-width: 680px; line-height: 1.65; overflow-wrap: anywhere; }
 .code-card pre { margin: 0; padding: 22px; overflow-x: auto; background: var(--bg-soft); color: var(--accent); font-size: 10px; line-height: 1.8; }
 .secret-reveal { padding: 18px; display: grid; grid-template-columns: 1fr auto; gap: 10px; border: 1px solid var(--accent-border); border-radius: 13px; background: var(--accent-dim); }
 .secret-reveal span { grid-column: 1 / -1; color: var(--muted); font-size: 8px; font-weight: 800; letter-spacing: .14em; }

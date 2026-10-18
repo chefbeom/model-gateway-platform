@@ -9,8 +9,25 @@ export const runtimeDiagnosticsDoc: DocPage = {
   audience: '관리자',
   minutes: 8,
   icon: '⚑',
-  keywords: ['runtime', 'tailscale', 'offline', 'unhealthy', '503', 'model unavailable', '연결 확인'],
+  keywords: ['runtime', 'tailscale', 'offline', 'unhealthy', 'standby', 'loading', 'connected', '503', 'model unavailable', '연결 확인'],
   sections: [
+    {
+      id: 'runtime-states',
+      title: 'API 연결과 모델 준비 상태 구분',
+      blocks: [
+        { type: 'paragraph', text: '프로그램 창이 켜져 있다는 것과 API 서버가 접근 가능하다는 것은 다릅니다. 인프라 상태는 마지막 API 검사와 실제 모델 인벤토리 기준이며, 화면은 약 15초마다 저장된 결과를 갱신합니다. 연결 확인 버튼은 즉시 검사합니다.' },
+        { type: 'table', columns: ['상태', '의미', '확인할 작업'], rows: [
+          ['HEALTHY', 'API 정상·로드된 모델 확인', '요청 기능과 Target 설정 확인'],
+          ['STANDBY', 'API 정상·현재 모델 미로드. 장애 아님', '원하는 모델 로드'],
+          ['LOADING', '모델 로드·다운로드·언로드 진행 중', '준비 완료 후 다시 확인'],
+          ['CONNECTED', 'API 정상이나 실제 로드 여부 미확인', 'Runtime 버전·네이티브 모델 API 확인. 로드됐다고 추정하지 않음'],
+          ['SUSPECT / UNHEALTHY', '최근 연결 실패 / 연속 연결·복구 검증 실패', 'API 서버·주소·인증·네트워크·로그 확인'],
+          ['RECOVERING / DRAINING', '복구 검증 중 / 관리자 신규 요청 중지', '복구 완료 확인 / 필요 시 재투입'],
+          ['UNKNOWN / DISABLED', '확인 전 / 관리자가 사용 중지', '연결 확인 / 활성화 설정 확인']
+        ] },
+        { type: 'callout', tone: 'info', title: '모델 미로드는 서버 장애가 아닙니다', text: '정상 연결된 서버에 로드된 모델이 없으면 STANDBY로 유지하고 복구용 추론을 보내지 않습니다. 마지막 모델을 언로드해도 장애로 표시하지 않습니다. 과거 모델과 Target은 보존합니다. LM Studio는 loaded_instances, Ollama는 /api/ps, llama.cpp는 실제 router·API 상태를 기준으로 판단합니다.' }
+      ]
+    },
     {
       id: 'meaning',
       title: '503 MODEL_UNAVAILABLE의 의미',
@@ -31,7 +48,7 @@ export const runtimeDiagnosticsDoc: DocPage = {
         { type: 'steps', items: [
           { title: 'Runtime 노드와 추론 서버 확인', text: 'GPU 서버에서 Tailscale 연결과 LM Studio·Ollama·llama.cpp 등 실제 서버 실행 상태를 확인합니다. 서버 종류, Listen 주소, 인증과 포트가 AICONNECT 등록값과 일치해야 합니다.' },
           { title: '호스트 연결 확인', text: 'AICONNECT 호스트에서 등록된 Runtime 주소·포트와 종류별 모델 API를 확인합니다. LM Studio는 보통 1234, Ollama는 보통 11434, llama.cpp는 서버 설정 포트를 사용하며 반드시 실제 값을 기준으로 검사합니다.' },
-          { title: '인프라의 연결 확인 실행', text: '인프라 화면의 연결 확인은 성공일 때만 “연결 성공”을 표시합니다. 실패하면 HTTP 상태 또는 “runtime endpoint is unreachable” 사유가 표시됩니다.', action: { label: '인프라 열기', destination: 'infrastructure' } },
+          { title: '인프라의 연결 확인 실행', text: 'API 연결 여부와 발견·로드된 모델 수를 함께 확인합니다. STANDBY는 연결 성공이지만 아직 추론할 모델은 없는 상태입니다. 실패하면 HTTP 상태 또는 “runtime endpoint is unreachable” 사유가 표시됩니다.', action: { label: '인프라 열기', destination: 'infrastructure' } },
           { title: '모델 동기화와 Target 재확인', text: '연결이 성공한 후 모델 동기화를 실행합니다. 모델 변경 자동 추적이 켜진 로컬 Target은 같은 Runtime에 정상 모델이 하나로 식별될 때 새 Deployment로 보정됩니다. 후보가 여러 개면 임의 전환하지 않으므로 LLM 서비스에서 Target 또는 요청 진단을 확인합니다.', action: { label: 'LLM 서비스 열기', destination: 'services' } }
         ] },
         { type: 'callout', tone: 'warning', title: 'Docker Desktop과 Tailnet', text: '호스트에서 Runtime URL이 열리지만 API 컨테이너에서만 실패한다면 Docker가 호스트의 Tailnet 경로를 사용하지 못하는 상태일 수 있습니다. 이 경우 TS_AUTHKEY를 준비해 docker-compose.tailscale.yml 오버레이를 사용하거나, 네트워크 운영자가 Gateway 컨테이너에서 Tailnet으로 나가는 경로를 제공해야 합니다.' }

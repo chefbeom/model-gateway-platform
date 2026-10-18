@@ -23,6 +23,24 @@ public class LmStudioModelDiscovery {
         return discover(body, null);
     }
 
+    public boolean hasPreparingModel(List<DiscoveredRuntimeModel> models) {
+        return models.stream().anyMatch(model -> {
+            try {
+                String state = objectMapper.readTree(model.metadataJson()).path("runtimeState").asText();
+                return Set.of("LOADING", "DOWNLOADING", "UNLOADING").contains(state);
+            } catch (Exception ignored) { return false; }
+        });
+    }
+
+    public boolean hasUnknownLoadState(JsonNode inventory, List<DiscoveredRuntimeModel> models) {
+        if (inventory != null && inventory.has("load_state_known") && !inventory.path("load_state_known").asBoolean()) return true;
+        return models.stream().anyMatch(model -> {
+            try {
+                return "UNKNOWN".equals(objectMapper.readTree(model.metadataJson()).path("runtimeState").asText());
+            } catch (Exception ignored) { return true; }
+        });
+    }
+
     public List<DiscoveredRuntimeModel> discover(JsonNode body, RuntimeType runtimeType) {
         if (body == null) return List.of();
         if (runtimeType == RuntimeType.LLAMA_CPP) return discoverLlamaCpp(body);
@@ -31,7 +49,9 @@ public class LmStudioModelDiscovery {
         // array. Prefer the canonical list when it contains usable model IDs;
         // the provider-specific entries may not use LM Studio key fields.
         if (body.path("data").isArray()) {
-            List<DiscoveredRuntimeModel> compatible = discoverCompatibleList(body.path("data"), true, runtimeType);
+            // LM Studio's OpenAI list may include downloaded models under JIT.
+            // Membership alone is not evidence that an instance is loaded.
+            List<DiscoveredRuntimeModel> compatible = discoverCompatibleList(body.path("data"), runtimeType != RuntimeType.LM_STUDIO, runtimeType);
             if (!compatible.isEmpty() || !body.path("models").isArray()) return compatible;
         }
         if (body.path("models").isArray()) return discoverNativeV1(body.path("models"));
@@ -168,7 +188,7 @@ public class LmStudioModelDiscovery {
                 settings.put("source", "LM_STUDIO_API");
                 Integer maximumContext = positiveInt(model.path("max_context_length"), null);
                 if (maximumContext != null) settings.put("maxContextLength", maximumContext);
-                String state = instances.isArray() ? "UNLOADED" : "UNKNOWN";
+                String state = instances.isArray() ? normalizedRuntimeState(loadState(model)) : "UNKNOWN";
                 discovered.add(new DiscoveredRuntimeModel(key, key, displayName, family, quantization,
                         maximumContext, false, 1, json(capabilities),
                         json(enrichMetadata(model, state, settings))));
@@ -275,7 +295,7 @@ public class LmStudioModelDiscovery {
             case "loading", "starting", "warming" -> "LOADING";
             case "downloading", "download" -> "DOWNLOADING";
             case "unloading", "stopping" -> "UNLOADING";
-            case "unloaded", "not_loaded", "downloaded", "stopped" -> "UNLOADED";
+              case "unloaded", "not_loaded", "not-loaded", "downloaded", "stopped" -> "UNLOADED";
             case "error", "failed", "failure", "unhealthy", "unavailable", "not_available",
                     "not available", "not_found", "not-found", "not found", "missing", "invalid" -> "ERROR";
             default -> "UNKNOWN";

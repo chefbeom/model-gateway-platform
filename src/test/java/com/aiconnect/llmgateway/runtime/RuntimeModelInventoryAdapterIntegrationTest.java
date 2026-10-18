@@ -139,6 +139,74 @@ class RuntimeModelInventoryAdapterIntegrationTest {
         }
     }
 
+    @Test
+    void lmStudioLegacyNativeInventoryWinsOverJitOpenAiCatalogAndAcceptsV1Base() throws Exception {
+        List<String> requested = new CopyOnWriteArrayList<>();
+        HttpServer server = server(exchange -> {
+            String path = exchange.getRequestURI().getPath();
+            requested.add(path);
+            if (path.equals("/api/v1/models")) respond(exchange, 404, "{}");
+            else if (path.equals("/api/v0/models")) respond(exchange, 200,
+                    "{\"data\":[{\"id\":\"gemma\",\"state\":\"not-loaded\"}]}");
+            else if (path.equals("/v1/models")) respond(exchange, 200, "{\"data\":[{\"id\":\"gemma\"}]}");
+            else respond(exchange, 404, "{}");
+        });
+        server.start();
+        try {
+            var adapter = new LmStudioRuntimeClient(RestClient.builder().build(), mapper, new SecretCipher(properties()));
+            var result = adapter.listModels(endpoint(server, RuntimeType.LM_STUDIO, "/v1"));
+            var discovery = new LmStudioModelDiscovery(mapper);
+            var models = discovery.discover(result.body(), RuntimeType.LM_STUDIO);
+            assertThat(models).hasSize(1);
+            assertThat(models.get(0).loaded()).isFalse();
+            assertThat(discovery.hasUnknownLoadState(result.body(), models)).isFalse();
+            assertThat(requested).containsExactly("/api/v1/models", "/api/v0/models");
+        } finally { server.stop(0); }
+    }
+
+    @Test
+    void lmStudioJitFallbackWithoutLoadedEvidenceStaysUnknown() throws Exception {
+        HttpServer server = server(exchange -> {
+            if (exchange.getRequestURI().getPath().equals("/v1/models")) respond(exchange, 200,
+                    "{\"data\":[{\"id\":\"downloaded-gemma\"}]}");
+            else respond(exchange, 404, "{}");
+        });
+        server.start();
+        try {
+            var adapter = new LmStudioRuntimeClient(RestClient.builder().build(), mapper, new SecretCipher(properties()));
+            var result = adapter.listModels(endpoint(server, RuntimeType.LM_STUDIO, ""));
+            var discovery = new LmStudioModelDiscovery(mapper);
+            var models = discovery.discover(result.body(), RuntimeType.LM_STUDIO);
+            assertThat(models).hasSize(1);
+            assertThat(models.get(0).loaded()).isFalse();
+            assertThat(discovery.hasUnknownLoadState(result.body(), models)).isTrue();
+        } finally { server.stop(0); }
+    }
+
+    @Test
+    void ollamaEmptyRunningListMeansUnloadedButMissingRunningApiMeansUnknown() throws Exception {
+        var runningStatus = new java.util.concurrent.atomic.AtomicInteger(200);
+        HttpServer server = server(exchange -> {
+            if (exchange.getRequestURI().getPath().equals("/api/tags")) respond(exchange, 200,
+                    "{\"models\":[{\"name\":\"gemma:latest\"}]}");
+            else if (exchange.getRequestURI().getPath().equals("/api/ps")) respond(exchange, runningStatus.get(), "{\"models\":[]}");
+            else respond(exchange, 404, "{}");
+        });
+        server.start();
+        try {
+            var adapter = new OllamaRuntimeAdapter(RestClient.builder().build(), mapper, new SecretCipher(properties()));
+            var discovery = new LmStudioModelDiscovery(mapper);
+            for (int status : new int[]{200, 404}) {
+                runningStatus.set(status);
+                var result = adapter.listModels(endpoint(server, RuntimeType.OLLAMA, "/v1"));
+                var models = discovery.discover(result.body(), RuntimeType.OLLAMA);
+                assertThat(models).hasSize(1);
+                assertThat(models.get(0).loaded()).isFalse();
+                assertThat(discovery.hasUnknownLoadState(result.body(), models)).isEqualTo(status == 404);
+            }
+        } finally { server.stop(0); }
+    }
+
     private OpenAiCompatibleRuntimeAdapter llamaCppAdapter(HttpServer server) {
         GatewayProperties properties = properties();
         return new OpenAiCompatibleRuntimeAdapter(

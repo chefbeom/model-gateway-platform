@@ -24,6 +24,7 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.never;
 
 class RuntimeModelOperationServiceTest {
     private final RuntimeEndpointRepository endpoints = mock(RuntimeEndpointRepository.class);
@@ -37,6 +38,23 @@ class RuntimeModelOperationServiceTest {
     private final ObjectMapper mapper = new ObjectMapper();
     private final RuntimeModelOperationService service = new RuntimeModelOperationService(endpoints, deployments, profiles,
             operations, models, controlPlane, inference, active, mapper);
+
+    @Test
+    void unloadingLastModelLeavesBothLmStudioAndLlamaCppInStandbyWithoutInference() {
+        for (RuntimeType type : new RuntimeType[]{RuntimeType.LM_STUDIO, RuntimeType.LLAMA_CPP}) {
+            UUID endpointId = UUID.randomUUID();
+            RuntimeEndpoint endpoint = spy(new RuntimeEndpoint(UUID.randomUUID(), type, "http://runtime:1234", null));
+            doReturn(endpointId).when(endpoint).getId();
+            when(endpoints.findById(endpointId)).thenReturn(Optional.of(endpoint));
+            when(deployments.findByRuntimeEndpointId(endpointId)).thenReturn(java.util.List.of());
+            when(models.unload(eq(endpoint), any())).thenReturn(new RuntimeResult(200, mapper.createObjectNode()));
+            when(operations.save(any(RuntimeModelOperation.class))).thenAnswer(call -> call.getArgument(0));
+            RuntimeModelOperation operation = service.unload(endpointId, "last-model");
+            assertThat(operation.getStatus()).isEqualTo("SUCCEEDED");
+            assertThat(endpoint.getHealthStatus()).isEqualTo(com.aiconnect.llmgateway.domain.HealthStatus.STANDBY);
+        }
+        verify(inference, never()).chatCompletion(any(), any());
+    }
 
     @Test
     void preflightReportsWhenRequestedVariantIsNotTheRuntimeSelectedVariant() throws Exception {

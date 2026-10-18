@@ -35,10 +35,12 @@ public class RuntimeHealthMonitor {
     private void checkEndpointsAsLeader() {
         for (RuntimeEndpoint endpoint : endpoints.findByEnabledTrue()) {
             if (endpoint.getHealthStatus() == HealthStatus.DRAINING) continue;
-            boolean reachable = controlPlane.probe(endpoint.getId()).reachable();
+            ControlPlaneService.ProbeResult probe = controlPlane.probe(endpoint.getId());
+            boolean reachable = probe.reachable();
             boolean operational = reachable;
             if (reachable && endpoint.getHealthStatus() == HealthStatus.RECOVERING) {
-                operational = warmup.warm(endpoint);
+                // Embedding-only runtimes must not be tested with a Chat request.
+                operational = probe.loadedChatModelIds().isEmpty() || warmup.warm(endpoint, probe.loadedChatModelIds());
                 if (operational) endpoint.completeRecovery(); else endpoint.failRecovery();
             }
             if (operational) {

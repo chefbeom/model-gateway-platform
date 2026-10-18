@@ -1,3 +1,3 @@
 package com.aiconnect.llmgateway.domain;
 
-public enum HealthStatus { UNKNOWN, HEALTHY, SUSPECT, UNHEALTHY, RECOVERING, DRAINING }
+public enum HealthStatus { UNKNOWN, CONNECTED, HEALTHY, STANDBY, LOADING, SUSPECT, UNHEALTHY, RECOVERING, DRAINING }

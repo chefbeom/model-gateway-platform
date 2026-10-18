@@ -31,7 +31,9 @@ public class LmStudioRuntimeClient implements RuntimeProviderAdapter {
     public RuntimeResult listModels(RuntimeEndpoint endpoint) {
         try {
             RuntimeResult nativeResult = getModels(endpoint, "/api/v1/models");
-            return nativeResult.statusCode() == 404 ? getModels(endpoint, "/v1/models") : nativeResult;
+            if (nativeResult.statusCode() != 404) return nativeResult;
+            RuntimeResult legacyResult = getModels(endpoint, "/api/v0/models");
+            return legacyResult.statusCode() == 404 ? getModels(endpoint, "/v1/models") : legacyResult;
         } catch (RestClientException exception) {
             throw new RuntimeUnavailableException("The runtime endpoint is unreachable.", exception);
         }
@@ -51,7 +53,7 @@ public class LmStudioRuntimeClient implements RuntimeProviderAdapter {
     }
 
     private RuntimeResult getModels(RuntimeEndpoint endpoint, String path) {
-        return client.get().uri(endpoint.getBaseUrl() + path)
+        return client.get().uri(RuntimeUrl.root(endpoint.getBaseUrl(), path))
                 .headers(headers -> applyAuthorization(headers, endpoint))
                 .exchange((request, response) -> toResult(response.getStatusCode().value(), response.getBody()));
     }
