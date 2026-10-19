@@ -43,6 +43,9 @@ class FlywayUpgradeIntegrationTest {
             assertEquals(latestVersion, upgrade.info().current().getVersion());
             assertEquals(organizations, count(connection, "SELECT COUNT(*) FROM organization"));
             assertEquals(projects, count(connection, "SELECT COUNT(*) FROM project"));
+            assertEquals(1,count(connection,"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='service_request_scheduling'"));
+            assertEquals(1,count(connection,"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='request_scheduling_trace'"));
+            assertEquals(1,count(connection,"SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='runtime_endpoint' AND column_name='max_concurrent_requests' AND is_nullable='NO'"));
             assertEquals(1, count(connection, "SELECT COUNT(*) FROM information_schema.tables "
                     + "WHERE table_schema=DATABASE() AND table_name='playground_conversation'"));
             assertEquals(1, count(connection, "SELECT COUNT(*) FROM information_schema.columns "

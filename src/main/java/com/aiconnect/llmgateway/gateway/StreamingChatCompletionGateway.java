@@ -38,6 +38,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import com.aiconnect.llmgateway.scheduling.*;
+import com.aiconnect.llmgateway.routing.ActiveRequestRegistry;
 
 @Service
 public class StreamingChatCompletionGateway {
@@ -58,6 +61,8 @@ public class StreamingChatCompletionGateway {
     private RequestDiagnosticService diagnostics;
     @org.springframework.beans.factory.annotation.Autowired
     private DataProtectionPolicyService dataProtection;
+    @org.springframework.beans.factory.annotation.Autowired
+    private GatewaySchedulingSupport scheduling;
 
     public StreamingChatCompletionGateway(ApiKeyService apiKeyService, LlmServiceRepository services, ProjectServiceAccessRepository access,
                                           RoutingService routing, StreamingLmStudioRuntimeClient runtimeClient,
@@ -72,6 +77,11 @@ public class StreamingChatCompletionGateway {
     }
 
     public StreamingGatewayResult open(String authorization, ObjectNode request) {
+        return openAsync(authorization,request).join();
+    }
+    public boolean queued(String authorization,ObjectNode request) { return scheduling!=null&&scheduling.enabled(authorization,request); }
+    public java.util.concurrent.Executor executor() { return scheduling.executor(); }
+    public CompletableFuture<StreamingGatewayResult> openAsync(String authorization, ObjectNode request) {
         ApiKeyCredentials credentials = apiKeyService.authenticate(authorization);
         String serviceKey = request.path("model").asText(null);
         if (serviceKey == null || serviceKey.isBlank()) throw new ApiException(HttpStatus.BAD_REQUEST, "MODEL_REQUIRED", "The model field is required.");
@@ -84,7 +94,9 @@ public class StreamingChatCompletionGateway {
         String requestId = UUID.randomUUID().toString();
         LlmRequest audit = requests.save(new LlmRequest(requestId, credentials.project().getId(), credentials.apiKey().getId(),
                 credentials.apiKey().getIssuedByUserId(), service, true, RequestCapabilityDetector.requestType(request)));
-        RoutingDecision decision = routing.evaluate(service, RequestCapabilityDetector.detect(request), credentials.project().getId(), protection.routingConstraint());
+        boolean queued=scheduling!=null&&scheduling.enabled(service);
+        RoutingDecision decision = queued?routing.evaluateForScheduling(service, RequestCapabilityDetector.detect(request), credentials.project().getId(), protection.routingConstraint())
+                :routing.evaluate(service, RequestCapabilityDetector.detect(request), credentials.project().getId(), protection.routingConstraint());
         audit.recordDataProtection(protection.policy().mode().name(), protection.policy().level().name(),
                 protection.action().name(), protection.classificationSummary(), protection.externalAllowed());
         requests.save(audit);
@@ -92,9 +104,9 @@ public class StreamingChatCompletionGateway {
             audit.fail("DATA_POLICY_BLOCKED", HttpStatus.FORBIDDEN.value(), elapsed(audit.getStartedAt()), 0);
             requests.save(audit);
             diagnostics.recordFailure(audit.getId(), request, service, decision, "DATA_POLICY_BLOCKED", HttpStatus.FORBIDDEN.value(), 0);
-            return new StreamingGatewayResult(HttpStatus.FORBIDDEN.value(), requestId, null,
+            return CompletableFuture.completedFuture(new StreamingGatewayResult(HttpStatus.FORBIDDEN.value(), requestId, null,
                     objectMapper.valueToTree(OpenAiError.of("The request was blocked by the active data-protection policy (" + protection.classificationSummary() + ").",
-                            "invalid_request_error", "DATA_POLICY_BLOCKED", requestId)));
+                            "invalid_request_error", "DATA_POLICY_BLOCKED", requestId))));
         }
         if (decision.eligibleTargets().isEmpty()) {
             String code = protection.unavailableCode();
@@ -102,25 +114,36 @@ public class StreamingChatCompletionGateway {
             requests.save(audit);
             diagnostics.recordFailure(audit.getId(), request, service, decision, code, HttpStatus.SERVICE_UNAVAILABLE.value(), 0,
                     protection.unavailableMessage(), null, false);
-            return error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, code, protection.unavailableMessage());
+            return CompletableFuture.completedFuture(error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, code, protection.unavailableMessage()));
         }
+        if(queued) return scheduling.schedule(audit,authorization,request,
+                plan->openPrepared(request,service,audit,protection,plan),
+                failure->error(failure.getStatus().value(),requestId,failure.getCode(),failure.getMessage()));
+        return CompletableFuture.completedFuture(openPrepared(request,service,audit,protection,DispatchPlan.immediate(routing,decision)));
+    }
+    private StreamingGatewayResult openPrepared(ObjectNode request,LlmService service,LlmRequest audit,DataProtectionDecision protection,DispatchPlan plan) {
+        String requestId=audit.getRequestId();
+        RoutingDecision decision=plan.decision();
         int failures = 0;
         int attemptedCount = 0;
         boolean sawCapacity = false;
         ProviderFailureClassifier.Analysis lastFailure = null;
         ProviderFailureClassifier.Analysis capacityFailure = null;
-        for (ResolvedTarget candidate : decision.eligibleTargets()) {
-            if (!routing.acquire(candidate)) continue;
+        for (ResolvedTarget candidate : plan.candidates()) {
+            ActiveRequestRegistry.Lease lease=plan.acquire(candidate);
+            if(lease==null) continue;
+            boolean transferred=false;
             Instant started = Instant.now();
-            LlmRequestAttempt attempt = attempts.save(new LlmRequestAttempt(audit.getId(), candidate.deployment().getId(), failures + 1));
+            LlmRequestAttempt attempt = new LlmRequestAttempt(audit.getId(), candidate.deployment().getId(), failures + 1);
             attemptedCount++;
             try {
+                attempt=attempts.save(attempt);
                 java.util.Optional<ProviderFailureClassifier.Analysis> preflight = ProviderFailureClassifier.preflight(request, candidate.deployment());
                 if (preflight.isPresent()) {
                     lastFailure = preflight.get();
                     attempt.fail(lastFailure.codeName(), lastFailure.message(), 0, lastFailure.httpStatus());
                     attempts.save(attempt);
-                    routing.release(candidate);
+                    lease.close();
                     failures++;
                     continue;
                 }
@@ -143,8 +166,9 @@ public class StreamingChatCompletionGateway {
                     try {
                         InputStream prefetched = StreamingResponsePrefetcher.requireFirstByte(result.body());
                         attempt.markResponseStarted(); attempts.save(attempt);
+                        transferred=true;
                         return new StreamingGatewayResult(result.statusCode(), requestId,
-                                new AuditedStream(prefetched, request, audit, attempt, candidate, failures, service, started, result.statusCode(), decision), null);
+                                new AuditedStream(prefetched, request, audit, attempt, candidate, failures, service, started, result.statusCode(), decision,lease), null);
                     } catch (IOException failure) {
                         closeQuietly(result.body());
                         RuntimeUnavailableException unavailable = new RuntimeUnavailableException("The runtime stream ended before its first response byte.", failure);
@@ -170,7 +194,7 @@ public class StreamingChatCompletionGateway {
                 String attemptCode = analysis.codeName();
                 attempt.fail(attemptCode, analysis.message(), elapsed(started), result.statusCode());
                 attempts.save(attempt);
-                routing.release(candidate);
+                lease.close();
                 if (capacity || result.statusCode() == 401 || result.statusCode() == 408 || (result.statusCode() >= 500 && !analysis.isModelSpecific())) {
                     recordUnhealthy(candidate);
                 }
@@ -192,7 +216,7 @@ public class StreamingChatCompletionGateway {
                     return error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, "RUNTIME_UNAVAILABLE", "The runtime failed after the request may have started; SAFE policy did not retry it.");
                 }
                 failures++;
-            }
+            } finally { if(!transferred) lease.close(); }
         }
         if (lastFailure != null && lastFailure.isModelSpecific()) {
             audit.fail(lastFailure.codeName(), lastFailure.httpStatus(), elapsed(audit.getStartedAt()), failures);
@@ -224,7 +248,6 @@ public class StreamingChatCompletionGateway {
                                     RuntimeUnavailableException exception) {
         attempt.fail("RUNTIME_UNAVAILABLE", exception.getMessage(), elapsed(started), null); attempts.save(attempt);
         recordUnhealthy(candidate);
-        routing.release(candidate);
     }
 
     private final class AuditedStream extends InputStream {
@@ -239,11 +262,13 @@ public class StreamingChatCompletionGateway {
         private final Instant started;
         private final int statusCode;
         private final UsageCollector usage;
-        private boolean finalized;
+        private final java.util.concurrent.atomic.AtomicBoolean finalized=new java.util.concurrent.atomic.AtomicBoolean();
+        private final ActiveRequestRegistry.Lease lease;
 
-        private AuditedStream(InputStream source, ObjectNode request, LlmRequest audit, LlmRequestAttempt attempt, ResolvedTarget target, int failures, LlmService service, Instant started, int statusCode, RoutingDecision decision) {
+        private AuditedStream(InputStream source, ObjectNode request, LlmRequest audit, LlmRequestAttempt attempt, ResolvedTarget target, int failures, LlmService service, Instant started, int statusCode, RoutingDecision decision, ActiveRequestRegistry.Lease lease) {
             this.source = source; this.request = request; this.audit = audit; this.attempt = attempt; this.target = target;
             this.failures = failures; this.service = service; this.decision = decision; this.started = started; this.statusCode = statusCode; this.usage = new UsageCollector(request);
+            this.lease=lease;
         }
         @Override public int read() throws IOException {
             try {
@@ -260,12 +285,12 @@ public class StreamingChatCompletionGateway {
             } catch (IOException exception) { finalizeFailure(exception); throw exception; }
         }
         @Override public void close() throws IOException {
-            try { source.close(); usage.finish(); finalizeSuccess(); }
+            try { source.close(); if(!finalized.get()) finalizeFailure(new IOException("The client closed the stream before completion.")); }
             catch (IOException exception) { finalizeFailure(exception); throw exception; }
         }
         private void finalizeSuccess() {
-            if (finalized) return;
-            finalized = true;
+            if (!finalized.compareAndSet(false,true)) return;
+            try {
             attempt.succeed(elapsed(started), statusCode); attempts.save(attempt);
             int failoverCount = "AUTO_FAILOVER".equals(target.routingReason()) && failures == 0 ? 1 : failures;
             String actualTier = target.external() ? usage.actualServiceTier() : "LOCAL";
@@ -285,17 +310,18 @@ public class StreamingChatCompletionGateway {
                     pricing.pricingTier(), costStatus);
             requests.save(audit);
             if (target.external()) { target.externalProvider().recordHealth(true); providers.save(target.externalProvider()); }
-            routing.release(target);
+            if(scheduling!=null)scheduling.finishStream(audit);
+            } finally {lease.close();}
         }
         private void finalizeFailure(IOException exception) {
-            if (finalized) return;
-            finalized = true;
+            if (!finalized.compareAndSet(false,true)) return;
+            try {
             attempt.fail("STREAM_INTERRUPTED", exception.getMessage(), elapsed(started), null); attempts.save(attempt);
             audit.fail("STREAM_INTERRUPTED", 502, elapsed(audit.getStartedAt()), failures); requests.save(audit);
             diagnostics.recordFailure(audit.getId(), request, service, decision, "STREAM_INTERRUPTED", 502, failures + 1,
                     exception.getMessage(), null, false);
-            recordUnhealthy(target);
-            routing.release(target);
+            if(scheduling!=null)scheduling.finishStream(audit);
+            } finally {lease.close();}
         }
     }
 

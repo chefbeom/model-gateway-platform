@@ -17,6 +17,13 @@ async function moduleUrl(url) {
 const { devDocs, DOCS_REVIEWED_AT, searchDocs } = await import(await moduleUrl(new URL('../src/dev-docs/catalog.ts', import.meta.url)))
 const { documentHash, documentIdFromHash, filterDocuments, searchDocuments } = await import(await moduleUrl(new URL('../src/dev-docs/navigation.ts', import.meta.url)))
 
+test('request scheduling documents opt-in modes, shared capacity and no external privacy bypass',()=>{
+  const section=devDocs.find(doc=>doc.id==='routing').sections.find(section=>section.id==='request-scheduling')
+  const text=JSON.stringify(section)
+  for(const term of ['IMMEDIATE','LOCAL_FIRST_WAIT','LOCAL_ONLY_QUEUE','60초','Chat 테스트','Redis','본문','외부로 전송하지 않습니다'])assert.ok(text.includes(term),term)
+  assert.ok(searchDocuments(devDocs,'대기열').some(doc=>doc.id==='routing'))
+})
+
 test('catalog has unique documents, sections and valid navigation destinations', () => {
   assert.equal(new Set(devDocs.map(doc => doc.id)).size, devDocs.length)
   const destinations = new Set(['portal', 'usage', 'projects', 'infrastructure', 'services', 'teams', 'observability', 'audit', 'notifications', 'external', 'quotas', 'playground', 'model-playground', 'data-protection', 'system'])

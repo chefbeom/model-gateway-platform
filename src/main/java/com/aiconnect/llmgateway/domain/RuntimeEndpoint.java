@@ -30,6 +30,7 @@ public class RuntimeEndpoint {
     @Enumerated(EnumType.STRING) @Column(nullable = false, length = 24) private HealthStatus healthStatus = HealthStatus.UNKNOWN;
     @Column(nullable = false) private int consecutiveFailures;
     @Column(nullable = false) private int failureThreshold = 3;
+    @Column(nullable = false) private int maxConcurrentRequests = 1;
     @Column(precision = 18, scale = 6) private BigDecimal inputPricePerMillion;
     @Column(precision = 18, scale = 6) private BigDecimal outputPricePerMillion;
     @Enumerated(EnumType.STRING) @Column(length = 3) private Currency currency;
@@ -145,6 +146,11 @@ public class RuntimeEndpoint {
     }
 
     public void beginDraining() { healthStatus = HealthStatus.DRAINING; }
+    public int getMaxConcurrentRequests() { return Math.max(1, maxConcurrentRequests); }
+    public void configureCapacity(int limit) {
+        if (limit < 1 || limit > 64) throw new IllegalArgumentException("Runtime 동시 처리 한도는 1~64여야 합니다.");
+        maxConcurrentRequests = limit;
+    }
     public void beginRecovery() { if (enabled) healthStatus = HealthStatus.RECOVERING; }
     public void completeRecovery() {
         if (enabled && healthStatus == HealthStatus.RECOVERING) {

@@ -17,6 +17,9 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.UUID;
+import jakarta.servlet.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Separate filter preserves the existing RPM and token quota behavior. */
 @Component
@@ -54,11 +57,12 @@ public class SpendQuotaFilter extends OncePerRequestFilter {
                     "rate_limit_error", exception.getCode(), requestId));
         } finally {
             if (reservation != null) {
-                try {
-                    quota.release(reservation);
-                } catch (RuntimeException ignored) {
-                    // Expiry is the safety backstop if cleanup cannot complete after the response.
-                }
+                SpendQuotaService.Reservation held=reservation;
+                AtomicBoolean released=new AtomicBoolean();
+                Runnable release=()->{if(released.compareAndSet(false,true))try{quota.release(held);}catch(RuntimeException ignored){} };
+                Object lifecycle=request.getAttribute("aiconnect.executionDone");
+                if(lifecycle instanceof CompletableFuture<?> done) done.whenComplete((value,error)->release.run());
+                else release.run();
             }
         }
     }

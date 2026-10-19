@@ -32,6 +32,8 @@ public class RequestDetailService {
 
     @org.springframework.beans.factory.annotation.Autowired
     private RequestDiagnosticService diagnostics;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.aiconnect.llmgateway.scheduling.SchedulingTraceService scheduling;
 
     public RequestDetailService(LlmServiceRepository services,
                                 ModelDeploymentRepository deployments,
@@ -96,7 +98,8 @@ public class RequestDetailService {
                 request.getActualServiceTier(),
                 request.getReasoningTokens(),
                 request.getCostPricingTier(),
-                request.getCostCalculationStatus()
+                request.getCostCalculationStatus(),
+                scheduling==null?null:scheduling.view(request.getRequestId())
         );
     }
 
@@ -153,7 +156,8 @@ public class RequestDetailService {
             String actualServiceTier,
             Integer reasoningTokens,
             String costPricingTier,
-            String costCalculationStatus
+            String costCalculationStatus,
+            com.aiconnect.llmgateway.scheduling.RequestSchedulingTrace.View scheduling
     ) { }
 
     public record Attempt(

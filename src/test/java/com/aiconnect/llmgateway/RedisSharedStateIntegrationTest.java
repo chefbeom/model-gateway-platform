@@ -4,6 +4,7 @@ import com.aiconnect.llmgateway.cluster.DeploymentProfileProperties;
 import com.aiconnect.llmgateway.cluster.RedisClusterTaskCoordinator;
 import com.aiconnect.llmgateway.quota.RedisRateLimitStore;
 import com.aiconnect.llmgateway.routing.RedisActiveRequestStore;
+import com.aiconnect.llmgateway.scheduling.*;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -59,6 +60,30 @@ class RedisSharedStateIntegrationTest {
             active2.release(deploymentId);
             active2.release(deploymentId);
             assertEquals(0, active1.count(deploymentId));
+
+            // Queue claim and both model/runtime capacity reservations are atomic across API owners.
+            UUID runtimeId=UUID.randomUUID(), model2=UUID.randomUUID(), serviceId=UUID.randomUUID();
+            long queuedAt=System.currentTimeMillis();
+            var limits=new SchedulingSettings(SchedulingMode.LOCAL_ONLY_QUEUE,0,30000,5,1024*1024,5);
+            String first="first-"+UUID.randomUUID(), second="second-"+UUID.randomUUID();
+            try {
+                assertEquals(null,active1.enqueue(new QueueTicket(first,serviceId,apiKeyId,100,queuedAt,queuedAt+30000,java.util.List.of("d:"+deploymentId,"r:"+runtimeId)),limits));
+                assertEquals(null,active2.enqueue(new QueueTicket(second,serviceId,apiKeyId,100,queuedAt,queuedAt+30000,java.util.List.of("d:"+model2,"r:"+runtimeId)),limits));
+                assertEquals(2,active2.snapshot(serviceId).queuedRequests());
+                assertFalse(active2.tryAcquire(model2,5,runtimeId,1,second));
+                assertFalse(active2.tryAcquire(model2,5,runtimeId,1,null));
+                assertTrue(active1.tryAcquire(deploymentId,5,runtimeId,1,first));
+                assertEquals(1,active2.runtimeCount(runtimeId));
+                assertFalse(active2.tryAcquire(model2,5,runtimeId,1,second));
+                active1.release(deploymentId,runtimeId);
+                assertTrue(active2.tryAcquire(model2,5,runtimeId,1,second));
+                active2.release(model2,runtimeId);
+                assertEquals(0,active1.runtimeCount(runtimeId));
+                assertEquals(0,active1.snapshot(serviceId).queuedRequests());
+                // No prompt, file or API secret exists in the distributed ticket schema.
+                var metadata=redis.opsForHash().values("aiconnect:scheduler:metadata").toString();
+                assertFalse(metadata.contains(first));assertFalse(metadata.contains(second));
+            } finally {active1.removeTicket(first);active2.removeTicket(second);}
 
             gateway1.setLockTtl(Duration.ofSeconds(3));
             gateway2.setLockTtl(Duration.ofSeconds(3));

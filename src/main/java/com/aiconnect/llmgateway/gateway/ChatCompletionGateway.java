@@ -24,6 +24,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import com.aiconnect.llmgateway.scheduling.*;
+import com.aiconnect.llmgateway.routing.ActiveRequestRegistry;
 
 @Service
 public class ChatCompletionGateway {
@@ -44,6 +47,8 @@ public class ChatCompletionGateway {
     private RequestDiagnosticService diagnostics;
     @org.springframework.beans.factory.annotation.Autowired
     private DataProtectionPolicyService dataProtection;
+    @org.springframework.beans.factory.annotation.Autowired
+    private GatewaySchedulingSupport scheduling;
     public ChatCompletionGateway(ApiKeyService apiKeyService, LlmServiceRepository services,
                                  ProjectServiceAccessRepository access, RoutingService routing,
                                  InferenceRuntimeClient runtimeClient, OpenAiRuntimeClient openAiClient,
@@ -57,6 +62,10 @@ public class ChatCompletionGateway {
     }
 
     public GatewayResult complete(String authorization, JsonNode body) {
+        return completeAsync(authorization,body).join();
+    }
+    public boolean queued(String authorization,ObjectNode body) { return scheduling!=null&&scheduling.enabled(authorization,body); }
+    public CompletableFuture<GatewayResult> completeAsync(String authorization, JsonNode body) {
         ApiKeyCredentials credentials = apiKeyService.authenticate(authorization);
         if (!(body instanceof ObjectNode request)) throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", "The request body must be a JSON object.");
         if (request.path("stream").asBoolean(false)) throw new ApiException(HttpStatus.BAD_REQUEST, "STREAM_REQUEST_MISROUTED", "Streaming requests must be handled by the streaming relay.");
@@ -72,7 +81,9 @@ public class ChatCompletionGateway {
         String requestId = UUID.randomUUID().toString();
         LlmRequest audit = requests.save(new LlmRequest(requestId, credentials.project().getId(), credentials.apiKey().getId(),
                 credentials.apiKey().getIssuedByUserId(), service, false, RequestCapabilityDetector.requestType(request)));
-        RoutingDecision decision = routing.evaluate(service, RequestCapabilityDetector.detect(request), credentials.project().getId(), protection.routingConstraint());
+        boolean queued=scheduling!=null&&scheduling.enabled(service);
+        RoutingDecision decision = queued?routing.evaluateForScheduling(service, RequestCapabilityDetector.detect(request), credentials.project().getId(), protection.routingConstraint())
+                :routing.evaluate(service, RequestCapabilityDetector.detect(request), credentials.project().getId(), protection.routingConstraint());
         audit.recordDataProtection(protection.policy().mode().name(), protection.policy().level().name(),
                 protection.action().name(), protection.classificationSummary(), protection.externalAllowed());
         requests.save(audit);
@@ -80,8 +91,8 @@ public class ChatCompletionGateway {
             audit.fail("DATA_POLICY_BLOCKED", HttpStatus.FORBIDDEN.value(), elapsed(audit.getStartedAt()), 0);
             requests.save(audit);
             diagnostics.recordFailure(audit.getId(), request, service, decision, "DATA_POLICY_BLOCKED", HttpStatus.FORBIDDEN.value(), 0);
-            return error(HttpStatus.FORBIDDEN.value(), requestId, "invalid_request_error", "DATA_POLICY_BLOCKED",
-                    "The request was blocked by the active data-protection policy (" + protection.classificationSummary() + ").");
+            return CompletableFuture.completedFuture(error(HttpStatus.FORBIDDEN.value(), requestId, "invalid_request_error", "DATA_POLICY_BLOCKED",
+                    "The request was blocked by the active data-protection policy (" + protection.classificationSummary() + ")."));
         }
         List<ResolvedTarget> candidates = decision.eligibleTargets();
         if (candidates.isEmpty()) {
@@ -89,20 +100,30 @@ public class ChatCompletionGateway {
             audit.fail(code, HttpStatus.SERVICE_UNAVAILABLE.value(), elapsed(audit.getStartedAt()), 0); requests.save(audit);
             diagnostics.recordFailure(audit.getId(), request, service, decision, code, HttpStatus.SERVICE_UNAVAILABLE.value(), 0,
                     protection.unavailableMessage(), null, false);
-            return error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, "model_unavailable", code, protection.unavailableMessage());
+            return CompletableFuture.completedFuture(error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, "model_unavailable", code, protection.unavailableMessage()));
         }
-
+        if(queued) return scheduling.schedule(audit,authorization,request,
+                plan->completePrepared(request,service,audit,protection,plan),
+                failure->error(failure.getStatus().value(),requestId,"server_error",failure.getCode(),failure.getMessage()));
+        return CompletableFuture.completedFuture(completePrepared(request,service,audit,protection,DispatchPlan.immediate(routing,decision)));
+    }
+    private GatewayResult completePrepared(ObjectNode request,LlmService service,LlmRequest audit,DataProtectionDecision protection,DispatchPlan plan) {
+        String serviceKey=service.getServiceKey(), requestId=audit.getRequestId();
+        RoutingDecision decision=plan.decision();
+        List<ResolvedTarget> candidates=plan.candidates();
         int failures = 0;
         int attemptedCount = 0;
         boolean sawCapacity = false;
         ProviderFailureClassifier.Analysis lastFailure = null;
         ProviderFailureClassifier.Analysis capacityFailure = null;
         for (ResolvedTarget candidate : candidates) {
-            if (!routing.acquire(candidate)) continue;
+            ActiveRequestRegistry.Lease lease=plan.acquire(candidate);
+            if (lease==null) continue;
             Instant attemptStarted = Instant.now();
-            LlmRequestAttempt attempt = attempts.save(new LlmRequestAttempt(audit.getId(), candidate.deployment().getId(), failures + 1));
+            LlmRequestAttempt attempt = new LlmRequestAttempt(audit.getId(), candidate.deployment().getId(), failures + 1);
             attemptedCount++;
             try {
+                attempt=attempts.save(attempt);
                 java.util.Optional<ProviderFailureClassifier.Analysis> preflight = ProviderFailureClassifier.preflight(request, candidate.deployment());
                 if (preflight.isPresent()) {
                     lastFailure = preflight.get();
@@ -185,7 +206,7 @@ public class ChatCompletionGateway {
                     return error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, "runtime_unavailable", "RUNTIME_UNAVAILABLE", "The provider failed after the request may have started; SAFE policy did not retry it.");
                 }
                 failures++;
-            } finally { routing.release(candidate); }
+            } finally { lease.close(); }
         }
         if (lastFailure != null && lastFailure.isModelSpecific()) {
             audit.fail(lastFailure.codeName(), lastFailure.httpStatus(), elapsed(audit.getStartedAt()), failures);

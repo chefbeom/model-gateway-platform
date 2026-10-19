@@ -77,6 +77,8 @@ public class ModelPlaygroundService {
     private final LmStudioModelDiscovery modelDiscovery;
     private final SecretCipher cipher;
     private final ObjectMapper mapper;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.aiconnect.llmgateway.routing.ActiveRequestRegistry capacity;
 
     public ModelPlaygroundService(InferenceNodeRepository nodes, RuntimeEndpointRepository endpoints,
                                   ExternalProviderRepository providers, ModelDeploymentRepository deployments,
@@ -210,8 +212,21 @@ public class ModelPlaygroundService {
 
     private ChatResult executeChat(Resolved resolved, ObjectNode upstream, PlaygroundRequest trace,
                                    String requestId, long startedNanos, UUID conversationId, boolean stream) {
+        com.aiconnect.llmgateway.routing.ActiveRequestRegistry.Lease lease=null;
+        boolean transferred=false;
         try {
-            if (stream) return startStream(resolved, upstream, trace, requestId, startedNanos, conversationId);
+            if(capacity!=null) {
+                UUID runtimeId=resolved.external()?null:resolved.endpoint().getId();
+                int runtimeLimit=resolved.external()?0:resolved.endpoint().getMaxConcurrentRequests();
+                if(!capacity.tryAcquire(resolved.deployment().getId(),resolved.deployment().getMaxConcurrency(),runtimeId,runtimeLimit,null))
+                    throw new ApiException(HttpStatus.TOO_MANY_REQUESTS,"MODEL_AT_CAPACITY","이 모델 또는 Runtime이 다른 요청을 처리 중입니다. 테스트는 선택한 모델을 고정하며 다른 모델로 전환하지 않습니다.");
+                lease=new com.aiconnect.llmgateway.routing.ActiveRequestRegistry.Lease(()->capacity.release(resolved.deployment().getId(),runtimeId));
+            }
+            if (stream) {
+                ChatResult result=startStream(resolved, upstream, trace, requestId, startedNanos, conversationId,lease);
+                transferred=result.streaming()!=null;
+                return result;
+            }
             RuntimeResult result = resolved.external()
                     ? openAiClient.chatCompletion(resolved.provider(), upstream, upstream.has("temperature"))
                     : runtimeClient.chatCompletion(resolved.endpoint(), upstream);
@@ -244,11 +259,11 @@ public class ModelPlaygroundService {
             conversations.complete(conversationId, requestId, false, 500, elapsed(startedNanos), null, null,
                     "", "PLAYGROUND_REQUEST_FAILED", stream, false);
             throw exception;
-        }
+        } finally { if(lease!=null&&!transferred)lease.close(); }
     }
 
     private ChatResult startStream(Resolved resolved, ObjectNode upstream, PlaygroundRequest trace,
-                                   String requestId, long startedNanos, UUID conversationId) {
+                                   String requestId, long startedNanos, UUID conversationId,com.aiconnect.llmgateway.routing.ActiveRequestRegistry.Lease lease) {
         StreamingRuntimeResult upstreamResult;
         try {
             // Usage streaming is supported by the OpenAI API but not consistently by local OpenAI-compatible servers.
@@ -276,8 +291,8 @@ public class ModelPlaygroundService {
             return ChatResult.json(upstreamResult.statusCode(), requestId, safeErrorBody, conversationId);
         }
 
-        StreamingResponseBody stream = output -> relayStream(upstreamResult.body(), output, trace,
-                startedNanos, resolved.secret(), conversationId, requestId);
+        StreamingResponseBody stream = output -> { try { relayStream(upstreamResult.body(), output, trace,
+                startedNanos, resolved.secret(), conversationId, requestId); } finally {if(lease!=null)lease.close();} };
         return ChatResult.stream(upstreamResult.statusCode(), requestId, stream, conversationId);
     }
 

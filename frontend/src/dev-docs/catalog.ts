@@ -418,6 +418,15 @@ export const devDocs: DocPage[] = [
         ]
       },
       {
+        id: 'request-scheduling', title: '로컬 우선 배분과 대기열',
+        blocks: [
+          {type:'paragraph',text:'LLM 서비스의 요청 배분·대기열에서 IMMEDIATE(기존 즉시 전환), LOCAL_FIRST_WAIT(로컬 대기 후 승인 외부 허용), LOCAL_ONLY_QUEUE(로컬 전용 대기)를 선택합니다. 기존 서비스 기본값은 IMMEDIATE입니다. 기다리는 요청은 아직 모델을 점유하지 않고, 슬롯이 비면 배정됩니다. 이미 실행한 요청을 이동하지 않습니다.'},
+          {type:'table',columns:['설정 위치','내용'],rows:[['인프라 → Runtime 전체 동시 처리 한도','같은 Runtime의 모델·논리 서비스·Chat 테스트가 공유. 로컬 기본 1'],['LLM 서비스 → 요청 배분 · 대기열','최대 대기 60초, 서비스 요청 수·본문 크기·키별 대기 수 한도'],['요청 상세 → 대기와 실행 상태','큐 상태·대기 시간·실행 시간·외부 배정 이유·한도/만료 오류 확인']]},
+          {type:'callout',tone:'warning',title:'보안 정책과 모델 호환성이 우선합니다',text:'외부 전송 금지 프로젝트는 대기 시간이 끝나도 외부로 전송하지 않습니다. 키·권한·보안 정책은 실행 직전 다시 검사합니다. 오프라인·미로드·필수 기능 미지원 모델만 있으면 기다리지 않고 오류를 반환합니다. 직접 모델 테스트는 선택 모델이 바쁘면 MODEL_AT_CAPACITY를 표시합니다.'},
+          {type:'callout',tone:'info',title:'짧은 HTTP 대기열입니다',text:'다중 API 서버는 Redis로 순서와 슬롯을 공유합니다. Redis에는 본문·이미지·API 비밀을 저장하지 않으며 대기 본문은 수신 서버 메모리에만 남습니다. 서버 재시작 시 복구/자동 재실행하지 않습니다. 장기 비동기 Job 기능이 아닙니다.'}
+        ]
+      },
+      {
         id: 'request-defaults', title: 'Temperature·추론·Fast 기본값',
         blocks: [
           { type: 'table', columns: ['설정', '위치', '동작'], rows: [

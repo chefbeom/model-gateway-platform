@@ -12,7 +12,7 @@ public class DeploymentProfileProperties {
     private SharedStateProvider sharedStateProvider = SharedStateProvider.LOCAL;
     private String instanceId = "standalone-1";
     private Duration lockTtl = Duration.ofMinutes(2);
-    private Duration activeRequestCounterTtl = Duration.ofHours(24);
+    private Duration activeRequestCounterTtl = Duration.ofMinutes(2);
 
     public DeploymentProfile getProfile() { return profile; }
     public void setProfile(DeploymentProfile profile) { this.profile = profile; }

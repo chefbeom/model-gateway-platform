@@ -69,6 +69,7 @@ export type RequestDiagnostic = {
 }
 
 export type RequestDetail = {
+  scheduling?: {mode:string;phase:string;queuedAt?:string|null;dispatchedAt?:string|null;queueWaitMs:number;executionMs?:number|null;dispatchReason?:string|null;errorCode?:string|null}|null
   requestId: string
   projectId: string
   serviceId: string

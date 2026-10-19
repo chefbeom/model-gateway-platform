@@ -65,6 +65,10 @@ public class RoutingService {
 
     private RoutingDecision evaluateInternal(LlmService service, Set<String> requestCapabilities,
                                              UUID projectId, List<ServiceTarget> configured, RoutingConstraint constraint) {
+        return evaluateInternal(service, requestCapabilities, projectId, configured, constraint, false);
+    }
+    private RoutingDecision evaluateInternal(LlmService service, Set<String> requestCapabilities,
+                                             UUID projectId, List<ServiceTarget> configured, RoutingConstraint constraint, boolean includeBusy) {
         Set<String> requiredCapabilities = new TreeSet<>(readCapabilities(service.getRequiredCapabilitiesJson()));
         if (requestCapabilities != null) requiredCapabilities.addAll(requestCapabilities);
 
@@ -109,7 +113,7 @@ public class RoutingService {
             if (deployment != null) {
                 limit = target.effectiveMaxConcurrency(deployment.getMaxConcurrency());
                 activeCount = activeRequests.count(deployment.getId());
-                if (limit > 0 && activeCount >= limit) reasons.add("CONCURRENCY_LIMIT_REACHED");
+                if (!includeBusy && limit > 0 && activeCount >= limit) reasons.add("CONCURRENCY_LIMIT_REACHED");
             }
 
             if (deployment != null && deployment.isExternal()) {
@@ -140,6 +144,7 @@ public class RoutingService {
                 if (endpoint == null) reasons.add("ENDPOINT_MISSING");
                 else {
                     if (!endpoint.isEnabled()) reasons.add("ENDPOINT_DISABLED");
+                    if (!includeBusy && activeRequests.runtimeCount(endpoint.getId()) >= endpoint.getMaxConcurrentRequests()) reasons.add("RUNTIME_CONCURRENCY_LIMIT_REACHED");
                     if (endpoint.getHealthStatus() != HealthStatus.HEALTHY) reasons.add(switch (endpoint.getHealthStatus()) {
                         case STANDBY -> "ENDPOINT_STANDBY";
                         case LOADING -> "ENDPOINT_LOADING";
@@ -172,8 +177,18 @@ public class RoutingService {
                 service.getFailoverPolicy().name(), service.getRetryPolicy().name(), List.copyOf(evaluations));
     }
 
-    public boolean acquire(ResolvedTarget target) { return activeRequests.tryAcquire(target.deployment().getId(), target.maxConcurrency()); }
-    public void release(ResolvedTarget target) { activeRequests.release(target.deployment().getId()); }
+    public boolean acquire(ResolvedTarget target) { return acquire(target, null); }
+    public boolean acquire(ResolvedTarget target, String ticketId) {
+        return activeRequests.tryAcquire(target.deployment().getId(), target.maxConcurrency(), target.external() ? null : target.endpoint().getId(),
+                target.external() ? 0 : target.endpoint().getMaxConcurrentRequests(), ticketId);
+    }
+    public void release(ResolvedTarget target) { activeRequests.release(target.deployment().getId(), target.external() ? null : target.endpoint().getId()); }
+    public ActiveRequestRegistry.Lease reserve(ResolvedTarget target, String ticket) {
+        return acquire(target, ticket) ? new ActiveRequestRegistry.Lease(() -> release(target)) : null;
+    }
+    public RoutingDecision evaluateForScheduling(LlmService service, Set<String> capabilities, UUID project, RoutingConstraint constraint) {
+        return evaluateInternal(service, capabilities, project, targets.findByServiceIdOrderByPriorityAsc(service.getId()), constraint, true);
+    }
 
     private String referenceCompatibilityKey(List<ServiceTarget> configured, boolean degradedAllowed, boolean localOnly) {
         for (ServiceTarget target : configured) {

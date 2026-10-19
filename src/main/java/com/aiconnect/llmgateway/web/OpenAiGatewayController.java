@@ -20,6 +20,9 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.context.request.async.DeferredResult;
+import jakarta.servlet.http.HttpServletRequest;
+import com.aiconnect.llmgateway.scheduling.GatewaySchedulingSupport;
 
 @RestController
 @RequestMapping("/v1")
@@ -41,9 +44,21 @@ public class OpenAiGatewayController {
     }
 
     @PostMapping("/chat/completions")
-    public ResponseEntity<JsonNode> chatCompletions(
+    public Object chatCompletions(
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
-            @RequestBody JsonNode body) {
+            @RequestBody JsonNode body, HttpServletRequest request, jakarta.servlet.http.HttpServletResponse response) {
+        if(body instanceof ObjectNode object&&gateway.queued(authorization,object)) {
+            var future=gateway.completeAsync(authorization,body);
+            request.setAttribute("aiconnect.executionDone",GatewaySchedulingSupport.lifecycle(future));
+            DeferredResult<JsonNode> deferred=new DeferredResult<>(900000L);
+            deferred.onTimeout(()->future.cancel(false));
+            deferred.onError(error->future.cancel(false));
+            future.whenComplete((result,error)->{
+                if(error!=null)deferred.setErrorResult(error);
+                else {response.setStatus(result.statusCode());response.setHeader("X-Request-Id",result.requestId());deferred.setResult(result.body());}
+            });
+            return deferred;
+        }
         GatewayResult result = gateway.complete(authorization, body);
         return ResponseEntity.status(result.statusCode()).header("X-Request-Id", result.requestId()).body(result.body());
     }

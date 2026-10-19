@@ -18,6 +18,8 @@ const emit = defineEmits<{ close: [] }>()
 
 function reasonLabel(code: string) {
   const labels: Record<string, string> = {
+    LOCAL_AVAILABLE:'로컬 슬롯 즉시 배정', QUEUED_LOCAL_AVAILABLE:'로컬 슬롯이 비어 대기 요청 배정', LOCAL_WAIT_EXPIRED_EXTERNAL:'로컬 대기 예산 경과 · 승인된 외부 Target 배정',
+    QUEUE_WAIT_TIMEOUT:'최대 대기 시간 초과', QUEUE_FULL:'서비스 대기 한도 초과', QUEUE_KEY_LIMIT:'API 키 대기 한도 초과', QUEUE_GLOBAL_FULL:'전체 대기 한도 초과', SCHEDULER_UNAVAILABLE:'공유 대기열 확인 실패', RUNTIME_CONCURRENCY_LIMIT_REACHED:'Runtime 전체 동시성 한도',
     PROJECT_EXTERNAL_AI_BLOCKED: '프로젝트 외부 AI 전송 금지', LOCAL_MODEL_UNAVAILABLE: '사용 가능한 로컬 모델 없음',
     CAPABILITY_MISSING: '필수 기능 미지원', ENDPOINT_UNHEALTHY: 'Endpoint 비정상', ENDPOINT_MISSING: 'Endpoint 없음', ENDPOINT_DISABLED: 'Endpoint 비활성',
     ENDPOINT_STANDBY: 'Runtime 모델 대기', ENDPOINT_LOADING: 'Runtime 모델 준비 중', ENDPOINT_MODEL_STATE_UNKNOWN: 'Runtime 로드 상태 미확인', ENDPOINT_RECOVERING: 'Runtime 복구 확인 중', ENDPOINT_DRAINING: 'Runtime 신규 요청 중지',
@@ -47,6 +49,10 @@ function targetState(target: NonNullable<RequestDetail['diagnostic']>['targets']
     <div v-if="loading" class="request-detail-loading" role="status">요청 메타데이터를 불러오는 중입니다…</div>
 
     <div v-else-if="detail" class="request-detail-content">
+      <section v-if="detail.scheduling" class="request-detail-section">
+        <header><span>REQUEST SCHEDULING</span><h4>대기와 실행 상태</h4></header>
+        <div class="request-detail-grid"><div><small>배분 정책 / 상태</small><strong>{{detail.scheduling.mode}} · {{detail.scheduling.phase}}</strong></div><div><small>대기 시간</small><strong>{{formatRequestDuration(detail.scheduling.queueWaitMs)}}</strong></div><div><small>실행 시간 · 대기 제외</small><strong>{{formatRequestDuration(detail.scheduling.executionMs)}}</strong></div><div><small>배정 이유 / 오류</small><strong>{{reasonLabel(detail.scheduling.dispatchReason??detail.scheduling.errorCode??'—')}}</strong></div></div>
+      </section>
       <header class="request-detail-summary">
         <div>
           <span class="request-detail-kicker">REQUEST METADATA</span>
