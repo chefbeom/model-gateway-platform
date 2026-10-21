@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatDate, formatDateTime } from './dateTime'
 import { computed, onMounted, ref, watch } from 'vue'
 import BaseModal from './BaseModal.vue'
 import { adminFetch, type AdminAuth } from './api'
@@ -227,7 +228,7 @@ onMounted(() => { void loadProjects(); void loadConnections() })
       <article class="surface-card external-access-card">
         <header class="card-header"><div><span class="card-kicker">EXTERNAL AI ACCESS</span><h2>외부 AI 사용 권한</h2></div></header>
         <p class="external-policy-copy">기본값은 외부 전송 금지입니다. 필요할 때 사용 요청을 보내고, 관리자가 승인한 수동 사용 또는 자동 Failover만 동작합니다.</p>
-        <div v-if="externalAccess.length" class="external-access-list"><div v-for="provider in externalAccess" :key="provider.providerId"><span class="status-chip tiny" :class="provider.status === 'APPROVED' ? 'healthy' : 'unknown'">{{ provider.status }}</span><span><b>{{ provider.providerName }}</b><small>{{ provider.providerType }} · 수동 {{ provider.manualAllowed ? 'ON' : 'OFF' }} · 자동 Failover {{ provider.autoFailoverEnabled ? 'ON' : 'OFF' }}</small></span><button v-if="provider.status !== 'APPROVED'" class="secondary-button" @click="openExternalRequest(provider)">{{ provider.status === 'REQUESTED' ? '요청 수정' : '사용 요청' }}</button><small v-else>{{ provider.expiresAt ? new Date(provider.expiresAt).toLocaleDateString() + '까지' : '만료 없음' }}</small></div></div>
+        <div v-if="externalAccess.length" class="external-access-list"><div v-for="provider in externalAccess" :key="provider.providerId"><span class="status-chip tiny" :class="provider.status === 'APPROVED' ? 'healthy' : 'unknown'">{{ provider.status }}</span><span><b>{{ provider.providerName }}</b><small>{{ provider.providerType }} · 수동 {{ provider.manualAllowed ? 'ON' : 'OFF' }} · 자동 Failover {{ provider.autoFailoverEnabled ? 'ON' : 'OFF' }}</small></span><button v-if="provider.status !== 'APPROVED'" class="secondary-button" @click="openExternalRequest(provider)">{{ provider.status === 'REQUESTED' ? '요청 수정' : '사용 요청' }}</button><small v-else>{{ provider.expiresAt ? formatDate(provider.expiresAt) + '까지' : '만료 없음' }}</small></div></div>
         <div v-else class="empty-state compact"><span>◇</span><p>관리자가 등록한 외부 AI Provider가 없습니다.</p></div>
       </article>
 
@@ -241,11 +242,11 @@ onMounted(() => { void loadProjects(); void loadConnections() })
             <thead><tr><th>이름</th><th>키 식별자</th><th>상태</th><th>마지막 사용</th><th>만료</th><th>관리</th></tr></thead>
             <tbody>
               <tr v-for="key in keys" :key="key.id">
-                <td><strong>{{ key.name }}</strong><small>{{ new Date(key.createdAt).toLocaleDateString() }} 생성</small></td>
+                <td><strong>{{ key.name }}</strong><small>{{ formatDate(key.createdAt) }} 생성</small></td>
                 <td class="mono">{{ key.keyPrefix }}••••••••</td>
                 <td><span class="status-chip tiny" :class="key.status === 'ACTIVE' ? 'healthy' : 'unknown'">{{ key.status }}</span></td>
-                <td>{{ key.lastUsedAt ? new Date(key.lastUsedAt).toLocaleString() : '사용 전' }}</td>
-                <td>{{ key.expiresAt ? new Date(key.expiresAt).toLocaleDateString() : '만료 없음' }}</td>
+                <td>{{ key.lastUsedAt ? formatDateTime(key.lastUsedAt) : '사용 전' }}</td>
+                <td>{{ key.expiresAt ? formatDate(key.expiresAt) : '만료 없음' }}</td>
                 <td>
                   <button v-if="key.canRevoke && key.status === 'ACTIVE'" class="text-button danger-text" :disabled="busy" @click="openRevocation(key)">폐기</button>
                   <button v-else-if="key.canDelete && key.status === 'REVOKED'" class="text-button danger-text" :disabled="busy" @click="openRecordDeletion(key)">기록 삭제</button>

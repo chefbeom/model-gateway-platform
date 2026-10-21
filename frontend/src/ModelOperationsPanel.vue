@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatDateTime } from './dateTime'
 import { computed, onMounted, ref, watch } from 'vue'
 import BaseModal from './BaseModal.vue'
 import { adminFetch, type AdminAuth, type Deployment, type Endpoint } from './api'
@@ -263,7 +264,7 @@ onMounted(refresh)
       </article>
     </div>
     <article class="agentless-note"><strong>네이티브 REST 적용 범위</strong><span v-if="llamaCpp">llama.cpp router의 /models/load 및 /models/unload API를 사용합니다. 모델은 먼저 서버의 모델 카탈로그에 등록되어 있어야 하며, 로딩 설정은 llama.cpp 서버 측 설정을 따릅니다. GGUF 다운로드는 서버에서 수행한 뒤 모델 동기화를 실행하세요.</span><span v-else-if="lmStudioManagement">Context Length, Evaluation Batch Size, Flash Attention, MoE Expert 수, KV Cache GPU Offload는 LM Studio native v1 API로 적용합니다. GPU 비율, TTL과 나머지 고급 항목은 프로필에 저장하고 Node Agent·CLI·SDK 연결이 준비되면 적용할 수 있도록 상태를 표시합니다.</span><span v-else>This Runtime manages model loading in its own server process. Prepare the model there, then run model synchronization.</span></article>
-    <article class="operation-card operation-history"><header><div><span class="card-kicker">AUDIT TRAIL</span><h3>최근 모델 작업</h3></div></header><div v-if="operations.length" class="history-list"><div v-for="operation in operations.slice(0, 6)" :key="operation.id"><span class="status-chip tiny" :class="operation.status === 'SUCCEEDED' ? 'healthy' : operation.status === 'FAILED' ? 'unhealthy' : 'suspect'">{{ operation.status }}</span><strong>{{ operation.operationType }} · {{ operation.modelKey }}</strong><small>{{ operation.message || '처리 중' }} · {{ new Date(operation.createdAt).toLocaleString() }}</small></div></div><p v-else class="field-help">아직 기록된 모델 작업이 없습니다.</p></article>
+    <article class="operation-card operation-history"><header><div><span class="card-kicker">AUDIT TRAIL</span><h3>최근 모델 작업</h3></div></header><div v-if="operations.length" class="history-list"><div v-for="operation in operations.slice(0, 6)" :key="operation.id"><span class="status-chip tiny" :class="operation.status === 'SUCCEEDED' ? 'healthy' : operation.status === 'FAILED' ? 'unhealthy' : 'suspect'">{{ operation.status }}</span><strong>{{ operation.operationType }} · {{ operation.modelKey }}</strong><small>{{ operation.message || '처리 중' }} · {{ formatDateTime(operation.createdAt) }}</small></div></div><p v-else class="field-help">아직 기록된 모델 작업이 없습니다.</p></article>
 
     <BaseModal :open="loadOpen" :title="llamaCpp ? 'llama.cpp 모델 로드' : 'LM Studio 모델 로드 설정'" :description="llamaCpp ? 'llama.cpp router에 등록된 모델을 메모리에 로드합니다. 실제 컨텍스트·GPU 설정은 llama.cpp 서버 구성을 따릅니다.' : '모델 파일 변형과 LM Studio 로딩 옵션을 한 곳에서 관리합니다. 적용되지 않는 항목은 사전 점검에서 명확히 안내합니다.'" size="lg" @close="loadOpen = false">
       <div class="modal-form load-settings-form">

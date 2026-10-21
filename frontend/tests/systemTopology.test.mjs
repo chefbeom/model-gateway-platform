@@ -1,11 +1,9 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
-import ts from 'typescript'
+import { loadTypeScript } from './loadTypeScript.mjs'
 
-const source = readFileSync(new URL('../src/systemTopology.ts', import.meta.url), 'utf8')
-const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } }).outputText
-const { buildSystemTopology, modelStatus, resourceStatus, relatedTopologyNodes, safeEndpoint } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`)
+const { buildSystemTopology, modelStatus, resourceStatus, relatedTopologyNodes, safeEndpoint } = await loadTypeScript('../src/systemTopology.ts')
 
 const model = (id, extra = {}) => ({ id, displayName: id, providerModelId: id, enabled: true, healthStatus: 'HEALTHY', loaded: true, ...extra })
 const target = (id, deploymentId, priority = 1, extra = {}) => ({ id, deploymentId, priority, weight: 100, enabled: true, degraded: false, followModelChanges: true, ...extra })

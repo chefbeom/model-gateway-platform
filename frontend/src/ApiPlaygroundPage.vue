@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { formatDateTime } from './dateTime'
 import { adminFetch, type AdminAuth } from './api'
 import { copyText } from './clipboard'
 
@@ -77,7 +78,7 @@ function normalizedBaseUrl() {
 }
 function formatDate(value?: string | null) {
   if (!value) return '만료 없음'
-  return new Intl.DateTimeFormat('ko-KR', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
+  return formatDateTime(value)
 }
 function resetProbe() {
   models.value = []
@@ -219,14 +220,14 @@ async function loadModels() {
     models.value = Array.isArray(data) ? data : []
     probeStatus.value = 'ok'
     probeLatencyMs.value = Math.round(performance.now() - started)
-    lastProbeAt.value = new Date().toLocaleTimeString()
+    lastProbeAt.value = new Date().toISOString()
     if (!model.value && models.value.length) model.value = models.value[0].id
     message.value = models.value.length ? models.value.length + '개의 사용 가능한 모델을 확인했습니다.' : '연결은 성공했지만 사용할 수 있는 모델이 없습니다.'
   } catch (error) {
     models.value = []
     probeStatus.value = 'failed'
     probeLatencyMs.value = Math.round(performance.now() - started)
-    lastProbeAt.value = new Date().toLocaleTimeString()
+    lastProbeAt.value = new Date().toISOString()
     rawError.value = error instanceof Error ? error.message : '모델 목록 조회에 실패했습니다.'
     message.value = '모델 목록을 확인하지 못했습니다. Base URL, API 키, CORS 또는 사설망 연결을 확인하세요.'
   } finally { loadingModels.value = false }
@@ -394,7 +395,7 @@ watch(() => [props.organizationId, props.auth.accessToken], () => { void loadPro
         </div>
 
         <div class="connection-meta"><span>현재 주소</span><code>{{ normalizedBaseUrl() }}</code><span class="meta-separator">·</span><span>{{ keyMode === 'temporary' ? '임시 Gateway 키' : '기존 키' }}</span></div>
-        <div v-if="probeStatus !== 'idle'" class="probe-summary"><span class="status-chip tiny" :class="probeStatus === 'ok' ? 'healthy' : probeStatus === 'failed' ? 'unhealthy' : 'suspect'"><i></i>{{ probeStatus === 'ok' ? '연결됨' : probeStatus === 'failed' ? '연결 실패' : '확인 중' }}</span><div><strong>GET /models</strong><small>{{ probeStatus === 'ok' ? models.length + '개 모델 확인' : '모델 목록을 조회하지 못했습니다.' }}</small></div><time v-if="probeLatencyMs">{{ probeLatencyMs }}ms · {{ lastProbeAt }}</time></div>
+        <div v-if="probeStatus !== 'idle'" class="probe-summary"><span class="status-chip tiny" :class="probeStatus === 'ok' ? 'healthy' : probeStatus === 'failed' ? 'unhealthy' : 'suspect'"><i></i>{{ probeStatus === 'ok' ? '연결됨' : probeStatus === 'failed' ? '연결 실패' : '확인 중' }}</span><div><strong>GET /models</strong><small>{{ probeStatus === 'ok' ? models.length + '개 모델 확인' : '모델 목록을 조회하지 못했습니다.' }}</small></div><time v-if="probeLatencyMs">{{ probeLatencyMs }}ms · {{ formatDateTime(lastProbeAt) }}</time></div>
         <div v-if="models.length" class="model-list"><button v-for="item in models" :key="item.id" type="button" :class="{ selected: model === item.id }" @click="model = item.id"><strong>{{ item.id }}</strong><small>{{ item.owned_by ?? 'aiconnect' }}</small></button></div>
         <div v-else class="empty-state compact"><span>◇</span><p>모델 목록을 확인하면 프로젝트에 허용된 논리 모델을 선택할 수 있습니다.</p></div>
       </article>

@@ -1,3 +1,5 @@
+import { formatDateTime } from './dateTime'
+
 export type TopologyTone = 'healthy' | 'warning' | 'error' | 'muted' | 'unknown'
 export type TopologyKind = 'project' | 'gateway' | 'service' | 'model' | 'runtime' | 'provider' | 'database' | 'shared' | 'observability'
 export type TopologyStatus = { label: string; tone: TopologyTone; reason: string }
@@ -36,7 +38,7 @@ const disabled = (reason: string): TopologyStatus => ({ label: '비활성', reas
 const failed = (label: string, reason: string): TopologyStatus => ({ label, reason, tone: 'error' })
 const count = (value: number) => value.toLocaleString('ko-KR')
 const fact = (label: string, value: unknown): TopologyFact => ({ label, value: value == null || value === '' ? '정보 없음' : String(value) })
-const checkedAt = (value?: string | null) => value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString('ko-KR') : '확인 기록 없음'
+const checkedAt = (value?: string | null) => value && Number.isFinite(Date.parse(value)) ? formatDateTime(value) : '확인 기록 없음'
 export function safeEndpoint(value: string) {
   try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && url.hostname ? url.origin + url.pathname.replace(/\/$/, '') : 'Endpoint 주소 확인 필요' }
   catch { return 'Endpoint 주소 확인 필요' }

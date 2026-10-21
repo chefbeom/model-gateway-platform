@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatDateTime } from './dateTime'
 import { ref } from 'vue'
 import { adminFetch, type AdminAuth } from './api'
 
@@ -104,7 +105,7 @@ async function setChannelEnabled(channel: Channel, enabled: boolean) {
           <div class="incident-heading">
             <div>
               <strong>{{ incident.endpointBaseUrl ?? incident.id }}</strong>
-              <small>{{ new Date(incident.openedAt).toLocaleString() }} → {{ incident.recoveredAt ? new Date(incident.recoveredAt).toLocaleString() : '진행 중' }}</small>
+              <small>{{ formatDateTime(incident.openedAt) }} → {{ incident.recoveredAt ? formatDateTime(incident.recoveredAt) : '진행 중' }}</small>
             </div>
             <span class="status" :class="incident.status === 'RECOVERED' ? 'healthy' : 'unhealthy'">{{ incident.status }}</span>
           </div>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatDateTime } from './dateTime'
 import { ref } from 'vue'
 import { formatExecutionMode } from './requestMode'
 
@@ -41,7 +42,7 @@ async function search() {
       <p class="notice">{{ message }}</p>
       <div v-if="result?.items.length" class="request-list">
         <details v-for="item in result.items" :key="item.requestId">
-          <summary><span class="status" :class="item.status === 'SUCCEEDED' ? 'healthy' : 'unhealthy'">{{ item.status }}</span><span class="mono">{{ item.requestId }}</span><span>{{ new Date(item.startedAt).toLocaleString() }}</span><span>{{ formatExecutionMode(item.reasoningEffort,item.requestedServiceTier,item.actualServiceTier) }}</span><span>{{ item.inputTokens ?? 0 }} + {{ item.outputTokens ?? 0 }} tokens</span><span>{{ item.latencyMs ?? 0 }} ms</span><span>Failover {{ item.failoverCount }}</span><span>{{ item.providerType ?? 'LOCAL' }} · {{ item.routingReason ?? 'LOCAL_PRIMARY' }}</span></summary>
+          <summary><span class="status" :class="item.status === 'SUCCEEDED' ? 'healthy' : 'unhealthy'">{{ item.status }}</span><span class="mono">{{ item.requestId }}</span><span>{{ formatDateTime(item.startedAt) }}</span><span>{{ formatExecutionMode(item.reasoningEffort,item.requestedServiceTier,item.actualServiceTier) }}</span><span>{{ item.inputTokens ?? 0 }} + {{ item.outputTokens ?? 0 }} tokens</span><span>{{ item.latencyMs ?? 0 }} ms</span><span>Failover {{ item.failoverCount }}</span><span>{{ item.providerType ?? 'LOCAL' }} · {{ item.routingReason ?? 'LOCAL_PRIMARY' }}</span></summary>
           <div class="attempts"><div v-for="attempt in item.attempts" :key="attempt.attemptNumber"><strong>#{{ attempt.attemptNumber }} {{ attempt.status }}</strong><span class="mono">{{ attempt.deploymentId }}</span><span>{{ attempt.latencyMs ?? 0 }} ms · HTTP {{ attempt.httpStatus ?? '-' }} · {{ attempt.errorType ?? '정상' }}<small v-if="attempt.errorMessage" class="attempt-error-message">{{ attempt.errorMessage }}</small></span></div></div>
         </details>
       </div>

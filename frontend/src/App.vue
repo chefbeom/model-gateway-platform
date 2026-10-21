@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatDateTime } from './dateTime'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { adminFetch, authenticate, logout, refreshAuthentication, type AdminAuth, type Deployment, type Endpoint, type Session, type User } from './api'
 
@@ -147,7 +148,7 @@ onUnmounted(() => window.removeEventListener('aiconnect:session', sessionChanged
         <p v-if="!authorized" class="empty">인증 후 등록된 Runtime Endpoint를 확인할 수 있습니다.</p>
         <p v-else-if="!endpoints.length" class="empty">등록된 엔드포인트가 없습니다. Node와 LM Studio Endpoint를 먼저 등록하세요.</p>
         <div v-for="endpoint in endpoints" :key="endpoint.id" class="endpoint" :class="{ selected: selectedEndpoint === endpoint.id }" @click="loadDeployments(endpoint.id)">
-          <div><strong>{{ endpoint.baseUrl }}</strong><small>{{ endpoint.runtimeType }} · 마지막 점검 {{ endpoint.lastCheckedAt ? new Date(endpoint.lastCheckedAt).toLocaleString() : '없음' }}</small></div>
+          <div><strong>{{ endpoint.baseUrl }}</strong><small>{{ endpoint.runtimeType }} · 마지막 점검 {{ endpoint.lastCheckedAt ? formatDateTime(endpoint.lastCheckedAt) : '없음' }}</small></div>
           <span class="status" :class="endpoint.healthStatus.toLowerCase()">{{ endpoint.healthStatus }}</span>
           <div class="actions"><button @click.stop="probe(endpoint)">Probe</button><button @click.stop="sync(endpoint)">모델 동기화</button></div>
         </div>

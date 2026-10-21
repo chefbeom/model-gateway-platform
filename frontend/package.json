@@ -10,7 +10,8 @@
     "test:topology": "node --test tests/systemTopology.test.mjs",
     "test:docs": "node --test tests/devDocs.test.mjs",
     "test:project-security": "node --test tests/projectLocalOnly.test.mjs",
-    "test:runtime-status": "node --test tests/runtimeStatus.test.mjs"
+    "test:runtime-status": "node --test tests/runtimeStatus.test.mjs",
+    "test:date-time": "node --test tests/dateTime.test.mjs"
   },
   "dependencies": {
     "vue": "^3.5.13"

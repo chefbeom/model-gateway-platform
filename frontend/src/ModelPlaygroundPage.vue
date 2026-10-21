@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
+import { formatDateTime } from './dateTime'
 import { adminFetch, adminResponse, type AdminAuth } from './api'
 import ModelFeatureBadges from './ModelFeatureBadges.vue'
 
@@ -438,7 +439,7 @@ function handleEnter(event: KeyboardEvent) {
   event.preventDefault()
   void send()
 }
-function formatTime(value: string) { return new Intl.DateTimeFormat('ko-KR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value)) }
+function formatTime(value: string) { return formatDateTime(value) }
 function costLabel(target: Target) {
   const symbol = target.currency === 'USD' ? '$' : target.currency === 'KRW' ? '₩' : ''
   if (target.inputPricePerMillion == null && target.outputPricePerMillion == null) return '단가 미설정'

@@ -1,3 +1,5 @@
+import { formatDateTime } from './dateTime'
+
 export type RequestAttemptDetail = {
   deploymentId: string
   attemptNumber: number
@@ -136,7 +138,7 @@ export function formatRequestCost(value?: number | null, currency?: string | nul
 }
 
 export function formatRequestDate(value?: string | null) {
-  return value ? new Date(value).toLocaleString('ko-KR') : '-'
+  return formatDateTime(value)
 }
 
 export function formatRequestDuration(value?: number | null) {

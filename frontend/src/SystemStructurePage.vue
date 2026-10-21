@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatDateTime } from './dateTime'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { adminFetch, type AdminAuth, type Deployment, type Endpoint } from './api'
 import SystemTopologyMap from './SystemTopologyMap.vue'
@@ -112,7 +113,7 @@ async function load() {
     keys.value = Object.fromEntries(projectRows.map(([id, value]) => [id, value[0]]))
     grants.value = Object.fromEntries(projectRows.map(([id, value]) => [id, value[1]]))
     errors.value = loadErrors
-    lastLoadedAt.value = new Date().toLocaleString()
+    lastLoadedAt.value = new Date().toISOString()
     message.value = errors.value.length
       ? '확인 가능한 구성은 표시했지만 일부 데이터는 권한 또는 연결 상태로 불러오지 못했습니다.'
       : '현재 저장된 인프라·AI·라우팅·조직 연결을 시각화했습니다.'
@@ -172,7 +173,7 @@ onBeforeUnmount(() => { loadVersion++ })
     </div>
     <div v-if="!organizationId" class="workspace-required"><span>WORKSPACE REQUIRED</span><div><strong>워크스페이스를 먼저 선택하세요</strong><p>조직을 선택하면 현재 저장된 시스템 구성과 연결 관계가 표시됩니다.</p></div></div>
     <template v-else>
-      <p class="inline-alert" :class="{ 'structure-warning': errors.length }">{{ message }}<small v-if="lastLoadedAt">마지막 확인 {{ lastLoadedAt }}</small></p>
+      <p class="inline-alert" :class="{ 'structure-warning': errors.length }">{{ message }}<small v-if="lastLoadedAt">마지막 확인 {{ formatDateTime(lastLoadedAt) }}</small></p>
       <div class="metric-grid structure-metrics">
         <article class="metric-card accent"><span>Runtime Endpoint</span><strong>{{ healthyEndpoints }}<small>/ {{ endpoints.length }}</small></strong><small>정상 연결 기록 / 등록</small></article>
         <article class="metric-card"><span>Local 모델 배포</span><strong>{{ loadedDeploymentCount }}<small>/ {{ deploymentCount }}</small></strong><small>활성 모델 로드 기록 / 등록</small></article>

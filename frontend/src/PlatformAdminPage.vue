@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatDateTime } from './dateTime'
 import { onMounted, ref } from 'vue'
 import BaseModal from './BaseModal.vue'
 import { adminFetch, type AdminAuth } from './api'
@@ -31,7 +32,7 @@ const selectedTeam = ref<PlatformTeam | null>(null)
 const teamConfirmation = ref('')
 
 function showError(error: unknown, fallback: string) { message.value = error instanceof Error ? error.message : fallback }
-function date(value?: string) { return value ? new Date(value).toLocaleString() : '-' }
+function date(value?: string) { return value ? formatDateTime(value) : '-' }
 function metric(value?: number) { return (value ?? 0).toLocaleString() }
 async function load() {
   busy.value = true

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatDateTime } from './dateTime'
 import { computed, onMounted, ref, watch } from 'vue'
 import BaseModal from './BaseModal.vue'
 import { adminFetch, type AdminAuth } from './api'
@@ -105,7 +106,7 @@ onMounted(() => { void load(0) })
         <table class="data-table audit-table">
           <thead><tr><th>시간</th><th>실행자</th><th>작업</th><th>리소스</th><th>식별자</th><th></th></tr></thead>
           <tbody><tr v-for="item in result.items" :key="item.id">
-            <td>{{ new Date(item.createdAt).toLocaleString() }}</td>
+            <td>{{ formatDateTime(item.createdAt) }}</td>
             <td><strong>{{ item.actorEmail }}</strong><small v-if="item.actorUserId" class="mono">{{ item.actorUserId }}</small></td>
             <td><span class="status-chip tiny unknown">{{ item.action }}</span></td>
             <td>{{ item.resourceType }}</td>
@@ -125,7 +126,7 @@ onMounted(() => { void load(0) })
 
     <BaseModal :open="detailOpen" title="감사 이벤트 상세" :description="selected?.action" size="lg" @close="detailOpen = false">
       <div v-if="selected" class="audit-detail">
-        <dl><div><dt>시간</dt><dd>{{ new Date(selected.createdAt).toLocaleString() }}</dd></div><div><dt>실행자</dt><dd>{{ selected.actorEmail }}</dd></div><div><dt>작업</dt><dd>{{ selected.action }}</dd></div><div><dt>리소스</dt><dd>{{ selected.resourceType }} · {{ selected.resourceId ?? '-' }}</dd></div><div><dt>조직</dt><dd class="mono">{{ selected.organizationId ?? '플랫폼 공통' }}</dd></div></dl>
+        <dl><div><dt>시간</dt><dd>{{ formatDateTime(selected.createdAt) }}</dd></div><div><dt>실행자</dt><dd>{{ selected.actorEmail }}</dd></div><div><dt>작업</dt><dd>{{ selected.action }}</dd></div><div><dt>리소스</dt><dd>{{ selected.resourceType }} · {{ selected.resourceId ?? '-' }}</dd></div><div><dt>조직</dt><dd class="mono">{{ selected.organizationId ?? '플랫폼 공통' }}</dd></div></dl>
         <div><span class="detail-label">저장된 상세 정보</span><pre>{{ formattedDetails(selected) }}</pre></div>
       </div>
       <template #footer><button class="primary-button" @click="detailOpen = false">확인</button></template>
