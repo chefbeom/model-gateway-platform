@@ -235,11 +235,15 @@ public class ModelPlaygroundService {
             Integer output = usage(result.body(), "completion_tokens", "output_tokens");
             boolean success = result.isSuccessful();
             JsonNode safeBody = sanitize(result.body(), resolved.secret());
-            conversations.complete(conversationId, requestId, success, result.statusCode(), latency,
-                    input, output, success ? responseContent(safeBody) : "",
-                    success ? null : responseError(safeBody, result.statusCode()), false, false);
-            traces.save(updateTrace(trace, success, result.statusCode(), latency, input, output,
-                    success ? null : errorCode(result.body(), result.statusCode())));
+            String content = success ? responseContent(safeBody) : "";
+            PlaygroundResponseInfo info = PlaygroundResponseInfo.from(safeBody.path("choices").path(0), false);
+            boolean hasAnswer = success && !content.isBlank();
+            String error = success ? (hasAnswer ? null : "모델이 표시할 답변 본문을 반환하지 않았습니다.")
+                    : responseError(safeBody, result.statusCode());
+            conversations.complete(conversationId, requestId, hasAnswer, result.statusCode(), latency,
+                    input, output, content, error, false, false, info.finishReason(), info.reasoningPresent(), outputLimit(upstream));
+            traces.save(updateTrace(trace, hasAnswer, result.statusCode(), latency, input, output,
+                    success ? (hasAnswer ? null : "EMPTY_MODEL_RESPONSE") : errorCode(result.body(), result.statusCode())));
             return ChatResult.json(result.statusCode(), requestId, safeBody, conversationId);
         } catch (ApiException exception) {
             long latency = elapsed(startedNanos);
@@ -292,13 +296,13 @@ public class ModelPlaygroundService {
         }
 
         StreamingResponseBody stream = output -> { try { relayStream(upstreamResult.body(), output, trace,
-                startedNanos, resolved.secret(), conversationId, requestId); } finally {if(lease!=null)lease.close();} };
+                startedNanos, resolved.secret(), conversationId, requestId, outputLimit(upstream)); } finally {if(lease!=null)lease.close();} };
         return ChatResult.stream(upstreamResult.statusCode(), requestId, stream, conversationId);
     }
 
     private void relayStream(InputStream source, OutputStream output, PlaygroundRequest trace,
                              long startedNanos, String secret, UUID conversationId,
-                             String requestId) throws IOException {
+                             String requestId, Integer outputLimit) throws IOException {
         Integer inputTokens = null;
         Integer outputTokens = null;
         boolean hadUsage = false;
@@ -306,6 +310,7 @@ public class ModelPlaygroundService {
         String errorCode = null;
         String errorMessage = null;
         StringBuilder assistantContent = new StringBuilder();
+        PlaygroundResponseInfo info = new PlaygroundResponseInfo(null, false);
         try (InputStream upstream = source;
              java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(upstream, StandardCharsets.UTF_8))) {
             String line;
@@ -319,6 +324,7 @@ public class ModelPlaygroundService {
                     else {
                         try {
                             JsonNode event = mapper.readTree(redact(data, secret));
+                            info = info.merge(PlaygroundResponseInfo.from(event.path("choices").path(0), true));
                             if (event.hasNonNull("error")) {
                                 errorCode = errorCode(event, 502);
                                 errorMessage = responseError(event, 502);
@@ -344,14 +350,22 @@ public class ModelPlaygroundService {
             throw exception;
         } finally {
             long latency = elapsed(startedNanos);
-            traces.save(updateTrace(trace, completed, completed ? 200 : 502, latency,
+            boolean hasAnswer = completed && !assistantContent.toString().isBlank();
+            String finalError = completed ? (hasAnswer ? null : "모델이 표시할 답변 본문을 반환하지 않았습니다.")
+                    : (errorMessage == null ? (errorCode == null ? "STREAM_INCOMPLETE" : errorCode) : errorMessage);
+            traces.save(updateTrace(trace, hasAnswer, completed ? 200 : 502, latency,
                     hadUsage ? inputTokens : null, hadUsage ? outputTokens : null,
-                    completed ? null : (errorCode == null ? "STREAM_INCOMPLETE" : errorCode)));
-            conversations.complete(conversationId, requestId, completed, completed ? 200 : 502,
+                    completed ? (hasAnswer ? null : "EMPTY_MODEL_RESPONSE") : (errorCode == null ? "STREAM_INCOMPLETE" : errorCode)));
+            conversations.complete(conversationId, requestId, hasAnswer, completed ? 200 : 502,
                     latency, hadUsage ? inputTokens : null, hadUsage ? outputTokens : null,
-                    assistantContent.toString(), completed ? null : (errorMessage == null
-                            ? (errorCode == null ? "STREAM_INCOMPLETE" : errorCode) : errorMessage), true, true);
+                    assistantContent.toString(), finalError, true, true,
+                    info.finishReason(), info.reasoningPresent(), outputLimit);
         }
+    }
+
+    private Integer outputLimit(JsonNode request) {
+        JsonNode value = request.hasNonNull("max_completion_tokens") ? request.path("max_completion_tokens") : request.path("max_tokens");
+        return value.canConvertToInt() && value.asInt() > 0 ? value.asInt() : null;
     }
 
     private String responseContent(JsonNode body) {

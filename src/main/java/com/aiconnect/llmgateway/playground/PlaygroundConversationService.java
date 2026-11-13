@@ -57,7 +57,7 @@ public class PlaygroundConversationService {
             turns.add(latestUser);
         }
         turns.add(new StoredTurn(UUID.randomUUID().toString(), "assistant", "", List.of(), "IN_PROGRESS",
-                requestId, null, null, null, null, streaming, false, null, Instant.now()));
+                requestId, null, null, null, null, streaming, false, null, Instant.now(), null, null, null));
         conversation.update(encrypt(turns), turns.size());
         conversations.save(conversation);
         return conversation.getId();
@@ -67,6 +67,15 @@ public class PlaygroundConversationService {
     public void complete(UUID conversationId, String requestId, boolean successful, int httpStatus,
                          long latencyMs, Integer inputTokens, Integer outputTokens, String content,
                          String error, boolean streaming, boolean responseStreaming) {
+        complete(conversationId, requestId, successful, httpStatus, latencyMs, inputTokens, outputTokens,
+                content, error, streaming, responseStreaming, null, null, null);
+    }
+
+    @Transactional
+    public void complete(UUID conversationId, String requestId, boolean successful, int httpStatus,
+                         long latencyMs, Integer inputTokens, Integer outputTokens, String content,
+                         String error, boolean streaming, boolean responseStreaming,
+                         String finishReason, Boolean reasoningPresent, Integer outputLimit) {
         if (conversationId == null) return;
         PlaygroundConversation conversation = conversations.findById(conversationId).orElse(null);
         if (conversation == null) return;
@@ -77,7 +86,7 @@ public class PlaygroundConversationService {
             turns.set(index, new StoredTurn(turn.id(), turn.role(), content == null ? "" : content,
                     turn.files(), successful ? "SUCCEEDED" : "FAILED", turn.requestId(), httpStatus,
                     latencyMs, inputTokens, outputTokens, streaming, responseStreaming,
-                    safeError(error), turn.createdAt()));
+                    safeError(error), turn.createdAt(), finishReason, reasoningPresent, outputLimit));
             conversation.update(encrypt(turns), turns.size());
             conversations.save(conversation);
             return;
@@ -140,7 +149,7 @@ public class PlaygroundConversationService {
             if (!"user".equals(role) && !"assistant".equals(role)) continue;
             List<String> files = "user".equals(role) ? attachmentNames(raw, i, lastUserIndex) : List.of();
             turns.add(new StoredTurn(UUID.randomUUID().toString(), role, message.path("content").asText(),
-                    files, "SUCCEEDED", null, null, null, null, null, null, null, null, Instant.now()));
+                    files, "SUCCEEDED", null, null, null, null, null, null, null, null, Instant.now(), null, null, null));
         }
         return turns;
     }
@@ -152,7 +161,7 @@ public class PlaygroundConversationService {
             if ("user".equals(message.path("role").asText())) {
                 return new StoredTurn(UUID.randomUUID().toString(), "user", message.path("content").asText(),
                         attachmentNames(raw, i, i), "SUCCEEDED", null, null, null, null,
-                        null, null, null, null, Instant.now());
+                        null, null, null, null, Instant.now(), null, null, null);
             }
         }
         throw new ApiException(HttpStatus.BAD_REQUEST, "PLAYGROUND_USER_MESSAGE_REQUIRED", "사용자 메시지가 필요합니다.");
@@ -208,7 +217,7 @@ public class PlaygroundConversationService {
     public record StoredTurn(String id, String role, String content, List<String> files, String status,
                              String requestId, Integer httpStatus, Long latencyMs, Integer inputTokens,
                              Integer outputTokens, Boolean stream, Boolean responseStream, String error,
-                             Instant createdAt) { }
+                             Instant createdAt, String finishReason, Boolean reasoningPresent, Integer outputLimit) { }
 
     public record ConversationSummary(UUID conversationId, UUID targetId, String targetName, String modelId,
                                       String title, String preview, int messageCount,

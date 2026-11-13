@@ -55,13 +55,29 @@ class PlaygroundConversationServiceTest {
         assertFalse(saved.getEncryptedTranscript().contains("VERY_SECRET_IMAGE_BYTES"));
 
         service.complete(conversationId, "request-1", true, 200, 80, 9, 4,
-                "A landscape.", null, false, false);
+                "A landscape.", null, false, false, "length", true, 512);
         when(repository.findByIdAndOrganizationIdAndActorUserId(eq(conversationId), eq(organizationId), isNull()))
                 .thenReturn(Optional.of(saved));
         var detail = service.get(organizationId, conversationId);
         assertEquals(2, detail.turns().size());
         assertEquals("A landscape.", detail.turns().get(1).content());
+        assertEquals("length", detail.turns().get(1).finishReason());
+        assertEquals(true, detail.turns().get(1).reasoningPresent());
+        assertEquals(512, detail.turns().get(1).outputLimit());
         assertEquals("private.png", detail.turns().get(0).files().get(0));
+    }
+
+    @Test
+    void oldEncryptedTurnWithoutNewMetadataRemainsReadable() throws Exception {
+        var turn = mapper.readValue("""
+                {"id":"old","role":"assistant","content":"","files":[],"status":"SUCCEEDED",
+                 "httpStatus":200,"outputTokens":512,"createdAt":"2026-01-01T00:00:00Z"}
+                """, PlaygroundConversationService.StoredTurn.class);
+        assertEquals("SUCCEEDED", turn.status());
+        assertEquals(512, turn.outputTokens());
+        assertEquals(null, turn.finishReason());
+        assertEquals(null, turn.reasoningPresent());
+        assertEquals(null, turn.outputLimit());
     }
 
     @Test

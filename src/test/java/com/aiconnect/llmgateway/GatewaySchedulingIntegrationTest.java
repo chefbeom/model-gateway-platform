@@ -57,6 +57,10 @@ class GatewaySchedulingIntegrationTest {
             calls.incrementAndGet();var body=mapper.readTree(exchange.getRequestBody());boolean stream=body.path("stream").asBoolean();
             if(body.path("model").asText().equals("cloud"))cloudCalls.incrementAndGet();
             String response=stream?"data: {\"model\":\"physical\",\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\ndata: [DONE]\n\n":"{\"model\":\"physical\",\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"hello\"}}],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":1}}";
+            if(body.path("messages").path(0).path("content").asText().equals("empty response test")) {
+                response=stream ? "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"PRIVATE_THINKING\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n"
+                        : "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"\",\"reasoning_content\":\"PRIVATE_THINKING\"},\"finish_reason\":\"length\"}],\"usage\":{\"prompt_tokens\":19,\"completion_tokens\":512}}";
+            }
             byte[] bytes=response.getBytes(StandardCharsets.UTF_8);exchange.getResponseHeaders().set("Content-Type",stream?"text/event-stream":"application/json");
             exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);exchange.close();
         });runtime.start();
@@ -132,6 +136,32 @@ class GatewaySchedulingIntegrationTest {
                     .satisfies(e->assertThat(((com.aiconnect.llmgateway.web.ApiException)e).getCode()).isEqualTo("MODEL_AT_CAPACITY"));
             assertThat(calls).hasValue(0);assertThat(active.runtimeCount(fixture.endpoint.getId())).isEqualTo(1);
         }finally{release();}
+    }
+    @Test void playgroundEmptyJsonPreservesHttpAndRecordsSafeDiagnosisInHistory() {
+        var body=mapper.createObjectNode().put("targetId",fixture.model.getId().toString()).put("stream",false).put("maxCompletionTokens",512);
+        body.putArray("messages").addObject().put("role","user").put("content","empty response test");
+        var result=playground.chat(fixture.project.getOrganizationId(),body);
+        assertThat(result.statusCode()).isEqualTo(200);
+        var trace=playground.requests(fixture.project.getOrganizationId()).stream().filter(t->t.requestId().equals(result.requestId())).findFirst().orElseThrow();
+        assertThat(trace.status()).isEqualTo("FAILED");assertThat(trace.errorCode()).isEqualTo("EMPTY_MODEL_RESPONSE");
+        var turn=playground.conversation(fixture.project.getOrganizationId(),result.conversationId()).turns().get(1);
+        assertThat(turn.status()).isEqualTo("FAILED");assertThat(turn.httpStatus()).isEqualTo(200);
+        assertThat(turn.content()).isEmpty();assertThat(turn.finishReason()).isEqualTo("length");
+        assertThat(turn.reasoningPresent()).isTrue();assertThat(turn.outputLimit()).isEqualTo(512);
+        assertThat(turn.toString()).doesNotContain("PRIVATE_THINKING");
+    }
+    @Test void playgroundEmptyStreamRetainsSafeMetadataAndMarksTraceFailed() throws Exception {
+        var body=mapper.createObjectNode().put("targetId",fixture.model.getId().toString()).put("stream",true).put("maxCompletionTokens",512);
+        body.putArray("messages").addObject().put("role","user").put("content","empty response test");
+        var result=playground.chat(fixture.project.getOrganizationId(),body);
+        var output=new java.io.ByteArrayOutputStream();result.streaming().writeTo(output);
+        assertThat(output.toString(StandardCharsets.UTF_8)).contains("[DONE]");
+        var trace=playground.requests(fixture.project.getOrganizationId()).stream().filter(t->t.requestId().equals(result.requestId())).findFirst().orElseThrow();
+        assertThat(trace.status()).isEqualTo("FAILED");assertThat(trace.httpStatus()).isEqualTo(200);
+        assertThat(trace.errorCode()).isEqualTo("EMPTY_MODEL_RESPONSE");
+        var turn=playground.conversation(fixture.project.getOrganizationId(),result.conversationId()).turns().get(1);
+        assertThat(turn.finishReason()).isEqualTo("length");assertThat(turn.reasoningPresent()).isTrue();
+        assertThat(turn.outputLimit()).isEqualTo(512);assertThat(turn.toString()).doesNotContain("PRIVATE_THINKING");
     }
     private record Fixture(Project project,IssuedApiKey key,RuntimeEndpoint endpoint,ModelDeployment model,LlmService service){}
 }

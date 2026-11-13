@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { formatDateTime } from './dateTime'
 import { adminFetch, adminResponse, type AdminAuth } from './api'
 import ModelFeatureBadges from './ModelFeatureBadges.vue'
+import { responseDiagnostic, responseInfo, type ResponseInfo } from './playgroundResponse'
 
 type Target = {
   id: string; sourceId: string; targetType: 'RUNTIME' | 'EXTERNAL_PROVIDER'; providerName: string; protocol: string
@@ -16,7 +17,7 @@ type Trace = {
   inputTokens?: number | null; outputTokens?: number | null; errorCode?: string | null; startedAt: string
 }
 type Probe = { reachable: boolean; httpStatus: number; latencyMs: number; modelAvailable: boolean; modelCount: number; message?: string | null }
-type Turn = { id: string; role: 'user' | 'assistant'; content: string; files?: string[]; attachmentPayloads?: Attachment[]; status?: string; httpStatus?: number; latencyMs?: number; requestId?: string; inputTokens?: number | null; outputTokens?: number | null; totalTokens?: number | null; stream?: boolean; responseStream?: boolean; error?: string }
+type Turn = ResponseInfo & { id: string; role: 'user' | 'assistant'; content: string; files?: string[]; attachmentPayloads?: Attachment[]; status?: string; httpStatus?: number; latencyMs?: number; requestId?: string; inputTokens?: number | null; outputTokens?: number | null; totalTokens?: number | null; stream?: boolean; responseStream?: boolean; error?: string }
 type Attachment = { name: string; mediaType: string; base64: string; messageIndex?: number }
 type SavedTurn = Omit<Turn, 'attachmentPayloads'> & { createdAt: string }
 type SavedConversation = { conversationId: string; targetId: string; targetName: string; modelId: string; title: string; preview: string; messageCount: number; createdAt: string; updatedAt: string }
@@ -274,10 +275,12 @@ async function readStream(response: Response, turn: Turn) {
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let receivedDone = false
   const processFrame = async (frame: string) => {
     const data = frame.split(/\r?\n/).filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n').trim()
-    if (!data || data === '[DONE]') return
-    let event: { error?: unknown; choices?: Array<{ delta?: { content?: unknown } }>; usage?: Record<string, unknown> }
+    if (!data) return
+    if (data === '[DONE]') { receivedDone = true; return }
+    let event: { error?: unknown; choices?: Array<{ delta?: { content?: unknown }; finish_reason?: unknown }>; usage?: Record<string, unknown> }
     try { event = JSON.parse(data) as typeof event }
     catch {
       turn.error = '스트리밍 응답을 해석할 수 없습니다. SSE 이벤트 형식이 올바른지 확인하세요.'
@@ -290,6 +293,9 @@ async function readStream(response: Response, turn: Turn) {
       return
     }
     const delta = event.choices?.[0]?.delta?.content
+    const info = responseInfo(event.choices?.[0], true)
+    if (info.finishReason) turn.finishReason = info.finishReason
+    if (info.reasoningPresent) turn.reasoningPresent = true
     if (typeof delta === 'string') turn.content += delta
     else if (Array.isArray(delta)) turn.content += delta.map(part => part && typeof part === 'object' && 'text' in part ? String((part as { text: unknown }).text) : '').join('')
     if (event.usage) {
@@ -311,6 +317,7 @@ async function readStream(response: Response, turn: Turn) {
     buffer = frames.pop() ?? ''
     for (const frame of frames) await processFrame(frame)
   }
+  if (!receivedDone && !turn.error) turn.error = '스트리밍 응답이 완료 신호 없이 종료됐습니다. 모델 서버와 연결 상태를 확인하세요.'
 }
 async function toAttachment(file: File): Promise<Attachment> {
   const bytes = new Uint8Array(await file.arrayBuffer())
@@ -365,7 +372,7 @@ async function send() {
     : [])
   const started = performance.now()
   const userTurn: Turn = { id: newTurnId(), role: 'user', content: text || '첨부 파일을 확인해 주세요.', files: files.map(file => file.name) }
-  const assistantTurn: Turn = { id: newTurnId(), role: 'assistant', content: '', status: '요청 중', stream: useStream, responseStream: false }
+  const assistantTurn: Turn = { id: newTurnId(), role: 'assistant', content: '', status: '요청 중', stream: useStream, responseStream: false, outputLimit: requestMaxCompletionTokens }
   requestMessages.push({ role: 'user', content: userTurn.content })
   conversation.value.push(userTurn, assistantTurn)
   prompt.value = ''
@@ -410,17 +417,19 @@ async function send() {
       assistantTurn.responseStream = true
       assistantTurn.status = 'STREAMING'
       await readStream(response, assistantTurn)
-      assistantTurn.status = assistantTurn.error ? 'FAILED' : 'SUCCEEDED'
+      assistantTurn.status = assistantTurn.error || !assistantTurn.content.trim() ? 'FAILED' : 'SUCCEEDED'
     } else {
       assistantTurn.responseStream = false
       const result = await parseResponse(response)
       assistantTurn.content = responseText(result)
       Object.assign(assistantTurn, usage(result))
-      assistantTurn.status = response.status >= 200 && response.status < 300 ? 'SUCCEEDED' : 'FAILED'
+      Object.assign(assistantTurn, responseInfo(result && typeof result === 'object' ? (result as { choices?: unknown[] }).choices?.[0] : null))
+      assistantTurn.status = assistantTurn.content.trim() ? 'SUCCEEDED' : 'FAILED'
       if (response.status >= 400) assistantTurn.error = errorText(result, response.status)
     }
     assistantTurn.latencyMs = Math.round(performance.now() - started)
     if (assistantTurn.error) notice.value = '요청 실패 · ' + assistantTurn.error
+    else if (responseDiagnostic(assistantTurn)) notice.value = '응답 확인 필요 · ' + responseDiagnostic(assistantTurn)?.title
     else notice.value = `응답 완료 · ${assistantTurn.latencyMs.toLocaleString()}ms${assistantTurn.inputTokens != null || assistantTurn.outputTokens != null ? ` · 입력 ${assistantTurn.inputTokens ?? '-'} / 출력 ${assistantTurn.outputTokens ?? '-'} 토큰` : ''}`
   } catch (error) {
     assistantTurn.status = 'FAILED'
@@ -488,13 +497,14 @@ watch(() => [props.organizationId, props.initialTargetId], () => { resetPlaygrou
           <div v-if="!conversation.length" class="chat-welcome"><span>◈</span><strong>실제 모델에 테스트 요청을 보내세요</strong><p>대화 본문은 암호화되어 저장됩니다. 파일 원본은 저장하지 않습니다.</p></div>
           <article v-for="turn in conversation" :key="turn.id" class="chat-turn" :class="[turn.role, { failed: turn.status === 'FAILED' }]">
             <div class="chat-turn-avatar">{{ turn.role === 'user' ? 'ME' : 'AI' }}</div>
-            <div class="chat-turn-body"><div class="chat-turn-heading"><strong>{{ turn.role === 'user' ? '사용자' : '모델 응답' }}</strong><span v-if="turn.status" :class="turn.status === 'FAILED' ? 'bad' : turn.status === 'SUCCEEDED' ? 'good' : ''">{{ turn.status }}</span></div>
+            <div class="chat-turn-body"><div class="chat-turn-heading"><strong>{{ turn.role === 'user' ? '사용자' : '모델 응답' }}</strong><span v-if="turn.status" :class="responseDiagnostic(turn) ? 'bad' : turn.status === 'FAILED' ? 'bad' : turn.status === 'SUCCEEDED' ? 'good' : ''">{{ responseDiagnostic(turn)?.label ?? turn.status }}</span></div>
               <p v-if="turn.role === 'user'" class="chat-turn-content">{{ turn.content }}</p>
               <pre v-else-if="turn.content" class="chat-turn-content">{{ turn.content }}</pre>
-              <p v-else-if="sending" class="chat-loading-copy">{{ turn.status === 'STREAMING' ? '응답 토큰을 실시간으로 받는 중…' : turn.stream ? 'SSE 스트림을 여는 중…' : '모델 응답을 기다리는 중…' }}</p>
+              <p v-else-if="turn.status === 'STREAMING' || turn.status === '요청 중'" class="chat-loading-copy">{{ turn.status === 'STREAMING' ? '응답 토큰을 실시간으로 받는 중…' : turn.stream ? 'SSE 스트림을 여는 중…' : '모델 응답을 기다리는 중…' }}</p>
               <p v-if="turn.files?.length" class="chat-files">첨부: {{ turn.files.join(', ') }}</p>
-              <div v-if="turn.error" class="chat-turn-error"><strong>실패 사유</strong><p>{{ turn.error }}</p></div>
-              <div v-if="turn.role === 'assistant' && turn.httpStatus" class="chat-turn-meta"><span>HTTP {{ turn.httpStatus }}</span><span>{{ turn.latencyMs?.toLocaleString() ?? '-' }} ms</span><span v-if="turn.inputTokens != null">입력 {{ turn.inputTokens }} · 출력 {{ turn.outputTokens ?? 0 }} · 전체 {{ turn.totalTokens ?? (turn.inputTokens + (turn.outputTokens ?? 0)) }} 토큰</span><span>{{ turn.stream ? turn.responseStream ? 'SSE 실시간' : 'SSE 요청 · JSON 응답' : 'JSON' }}</span><code v-if="turn.requestId">{{ turn.requestId }}</code></div>
+              <div v-if="responseDiagnostic(turn)" class="chat-response-diagnostic" role="status"><strong>{{ responseDiagnostic(turn)?.title }}</strong><p>{{ responseDiagnostic(turn)?.detail }}</p><small v-if="turn.finishReason">종료 사유: {{ turn.finishReason }}</small><small v-if="turn.outputLimit"> · 요청 출력 한도: {{ turn.outputLimit }} tokens</small></div>
+              <div v-if="turn.error && !responseDiagnostic(turn)" class="chat-turn-error"><strong>실패 사유</strong><p>{{ turn.error }}</p></div>
+              <div v-if="turn.role === 'assistant' && turn.httpStatus" class="chat-turn-meta"><span>HTTP {{ turn.httpStatus }}</span><span>{{ turn.latencyMs?.toLocaleString() ?? '-' }} ms</span><span v-if="turn.inputTokens != null">입력 {{ turn.inputTokens }} · 출력 {{ turn.outputTokens ?? 0 }} · 전체 {{ turn.totalTokens ?? (turn.inputTokens + (turn.outputTokens ?? 0)) }} 토큰</span><span v-if="turn.finishReason">종료 {{ turn.finishReason }}</span><span>{{ turn.stream ? turn.responseStream ? 'SSE 실시간' : 'SSE 요청 · JSON 응답' : 'JSON' }}</span><code v-if="turn.requestId">{{ turn.requestId }}</code></div>
             </div>
           </article>
         </div>
@@ -528,6 +538,10 @@ watch(() => [props.organizationId, props.initialTargetId], () => { resetPlaygrou
 </template>
 
 <style scoped>
+.chat-response-diagnostic { margin-top: 10px; padding: 12px 14px; border-left: 3px solid var(--warning); background: var(--surface-2); color: var(--text-soft); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.chat-response-diagnostic strong { color: var(--warning); }
+.chat-response-diagnostic p { margin: 5px 0; }
+.chat-response-diagnostic small { color: var(--muted); }
 .model-playground-page{max-width:1600px;margin-inline:auto}.model-playground-hero{align-items:center}.playground-top-actions{display:flex;gap:8px;flex-wrap:wrap}.model-playground-warning{display:flex;gap:12px;align-items:baseline;padding:13px 15px;border:1px solid color-mix(in srgb,var(--warning) 35%,var(--border));border-radius:12px;background:var(--surface-2);color:var(--text-soft);font-size:11px;line-height:1.6}.model-playground-warning strong{color:var(--warning);white-space:nowrap}.model-playground-warning code{color:var(--accent-strong)}.model-playground-layout{display:grid;grid-template-columns:minmax(280px,340px) minmax(0,1fr);gap:14px;align-items:stretch}.model-playground-sidebar{padding:17px;display:grid;align-content:start;gap:16px}.playground-sidebar-head,.chat-playground-header{display:flex;align-items:center;justify-content:space-between;gap:14px}.playground-sidebar-head h2,.chat-playground-header h2{margin:5px 0;font-size:17px}.count-pill{min-width:30px;height:27px;display:grid;place-items:center;border:1px solid var(--border);border-radius:8px;color:var(--muted);font-size:10px}.playground-target-info{display:grid;gap:11px;padding:13px;border:1px solid var(--border);border-radius:11px;background:var(--surface-2)}.target-info-row{display:grid;gap:4px}.target-info-row>span{color:var(--muted);font-size:9px}.target-info-row>b,.target-info-row>code{overflow-wrap:anywhere;font-size:10px}.target-info-row>b code{display:block;margin-top:3px;color:var(--accent-strong);font-size:9px}.target-info-row>code{color:var(--accent-strong)}.target-capabilities{display:flex;gap:5px;flex-wrap:wrap;padding-top:3px}.capability-pill{padding:4px 7px;border:1px solid var(--accent-border);border-radius:999px;color:var(--accent-strong);font-size:8px;font-weight:800}.muted{color:var(--muted);font-size:9px}.good{color:var(--accent-strong)!important}.bad{color:var(--danger)!important}.target-warning{margin:0;color:var(--warning);font-size:9px;line-height:1.5}.full-width{width:100%;justify-content:center}.probe-detail{padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--surface);font-size:10px;line-height:1.5}.probe-detail.bad{border-color:color-mix(in srgb,var(--danger) 35%,var(--border))}.chat-playground{min-height:700px;display:grid;grid-template-rows:auto minmax(320px,1fr) auto auto;overflow:hidden}.chat-playground-header{padding:17px 19px;border-bottom:1px solid var(--border)}.chat-playground-header>div:first-child{min-width:0}.chat-playground-header h2,.chat-playground-header small{overflow-wrap:anywhere}.chat-playground-header small{color:var(--muted);font-size:9px}.chat-header-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.stream-toggle{display:flex;gap:6px;align-items:center;color:var(--text-soft);font-size:10px;font-weight:700}.stream-toggle input{accent-color:var(--accent-strong)}.chat-transcript{min-height:320px;max-height:56vh;overflow:auto;padding:20px;display:grid;align-content:start;gap:16px}.chat-welcome{min-height:280px;display:grid;align-content:center;justify-items:center;text-align:center;gap:9px;color:var(--text-soft)}.chat-welcome>span{width:44px;height:44px;display:grid;place-items:center;border:1px solid var(--accent-border);border-radius:13px;color:var(--accent-strong);font-size:21px}.chat-welcome strong{font-size:14px}.chat-welcome p{max-width:420px;margin:0;color:var(--muted);font-size:10px;line-height:1.6}.chat-turn{display:grid;grid-template-columns:32px minmax(0,1fr);gap:10px;align-items:start}.chat-turn.user{grid-template-columns:minmax(0,1fr) 32px}.chat-turn.user .chat-turn-avatar{grid-column:2;grid-row:1;background:var(--accent-dim);color:var(--accent-strong)}.chat-turn.user .chat-turn-body{grid-column:1;grid-row:1;justify-self:end;max-width:min(88%,760px);background:var(--surface-2)}.chat-turn-avatar{width:30px;height:30px;display:grid;place-items:center;border:1px solid var(--border);border-radius:9px;background:var(--surface);color:var(--muted);font-size:8px;font-weight:900}.chat-turn-body{min-width:0;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:var(--bg-soft)}.chat-turn.failed .chat-turn-body{border-color:color-mix(in srgb,var(--danger) 35%,var(--border))}.chat-turn-heading{display:flex;align-items:center;justify-content:space-between;gap:9px;margin-bottom:7px}.chat-turn-heading strong{font-size:10px}.chat-turn-heading span{color:var(--muted);font-size:8px;font-weight:800}.chat-turn-content{margin:0;color:var(--text-soft);font:12px/1.7 inherit;white-space:pre-wrap;overflow-wrap:anywhere}.chat-turn pre.chat-turn-content{font-family:inherit}.chat-files{margin:8px 0 0;color:var(--accent-strong);font-size:9px;overflow-wrap:anywhere}.chat-loading-copy{margin:0;color:var(--muted);font-size:10px;animation:pulse 1.2s infinite alternate}.chat-turn-error{margin-top:9px;padding:9px 10px;border-left:3px solid var(--danger);background:var(--danger-dim);color:var(--text-soft)}.chat-turn-error strong{color:var(--danger);font-size:9px}.chat-turn-error p{margin:4px 0 0;font-size:10px;line-height:1.5;overflow-wrap:anywhere}.chat-turn-meta{margin-top:9px;padding-top:8px;display:flex;gap:9px;flex-wrap:wrap;border-top:1px solid var(--border);color:var(--muted);font-size:8px}.chat-turn-meta code{max-width:100%;overflow-wrap:anywhere}.playground-inline-notice{padding:8px 17px;color:var(--accent-strong);font-size:10px}.playground-inline-notice.failed{color:var(--danger)}.chat-composer{padding:13px 16px 15px;border-top:1px solid var(--border);background:var(--surface)}.chat-composer textarea{width:100%;min-height:82px;resize:vertical;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2);color:var(--text);font:12px/1.6 inherit}.chat-composer textarea:focus{outline:2px solid var(--accent-border)}.composer-actions{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:9px}.composer-tools{display:flex;align-items:center;gap:9px;flex-wrap:wrap}.composer-tools .secondary-button,.send-button{min-height:34px;padding-inline:11px;font-size:10px}.file-support-hint{color:var(--muted);font-size:8px}.send-button{min-width:94px;justify-content:space-between}.send-button span{font-size:14px}.selected-files{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}.file-pill{max-width:100%;padding:4px 8px;display:flex;align-items:center;gap:8px;border:1px solid var(--border);border-radius:999px;background:var(--surface-2);font-size:9px}.file-pill span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.file-pill button{border:0;background:transparent;color:var(--danger);cursor:pointer;font-size:14px}.chat-advanced{margin-top:10px;color:var(--muted);font-size:9px}.chat-advanced summary{cursor:pointer}.advanced-options{margin-top:9px;padding:10px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;border:1px solid var(--border);border-radius:9px;background:var(--surface-2)}.playground-history{overflow:hidden}.playground-history>summary{padding:14px 17px;display:flex;justify-content:space-between;align-items:center;gap:10px;cursor:pointer;list-style:none}.playground-history>summary::-webkit-details-marker{display:none}.playground-history>summary span{display:grid;gap:4px}.playground-history>summary b{font-size:11px}.playground-history>summary small{color:var(--muted);font-size:9px}.playground-history>summary i{color:var(--accent-strong);font-size:9px;font-style:normal}.playground-history-table{border-top:1px solid var(--border)}.playground-history-row{padding:10px 14px;display:grid;grid-template-columns:minmax(140px,1.5fr) .7fr .8fr 1fr minmax(100px,1fr);gap:10px;align-items:center;border-bottom:1px solid var(--border);font-size:9px}.playground-history-row>span:first-child{min-width:0;display:grid;gap:4px}.playground-history-row b,.playground-history-row small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.playground-history-row small{color:var(--muted)}.playground-history-row code{overflow-wrap:anywhere;color:var(--muted);font-size:8px}.history-heading{color:var(--muted);font-size:8px;font-weight:800}.history-empty{margin:0;padding:14px;color:var(--muted);font-size:10px}.playground-empty{padding:24px}.playground-empty p{color:var(--muted);font-size:11px}.error-alert{color:var(--danger)}@keyframes pulse{to{opacity:.45}}@media(max-width:980px){.model-playground-layout{grid-template-columns:1fr}.model-playground-sidebar{order:0}.chat-playground{order:1;min-height:600px}.playground-history{order:2}.target-info-row{grid-template-columns:130px minmax(0,1fr);align-items:baseline}.model-playground-sidebar{grid-template-columns:1fr 1.4fr}.playground-sidebar-head{grid-column:1/-1}.model-playground-sidebar>.field{grid-column:1}.playground-target-info{grid-column:2;grid-row:2/5}}@media(max-width:700px){.model-playground-warning{display:grid;gap:4px}.chat-playground-header{align-items:flex-start;flex-direction:column}.chat-header-controls{width:100%;justify-content:space-between}.chat-transcript{padding:12px;max-height:60vh}.model-playground-sidebar{display:grid;grid-template-columns:1fr}.playground-sidebar-head,.model-playground-sidebar>.field,.playground-target-info{grid-column:1;grid-row:auto}.target-info-row{grid-template-columns:1fr}.advanced-options{grid-template-columns:1fr 1fr}.playground-history-row{grid-template-columns:minmax(110px,1.3fr) .8fr 1fr;gap:6px}.playground-history-row>:nth-child(4),.playground-history-row>:nth-child(5){grid-column:span 1}.history-heading{display:none}.playground-top-actions{width:100%}}
 /* Keep inherited app typography valid; `font: size/line-height inherit` is not valid CSS. */
 .chat-turn-content{font:inherit;font-size:12px;line-height:1.7}.chat-composer textarea{font:inherit;font-size:12px;line-height:1.6}
