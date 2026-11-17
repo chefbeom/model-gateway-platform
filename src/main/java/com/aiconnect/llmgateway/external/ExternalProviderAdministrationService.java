@@ -163,6 +163,7 @@ public class ExternalProviderAdministrationService {
                     "OpenAI returned HTTP " + result.statusCode() + ". Check the API key and provider status.");
         }
         Map<String, ModelDeployment> registered = deployments.findByExternalProviderId(providerId).stream()
+                .filter(item -> !item.isArchived())
                 .collect(Collectors.toMap(ModelDeployment::getProviderModelId, item -> item, (a, b) -> a));
         List<ModelProbeView> modelViews = new ArrayList<>();
         JsonNode data = result.body().path("data");
@@ -181,7 +182,8 @@ public class ExternalProviderAdministrationService {
                 concurrency = registeredModel.getMaxConcurrency();
             }
             modelViews.add(new ModelProbeView(id, model.path("owned_by").asText(null), model.path("object").asText(null),
-                    context, concurrency, capabilities, source, registeredModel != null, registeredModel == null ? null : registeredModel.getHealthStatus().name()));
+                    context, concurrency, capabilities, source, registeredModel != null, registeredModel == null ? null : registeredModel.getHealthStatus().name(),
+                    readCapabilities(model.path("capabilities"))));
         }
         ApiInfoView apiInfo = new ApiInfoView(provider.getProviderType().name(), provider.getBaseUrl(),
                 "OpenAI 호환 REST API", "Bearer API Key 인증", "GET /models · POST /chat/completions", latency, result.statusCode());
@@ -194,8 +196,36 @@ public class ExternalProviderAdministrationService {
     @Transactional(readOnly = true)
     public List<ProviderModelView> models(UUID providerId) {
         requireProvider(providerId);
-        return deployments.findByExternalProviderId(providerId).stream().map(ProviderModelView::from).toList();
+        return deployments.findByExternalProviderId(providerId).stream().filter(item -> !item.isArchived()).map(ProviderModelView::from).toList();
     }
+
+    @Transactional(readOnly = true)
+    public ModelDeletePreview modelDeletionPreview(UUID providerId, UUID modelId) {
+        requireProvider(providerId);
+        ModelDeployment model = deployments.findById(modelId)
+                .filter(item -> providerId.equals(item.getExternalProviderId()) && !item.isArchived())
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "EXTERNAL_MODEL_NOT_FOUND", "등록된 외부 모델을 찾을 수 없습니다."));
+        int targetCount = targets.findByDeploymentIdIn(List.of(modelId)).size();
+        return new ModelDeletePreview(model.getId(), model.getDisplayName(), model.getProviderModelId(), targetCount);
+    }
+
+    @Transactional
+    public void deleteModel(UUID providerId, UUID modelId) {
+        ExternalProvider provider = requireProvider(providerId);
+        ModelDeployment model = deployments.findByIdForUpdate(modelId)
+                .filter(item -> providerId.equals(item.getExternalProviderId()) && !item.isArchived())
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "EXTERNAL_MODEL_NOT_FOUND", "등록된 외부 모델을 찾을 수 없습니다."));
+        // A locking read sees targets committed while this transaction waited for the model lock.
+        int targetCount = targets.findByDeploymentIdForUpdate(modelId).size();
+        if (targetCount > 0) throw new ApiException(HttpStatus.CONFLICT, "EXTERNAL_MODEL_IN_USE",
+                "이 모델이 논리 서비스 Target " + targetCount + "개에 연결되어 있습니다. 서비스와 라우팅에서 해당 Target을 먼저 해제하세요.");
+        model.archiveExternal();
+        deployments.save(model);
+        audit.record(provider.getOrganizationId(), CurrentActor.userIdOrNull(), "EXTERNAL_MODEL_ARCHIVED", "MODEL_DEPLOYMENT", modelId,
+                Map.of("providerId", providerId.toString(), "providerModelId", model.getProviderModelId()));
+    }
+
+    public record ModelDeletePreview(UUID modelId, String displayName, String providerModelId, int targetCount) { }
 
     @Transactional
     public ProviderModelView addModel(UUID providerId, String providerModelId, String displayName,
@@ -209,6 +239,7 @@ public class ExternalProviderAdministrationService {
                 cachedInputPrice, fastInputPrice, fastCachedInputPrice, fastOutputPrice, null);
     }
 
+    @Transactional
     public ProviderModelView addModel(UUID providerId, String providerModelId, String displayName,
                                       String compatibilityKey, Integer contextLength, Integer maxConcurrency,
                                       String capabilitiesJson, BigDecimal inputPrice, BigDecimal outputPrice, Currency priceCurrency,
@@ -217,7 +248,14 @@ public class ExternalProviderAdministrationService {
                                       BigDecimal fastCachedInputPrice, BigDecimal fastOutputPrice,
                                       String featureSupportJson) {
         ExternalProvider provider = requireProvider(providerId);
-        if (deployments.findByExternalProviderId(providerId).stream().anyMatch(item -> item.getProviderModelId().equals(providerModelId))) {
+        providerModelId = requireText(providerModelId, "EXTERNAL_MODEL_ID_REQUIRED", "Provider model ID is required.");
+        String normalizedId = providerModelId;
+        ModelDeployment existing = deployments.findByExternalProviderId(providerId).stream().filter(item -> item.getProviderModelId().equals(normalizedId)).findFirst().orElse(null);
+        if (existing != null) {
+            existing = deployments.findByIdForUpdate(existing.getId()).orElseThrow();
+            entityManager.refresh(existing, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+        }
+        if (existing != null && !existing.isArchived()) {
             throw new ApiException(HttpStatus.CONFLICT, "EXTERNAL_MODEL_EXISTS", "This provider model is already registered.");
         }
         validateCapabilities(capabilitiesJson);
@@ -228,6 +266,7 @@ public class ExternalProviderAdministrationService {
                 capabilitiesJson, inputPrice, outputPrice, priceCurrency == null ? Currency.KRW : priceCurrency,
                 reasoningEffort, serviceTier, cachedInputPrice, fastInputPrice, fastCachedInputPrice, fastOutputPrice);
         deployment.configureFeatureSupport(featureSupportJson);
+        if (existing != null) { existing.restoreExternal(deployment); deployment = existing; }
         deployment = deployments.save(deployment);
         audit.record(provider.getOrganizationId(), CurrentActor.userIdOrNull(), "EXTERNAL_MODEL_REGISTERED", "MODEL_DEPLOYMENT",
                 deployment.getId(), Map.of("providerModelId", providerModelId, "providerId", providerId));
@@ -241,7 +280,8 @@ public class ExternalProviderAdministrationService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "EXTERNAL_MODELS_REQUIRED", "Select at least one provider model to register.");
         }
 
-        Set<String> existingIds = deployments.findByExternalProviderId(providerId).stream()
+        List<ModelDeployment> existingModels = deployments.findByExternalProviderId(providerId);
+        Set<String> existingIds = existingModels.stream().filter(item -> !item.isArchived())
                 .map(ModelDeployment::getProviderModelId).collect(Collectors.toSet());
         Set<String> submittedIds = new HashSet<>();
         for (ModelRegistration registration : registrations) {
@@ -273,6 +313,14 @@ public class ExternalProviderAdministrationService {
                     registration.serviceTier(), registration.cachedInputPricePerMillion(), registration.fastInputPricePerMillion(),
                     registration.fastCachedInputPricePerMillion(), registration.fastOutputPricePerMillion());
             deployment.configureFeatureSupport(validateFeatureSupport(registration.featureSupportJson()));
+            String registeredId = registration.providerModelId().trim();
+            ModelDeployment previous = existingModels.stream().filter(item -> item.isArchived() && item.getProviderModelId().equals(registeredId)).findFirst().orElse(null);
+            if (previous != null) {
+                previous = deployments.findByIdForUpdate(previous.getId()).orElseThrow();
+                entityManager.refresh(previous, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+                if (!previous.isArchived()) throw new ApiException(HttpStatus.CONFLICT, "EXTERNAL_MODEL_EXISTS", "This provider model is already registered: " + registeredId);
+                previous.restoreExternal(deployment); deployment = previous;
+            }
             deployment = deployments.save(deployment);
             audit.record(provider.getOrganizationId(), CurrentActor.userIdOrNull(), "EXTERNAL_MODEL_REGISTERED", "MODEL_DEPLOYMENT",
                     deployment.getId(), Map.of("providerModelId", deployment.getProviderModelId(), "providerId", providerId));
@@ -293,6 +341,7 @@ public class ExternalProviderAdministrationService {
                 cachedInputPrice, fastInputPrice, fastCachedInputPrice, fastOutputPrice, clearOptionalPrices, null);
     }
 
+    @Transactional
     public ProviderModelView updateModel(UUID providerId, UUID modelId, String displayName,
                                          String compatibilityKey, Integer contextLength, Integer maxConcurrency,
                                          String capabilitiesJson, BigDecimal inputPrice, BigDecimal outputPrice,
@@ -301,8 +350,8 @@ public class ExternalProviderAdministrationService {
                                          BigDecimal fastCachedInputPrice, BigDecimal fastOutputPrice, boolean clearOptionalPrices,
                                          String featureSupportJson) {
         ExternalProvider provider = requireProvider(providerId);
-        ModelDeployment deployment = deployments.findById(modelId)
-                .filter(item -> providerId.equals(item.getExternalProviderId()))
+        ModelDeployment deployment = deployments.findByIdForUpdate(modelId)
+                .filter(item -> providerId.equals(item.getExternalProviderId()) && !item.isArchived())
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "EXTERNAL_MODEL_NOT_FOUND",
                         "The external model does not belong to this provider."));
         validateCapabilities(capabilitiesJson);
@@ -334,12 +383,14 @@ public class ExternalProviderAdministrationService {
         try {
             JsonNode value = objectMapper.readTree(json);
             if (value == null || !value.isObject()) throw new IllegalArgumentException();
-            for (String feature : List.of("vision", "thinking", "fast", "reasoningLevels")) {
+            for (String feature : List.of("vision", "thinking", "fast", "reasoningLevels", "structuredOutput", "toolCalling")) {
                 JsonNode state = value.get(feature);
                 if (state != null && (!state.isTextual() || !Set.of("SUPPORTED", "UNSUPPORTED", "UNKNOWN").contains(state.asText()))) {
                     throw new IllegalArgumentException();
                 }
             }
+            JsonNode policy = value.get("routingUnknownCapabilities");
+            if (policy != null && (!policy.isTextual() || !Set.of("STRICT", "TRY_UNCONFIRMED").contains(policy.asText()))) throw new IllegalArgumentException();
             JsonNode efforts = value.get("reasoningEfforts");
             if (efforts != null) {
                 if (!efforts.isArray()) throw new IllegalArgumentException();
@@ -387,7 +438,8 @@ public class ExternalProviderAdministrationService {
                                         long modelCount, long targetCount, long projectAccessCount, long requestHistoryCount, String behavior) { }
     public record ApiInfoView(String providerType, String baseUrl, String protocol, String authentication, String endpoints, long latencyMs, int httpStatus) { }
     public record ModelProbeView(String modelId, String ownedBy, String objectType, Integer contextLength, Integer maxConcurrency,
-                                 List<String> capabilities, String capabilitySource, boolean registeredInAiconnect, String registeredHealthStatus) { }
+                                 List<String> capabilities, String capabilitySource, boolean registeredInAiconnect, String registeredHealthStatus,
+                                 List<String> providerCapabilities) { }
     public record ProbeView(boolean reachable, int httpStatus, long latencyMs, String providerName, ApiInfoView api,
                             List<ModelProbeView> models, String capabilityNote) { }
     public record ModelRegistration(String providerModelId, String displayName, String compatibilityKey,

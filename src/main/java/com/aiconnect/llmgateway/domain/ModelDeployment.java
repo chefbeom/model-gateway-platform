@@ -18,6 +18,7 @@ public class ModelDeployment {
     private Integer contextLength;
     @Column(nullable = false) private boolean loaded;
     @Column(nullable = false) private boolean enabled = true;
+    @Column(nullable = false) private boolean archived = false;
     @Enumerated(EnumType.STRING) @Column(nullable = false, length = 24) private HealthStatus healthStatus = HealthStatus.UNKNOWN;
     @Column(nullable = false) private int maxConcurrency = 1;
     @Column(precision = 18, scale = 6) private java.math.BigDecimal providerInputPricePerMillion;
@@ -226,6 +227,27 @@ public class ModelDeployment {
         if (featureSupportJson != null) this.featureSupportJson = featureSupportJson.isBlank() ? null : featureSupportJson;
     }
 
+    /** Keep the deployment identity for historical request references. */
+    public void archiveExternal() { this.archived = true; this.enabled = false; }
+
+    /** Reactivation reuses the same identity, while applying the newly entered settings. */
+    public void restoreExternal(ModelDeployment settings) {
+        this.archived = false; this.enabled = true;
+        this.displayName = settings.displayName; this.compatibilityKey = settings.compatibilityKey;
+        this.contextLength = settings.contextLength; this.maxConcurrency = settings.maxConcurrency;
+        this.loaded = settings.loaded; this.healthStatus = settings.healthStatus;
+        this.capabilitiesJson = settings.capabilitiesJson; this.capabilityOverridesJson = settings.capabilityOverridesJson;
+        this.featureSupportJson = settings.featureSupportJson; this.providerPriceCurrency = settings.providerPriceCurrency;
+        this.providerInputPricePerMillion = settings.providerInputPricePerMillion;
+        this.providerOutputPricePerMillion = settings.providerOutputPricePerMillion;
+        this.providerCachedInputPricePerMillion = settings.providerCachedInputPricePerMillion;
+        this.fastInputPricePerMillion = settings.fastInputPricePerMillion;
+        this.fastCachedInputPricePerMillion = settings.fastCachedInputPricePerMillion;
+        this.fastOutputPricePerMillion = settings.fastOutputPricePerMillion;
+        this.defaultReasoningEffort = settings.defaultReasoningEffort; this.defaultServiceTier = settings.defaultServiceTier;
+        this.lastSyncedAt = settings.lastSyncedAt;
+    }
+
     /** Apply explicit provider-model policy after the logical-service defaults. */
     public void applyOpenAiDefaults(com.fasterxml.jackson.databind.node.ObjectNode request) {
         if (request == null || !isExternal()) return;
@@ -263,6 +285,7 @@ public class ModelDeployment {
     public Integer getContextLength() { return contextLength; }
     public boolean isLoaded() { return loaded; }
     public boolean isEnabled() { return enabled; }
+    public boolean isArchived() { return archived; }
     public HealthStatus getHealthStatus() { return healthStatus; }
     public int getMaxConcurrency() { return maxConcurrency; }
     public java.math.BigDecimal getProviderInputPricePerMillion() { return providerInputPricePerMillion; }

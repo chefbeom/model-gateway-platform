@@ -138,7 +138,9 @@ public class ControlPlaneService {
     @Transactional
     public ServiceTarget addTarget(UUID serviceId, AdminDtos.CreateTarget request) {
         LlmService service = requireService(serviceId);
-        ModelDeployment deployment = requireDeployment(request.deploymentId());
+        ModelDeployment deployment = deployments.findByIdForUpdate(request.deploymentId())
+                .filter(item -> !item.isArchived())
+                .orElseThrow(() -> notFound("DEPLOYMENT_NOT_FOUND", "The model deployment does not exist or has been removed."));
         UUID targetOrganizationId;
         if (deployment.isExternal()) {
             ExternalProvider provider = externalProviders.findById(deployment.getExternalProviderId())

@@ -92,7 +92,7 @@ function targetState(target: NonNullable<RequestDetail['diagnostic']>['targets']
               <div class="diagnostic-target-heading"><strong>{{ target.displayName }}</strong><span>{{ target.providerDisplayName ?? target.providerType }} · P{{ target.priority }}</span></div>
               <div class="diagnostic-target-meta"><span>{{ target.endpointDisplayName ?? '외부 Provider' }}</span><span>{{ target.deploymentHealth ?? '상태 미상' }}</span><span v-if="target.activeRequests != null">동시 {{ target.activeRequests }}/{{ target.maxConcurrency }}</span></div>
               <p :class="target.eligible ? 'diagnostic-ok' : 'diagnostic-reason'">{{ targetState(target) }}</p>
-              <small v-if="target.missingCapabilities.length" class="diagnostic-missing">누락 기능: {{ target.missingCapabilities.join(' · ') }}</small>
+              <small v-if="target.missingCapabilities.length" class="diagnostic-missing">{{ target.reasonCodes.includes('CAPABILITY_MISSING') ? '미지원 또는 미확인 기능' : '지원 여부 미확인 · 시도 허용' }}: {{ target.missingCapabilities.join(' · ') }}</small>
             </div>
           </div>
           <div v-if="detail.diagnostic.recommendations.length" class="diagnostic-recommendations">

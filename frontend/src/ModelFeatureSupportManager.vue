@@ -5,7 +5,7 @@ import ModelFeatureBadges from './ModelFeatureBadges.vue'
 
 type SupportState = 'SUPPORTED' | 'UNSUPPORTED' | 'UNKNOWN'
 type Model = { id:string; providerModelId:string; displayName:string; capabilitiesJson:string; featureSupportJson?:string|null; reasoningEffort?:string|null; serviceTier?:string|null }
-type Support = { vision:SupportState; thinking:SupportState; fast:SupportState; reasoningLevels:SupportState; reasoningEfforts:string[] }
+type Support = { vision:SupportState; structuredOutput:SupportState; toolCalling:SupportState; thinking:SupportState; fast:SupportState; reasoningLevels:SupportState; reasoningEfforts:string[] }
 
 const props = defineProps<{ providerId?:string; runtime?:boolean; models:Model[]; auth:AdminAuth }>()
 const emit = defineEmits<{ saved:[model:Model] }>()
@@ -17,7 +17,7 @@ const message = ref('')
 const selected = computed(() => props.models.find(model => model.id === selectedModelId.value) ?? null)
 const efforts = ['MINIMAL','LOW','MEDIUM','HIGH','XHIGH','MAX']
 
-function emptySupport():Support { return { vision:'UNKNOWN',thinking:'UNKNOWN',fast:'UNKNOWN',reasoningLevels:'UNKNOWN',reasoningEfforts:[] } }
+function emptySupport():Support { return { vision:'UNKNOWN',structuredOutput:'UNKNOWN',toolCalling:'UNKNOWN',thinking:'UNKNOWN',fast:'UNKNOWN',reasoningLevels:'UNKNOWN',reasoningEfforts:[] } }
 function readSupport(model:Model|null|undefined):Support {
   if (!model) return emptySupport()
   let capabilities:string[]=[]
@@ -29,9 +29,13 @@ function readSupport(model:Model|null|undefined):Support {
     if(value==='SUPPORTED'||value==='UNSUPPORTED'||value==='UNKNOWN')return value
     return capability&&capabilities.includes(capability)?'SUPPORTED':'UNKNOWN'
   }
-  return {vision:get('vision','VISION'),thinking:get('thinking','REASONING'),fast:get('fast'),reasoningLevels:get('reasoningLevels'),reasoningEfforts:Array.isArray(saved.reasoningEfforts)?saved.reasoningEfforts.filter((value):value is string=>typeof value==='string'&&efforts.includes(value)):[]}
+  return {vision:get('vision','VISION'),structuredOutput:get('structuredOutput','STRUCTURED_OUTPUT'),toolCalling:get('toolCalling','TOOL_CALLING'),thinking:get('thinking','REASONING'),fast:get('fast'),reasoningLevels:get('reasoningLevels'),reasoningEfforts:Array.isArray(saved.reasoningEfforts)?saved.reasoningEfforts.filter((value):value is string=>typeof value==='string'&&efforts.includes(value)):[]}
 }
-function encode() { return JSON.stringify({ ...support.value, reasoningEfforts:support.value.reasoningLevels==='SUPPORTED'?support.value.reasoningEfforts:[] }) }
+function encode() {
+  let previous:Record<string, unknown> = {}
+  try { const value=selected.value?.featureSupportJson ? JSON.parse(selected.value.featureSupportJson) : {}; if(value && typeof value==='object' && !Array.isArray(value)) previous=value } catch { /* invalid saved data is treated as unknown */ }
+  return JSON.stringify({ ...previous, ...support.value, reasoningEfforts:support.value.reasoningLevels==='SUPPORTED'?support.value.reasoningEfforts:[] })
+}
 function syncModel() { support.value=readSupport(selected.value); error.value=''; message.value='' }
 watch(()=>props.models, list=>{ if(!list.some(model=>model.id===selectedModelId.value))selectedModelId.value=list[0]?.id??''; syncModel() },{deep:true,immediate:true})
 watch(selectedModelId,syncModel)
@@ -56,12 +60,14 @@ async function save() {
       <p class="feature-support-note">‘확인 안 됨’은 미지원이 아니라 근거가 아직 등록되지 않았다는 뜻입니다. FAST tier 기본값·단가와 추론 기본값은 모델 지원 여부를 증명하지 않습니다.</p>
       <div class="form-grid">
         <label class="field">Vision / 이미지 입력<select v-model="support.vision"><option value="UNKNOWN">확인 안 됨</option><option value="SUPPORTED">지원 확인</option><option value="UNSUPPORTED">미지원 확인</option></select></label>
+        <label class="field">구조화 출력<select v-model="support.structuredOutput"><option value="UNKNOWN">확인 안 됨</option><option value="SUPPORTED">지원 확인</option><option value="UNSUPPORTED">미지원 확인</option></select></label>
+        <label class="field">도구 호출<select v-model="support.toolCalling"><option value="UNKNOWN">확인 안 됨</option><option value="SUPPORTED">지원 확인</option><option value="UNSUPPORTED">미지원 확인</option></select></label>
         <label class="field">Thinking / 추론 기능<select v-model="support.thinking"><option value="UNKNOWN">확인 안 됨</option><option value="SUPPORTED">지원 확인</option><option value="UNSUPPORTED">미지원 확인</option></select></label>
         <label class="field">Fast mode<select v-model="support.fast"><option value="UNKNOWN">확인 안 됨</option><option value="SUPPORTED">지원 확인</option><option value="UNSUPPORTED">미지원 확인</option></select></label>
         <label class="field">추론 수준 구분<select v-model="support.reasoningLevels"><option value="UNKNOWN">확인 안 됨</option><option value="SUPPORTED">지원 확인</option><option value="UNSUPPORTED">미지원 확인</option></select></label>
       </div>
       <fieldset v-if="support.reasoningLevels==='SUPPORTED'" class="effort-picker"><legend>확인된 추론 수준</legend><label v-for="effort in efforts" :key="effort"><input v-model="support.reasoningEfforts" type="checkbox" :value="effort" />{{ effort }}</label></fieldset>
-      <div class="feature-support-footer"><small>이 정보는 라우팅 기본 설정이나 실제 요청 파라미터를 바꾸지 않습니다.</small><button class="primary-button" :disabled="saving||!selected" @click="save">{{ saving?'저장 중…':'지원 정보 저장' }}</button></div>
+      <div class="feature-support-footer"><small>지원·미지원 확인 정보는 모델 선택에 반영되며 요청 파라미터는 변경하지 않습니다.</small><button class="primary-button" :disabled="saving||!selected" @click="save">{{ saving?'저장 중…':'지원 정보 저장' }}</button></div>
       <p v-if="error" class="feature-support-error">{{ error }}</p><p v-if="message" class="feature-support-success">{{ message }}</p>
     </div>
   </article>

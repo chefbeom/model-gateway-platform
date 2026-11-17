@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
-const props = defineProps<{ modelValue: string }>()
+const props = withDefaults(defineProps<{ modelValue: string; mode?: 'service' | 'model' }>(), { mode: 'service' })
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 
 const options = [
@@ -28,8 +28,8 @@ const selected = computed<string[]>({
 })
 const summary = computed(() => JSON.stringify(selected.value))
 const summaryDescription = computed(() => selected.value.length
-  ? `${selected.value.length}개 기능을 모든 요청에 필수로 적용`
-  : '요청 본문에 따라 필요한 기능을 자동 판별하는 기본값')
+  ? props.mode === 'model' ? `${selected.value.length}개 모델 지원 기능을 등록` : `${selected.value.length}개 기능을 모든 요청에 필수로 적용`
+  : props.mode === 'model' ? '등록된 지원 기능 없음 · 미선택은 지원 확인이 아닙니다' : '요청 본문에 따라 필요한 기능을 자동 판별하는 기본값')
 
 function clear() {
   selected.value = []
@@ -38,7 +38,7 @@ function clear() {
 
 <template>
   <div class="capability-field">
-    <span class="capability-label">필수 Capability</span>
+    <span class="capability-label">{{ mode === 'model' ? '확인된 모델 지원 기능' : '필수 Capability' }}</span>
     <details class="capability-picker">
       <summary>
         <span><code>{{ summary }}</code><small>{{ summaryDescription }}</small></span>
@@ -46,7 +46,7 @@ function clear() {
       </summary>
       <div class="capability-menu">
         <button type="button" class="capability-option" :class="{ selected: !selected.length }" @click="clear">
-          <span><strong><code>[]</code> 자동 판별</strong><small>서비스가 항상 강제하는 기능이 없습니다. 요청 내용에 따라 VISION, TOOL_CALLING, STRUCTURED_OUTPUT 등을 자동으로 요구합니다. 권장 기본값입니다.</small></span>
+          <span><strong><code>[]</code> {{ mode === 'model' ? '지원 기능 미확인' : '자동 판별' }}</strong><small>{{ mode === 'model' ? '모델의 기능을 자동으로 증명하지 않습니다. Provider가 제공한 정보 또는 실제로 확인한 기능을 선택하세요.' : '서비스가 항상 강제하는 기능이 없습니다. 요청 내용에 따라 VISION, TOOL_CALLING, STRUCTURED_OUTPUT 등을 자동으로 요구합니다. 권장 기본값입니다.' }}</small></span>
           <i>{{ !selected.length ? '✓' : '' }}</i>
         </button>
         <label v-for="option in options" :key="option.value" class="capability-option" :class="{ selected: selected.includes(option.value) }">

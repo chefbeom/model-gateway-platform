@@ -48,6 +48,13 @@ public class ExternalProviderAdministrationController {
     @GetMapping("/external-providers/{providerId}/models")
     public List<ExternalProviderAdministrationService.ProviderModelView> models(@PathVariable UUID providerId) { return service.models(providerId); }
 
+    @GetMapping("/external-providers/{providerId}/models/{modelId}/deletion-preview")
+    public ExternalProviderAdministrationService.ModelDeletePreview modelDeletionPreview(@PathVariable UUID providerId, @PathVariable UUID modelId) { return service.modelDeletionPreview(providerId, modelId); }
+
+    @DeleteMapping("/external-providers/{providerId}/models/{modelId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteModel(@PathVariable UUID providerId, @PathVariable UUID modelId) { service.deleteModel(providerId, modelId); }
+
     @PostMapping("/external-providers/{providerId}/models")
     public ExternalProviderAdministrationService.ProviderModelView addModel(@PathVariable UUID providerId, @Valid @RequestBody AddModel request) {
         return service.addModel(providerId, request.providerModelId(), request.displayName(), request.compatibilityKey(), request.contextLength(), request.maxConcurrency(), request.capabilitiesJson(), request.inputPricePerMillion(), request.outputPricePerMillion(), request.currency(), request.reasoningEffort(), request.serviceTier(), request.cachedInputPricePerMillion(), request.fastInputPricePerMillion(), request.fastCachedInputPricePerMillion(), request.fastOutputPricePerMillion(), request.featureSupportJson());

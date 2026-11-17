@@ -118,6 +118,7 @@ public class ModelPlaygroundService {
         }
         for (ExternalProvider provider : providers.findByOrganizationIdOrderByDisplayNameAsc(organizationId)) {
             for (ModelDeployment deployment : deployments.findByExternalProviderId(provider.getId())) {
+                if (deployment.isArchived()) continue;
                 result.add(view(deployment, null, provider, null, null));
             }
         }
@@ -616,7 +617,7 @@ public class ModelPlaygroundService {
     }
 
     private Resolved resolve(UUID organizationId, UUID targetId) {
-        ModelDeployment deployment = deployments.findById(targetId)
+        ModelDeployment deployment = deployments.findById(targetId).filter(item -> !item.isArchived())
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "PLAYGROUND_TARGET_NOT_FOUND", "등록된 모델을 찾을 수 없습니다."));
         if (deployment.isExternal()) {
             ExternalProvider provider = providers.findById(deployment.getExternalProviderId())

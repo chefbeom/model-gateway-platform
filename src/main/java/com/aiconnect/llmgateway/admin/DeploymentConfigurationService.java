@@ -25,7 +25,7 @@ public class DeploymentConfigurationService {
 
     @Transactional
     public ModelDeployment configure(UUID deploymentId, DeploymentConfigurationController.UpdateDeployment request) {
-        ModelDeployment deployment = deployments.findById(deploymentId)
+        ModelDeployment deployment = deployments.findByIdForUpdate(deploymentId).filter(item -> !item.isArchived())
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "DEPLOYMENT_NOT_FOUND", "The model deployment does not exist."));
         deployment.configure(request.compatibilityKey(), request.enabled(), request.maxConcurrency(), request.capabilityOverridesJson());
         deployment.configureDisplayName(request.displayName());
@@ -39,12 +39,14 @@ public class DeploymentConfigurationService {
         try {
             JsonNode value = objectMapper.readTree(json);
             if (value == null || !value.isObject()) throw new IllegalArgumentException();
-            for (String feature : List.of("vision", "thinking", "fast", "reasoningLevels")) {
+            for (String feature : List.of("vision", "thinking", "fast", "reasoningLevels", "structuredOutput", "toolCalling")) {
                 JsonNode state = value.get(feature);
                 if (state != null && (!state.isTextual() || !Set.of("SUPPORTED", "UNSUPPORTED", "UNKNOWN").contains(state.asText()))) {
                     throw new IllegalArgumentException();
                 }
             }
+            JsonNode policy = value.get("routingUnknownCapabilities");
+            if (policy != null && (!policy.isTextual() || !Set.of("STRICT", "TRY_UNCONFIRMED").contains(policy.asText()))) throw new IllegalArgumentException();
             JsonNode efforts = value.get("reasoningEfforts");
             if (efforts != null) {
                 if (!efforts.isArray()) throw new IllegalArgumentException();

@@ -5,6 +5,7 @@ import com.aiconnect.llmgateway.external.ProjectExternalAccessService;
 import com.aiconnect.llmgateway.repository.*;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -13,6 +14,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
+import java.util.Map;
 
 @Service
 public class RoutingService {
@@ -92,9 +94,22 @@ public class RoutingService {
         for (ServiceTarget target : configured) {
             ModelDeployment deployment = deployments.findById(target.getDeploymentId()).orElse(null);
             String providerType = deployment != null && deployment.isExternal() ? "EXTERNAL" : "LOCAL";
-            List<String> availableCapabilities = deployment == null ? List.of()
-                    : sortedCapabilities(deployment.getCapabilitiesJson(), deployment.getCapabilityOverridesJson());
+            JsonNode featureSupport = featureSupport(deployment);
+            Set<String> verified = new TreeSet<>(deployment == null ? List.of()
+                    : sortedCapabilities(deployment.getCapabilitiesJson(), deployment.getCapabilityOverridesJson()));
+            Map<String, String> featureNames = Map.of("VISION", "vision", "STRUCTURED_OUTPUT", "structuredOutput", "TOOL_CALLING", "toolCalling", "REASONING", "thinking");
+            featureNames.forEach((capability, feature) -> {
+                String state = featureSupport.path(feature).asText();
+                if ("SUPPORTED".equals(state)) verified.add(capability);
+                else if ("UNSUPPORTED".equals(state)) verified.remove(capability);
+            });
+            List<String> availableCapabilities = List.copyOf(verified);
             List<String> missingCapabilities = missing(requiredCapabilities, availableCapabilities);
+            boolean tryUnknown = deployment != null && deployment.isExternal()
+                    && "TRY_UNCONFIRMED".equals(featureSupport.path("routingUnknownCapabilities").asText());
+            boolean blockedCapability = missingCapabilities.stream().anyMatch(capability ->
+                    !tryUnknown || !Set.of("VISION", "STRUCTURED_OUTPUT", "TOOL_CALLING").contains(capability)
+                    || "UNSUPPORTED".equals(featureSupport.path(featureNames.get(capability)).asText()));
             List<String> reasons = new ArrayList<>();
             RuntimeEndpoint endpoint = null;
             ExternalProvider provider = null;
@@ -109,7 +124,7 @@ public class RoutingService {
             if (deployment != null && !deployment.isLoaded()) reasons.add("DEPLOYMENT_NOT_LOADED");
             if (deployment != null && deployment.getHealthStatus() != HealthStatus.HEALTHY) reasons.add("DEPLOYMENT_UNHEALTHY");
             if (deployment != null && target.isFollowModelChanges() && hasLoadedReplacement(deployment)) reasons.add("TARGET_MODEL_STALE");
-            if (deployment != null && !missingCapabilities.isEmpty()) reasons.add("CAPABILITY_MISSING");
+            if (deployment != null && blockedCapability) reasons.add("CAPABILITY_MISSING");
             if (deployment != null) {
                 limit = target.effectiveMaxConcurrency(deployment.getMaxConcurrency());
                 activeCount = activeRequests.count(deployment.getId());
@@ -212,6 +227,16 @@ public class RoutingService {
         Set<String> values = new TreeSet<>();
         for (String json : jsonValues) values.addAll(readCapabilities(json));
         return List.copyOf(values);
+    }
+
+    private JsonNode featureSupport(ModelDeployment deployment) {
+        if (deployment != null && deployment.getFeatureSupportJson() != null) {
+            try {
+                JsonNode node = objectMapper.readTree(deployment.getFeatureSupportJson());
+                if (node != null && node.isObject()) return node;
+            } catch (Exception ignored) { }
+        }
+        return objectMapper.createObjectNode();
     }
 
     private List<String> missing(Set<String> required, List<String> available) {

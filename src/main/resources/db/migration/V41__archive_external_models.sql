@@ -1,0 +1,1 @@
+ALTER TABLE model_deployment ADD COLUMN archived BOOLEAN NOT NULL DEFAULT FALSE;

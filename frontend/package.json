@@ -12,7 +12,9 @@
     "test:project-security": "node --test tests/projectLocalOnly.test.mjs",
     "test:runtime-status": "node --test tests/runtimeStatus.test.mjs",
     "test:date-time": "node --test tests/dateTime.test.mjs",
-    "test:playground-response": "node --test tests/playgroundResponse.test.mjs"
+    "test:playground-response": "node --test tests/playgroundResponse.test.mjs",
+    "test:external-model-deletion": "node --test tests/externalModelDeletion.test.mjs",
+    "test:external-capabilities": "node --test tests/externalCapabilities.test.mjs"
   },
   "dependencies": {
     "vue": "^3.5.13"

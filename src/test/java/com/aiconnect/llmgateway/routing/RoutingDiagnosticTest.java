@@ -8,6 +8,10 @@ import com.aiconnect.llmgateway.domain.RuntimeEndpoint;
 import com.aiconnect.llmgateway.domain.RuntimeType;
 import com.aiconnect.llmgateway.domain.ServiceTarget;
 import com.aiconnect.llmgateway.domain.RetryPolicy;
+import com.aiconnect.llmgateway.domain.ExternalProvider;
+import com.aiconnect.llmgateway.domain.ExternalProviderType;
+import com.aiconnect.llmgateway.external.ProjectExternalAccessService;
+import com.aiconnect.llmgateway.repository.ExternalProviderRepository;
 import com.aiconnect.llmgateway.repository.ModelDeploymentRepository;
 import com.aiconnect.llmgateway.repository.RuntimeEndpointRepository;
 import com.aiconnect.llmgateway.repository.ServiceTargetRepository;
@@ -32,6 +36,42 @@ class RoutingDiagnosticTest {
     private final ActiveRequestRegistry active = new ActiveRequestRegistry();
     private final RoutingService routing = new RoutingService(targets, deployments, endpoints, active,
             new WeightedTargetSelector(active), new ObjectMapper());
+
+    @Test
+    void externalUnknownCapabilitiesRequireOptInAndNeverOverrideExplicitDenialOrPrivacy() {
+        UUID serviceId = UUID.randomUUID(), project = UUID.randomUUID(), providerId = UUID.randomUUID();
+        LlmService service = new LlmService(UUID.randomUUID(), "test", "Test", FailoverPolicy.COMPATIBLE,
+                RetryPolicy.SAFE, false, "[]", BigDecimal.ZERO, BigDecimal.ZERO);
+        ReflectionTestUtils.setField(service, "id", serviceId);
+        ModelDeployment model = ModelDeployment.external(providerId, "model", "model", "Model", 8192, 4, "[]", BigDecimal.ZERO, BigDecimal.ZERO);
+        ReflectionTestUtils.setField(model, "id", UUID.randomUUID());
+        ExternalProvider provider = new ExternalProvider(UUID.randomUUID(), ExternalProviderType.OPENAI, "Provider", "https://example.com/v1", "key");
+        ReflectionTestUtils.setField(provider, "id", providerId);
+        provider.recordHealth(true);
+        ExternalProviderRepository providers = mock(ExternalProviderRepository.class);
+        ProjectExternalAccessService access = mock(ProjectExternalAccessService.class);
+        when(providers.findById(providerId)).thenReturn(Optional.of(provider));
+        when(access.allowsManual(project, providerId)).thenReturn(true);
+        when(targets.findByServiceIdOrderByPriorityAsc(serviceId)).thenReturn(List.of(target(serviceId, model, false, true)));
+        when(deployments.findById(model.getId())).thenReturn(Optional.of(model));
+        RoutingService externalRouting = new RoutingService(targets, deployments, endpoints, providers, access, active,
+                new WeightedTargetSelector(active), new ObjectMapper());
+        Set<String> requested = Set.of("VISION", "STRUCTURED_OUTPUT");
+
+        assertThat(externalRouting.evaluate(service, requested, project).evaluations().get(0).reasonCodes()).contains("CAPABILITY_MISSING");
+        model.configureFeatureSupport("{\"routingUnknownCapabilities\":\"TRY_UNCONFIRMED\"}");
+        RoutingDecision decision = externalRouting.evaluate(service, requested, project);
+        assertThat(decision.eligibleTargets()).hasSize(1);
+        assertThat(decision.evaluations().get(0).missingCapabilities()).containsExactly("STRUCTURED_OUTPUT", "VISION");
+        model.configureFeatureSupport("{\"routingUnknownCapabilities\":\"TRY_UNCONFIRMED\",\"vision\":\"UNSUPPORTED\"}");
+        assertThat(externalRouting.evaluate(service, requested, project).evaluations().get(0).reasonCodes()).contains("CAPABILITY_MISSING");
+        model.configureFeatureSupport("{\"routingUnknownCapabilities\":\"TRY_UNCONFIRMED\",\"vision\":\"SUPPORTED\"}");
+        assertThat(externalRouting.evaluate(service, requested, project, new RoutingConstraint(false, false, List.of()))
+                .evaluations().get(0).reasonCodes()).contains("DATA_PROTECTION_EXTERNAL_BLOCKED");
+        assertThat(externalRouting.evaluate(service, Set.of("REASONING"), project).evaluations().get(0).reasonCodes()).contains("CAPABILITY_MISSING");
+        model.configureFeatureSupport("not-json");
+        assertThat(externalRouting.evaluate(service, requested, project).evaluations().get(0).reasonCodes()).contains("CAPABILITY_MISSING");
+    }
 
     @Test
     void standbyLoadingAndUnknownLoadStateAreNotMislabeledAsRuntimeFailures() {

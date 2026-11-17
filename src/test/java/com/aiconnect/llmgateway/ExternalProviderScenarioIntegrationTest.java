@@ -54,6 +54,41 @@ class ExternalProviderScenarioIntegrationTest {
     @Autowired ControlPlaneService controlPlane;
 
     @Test
+    void unconfirmedVisionAndStructuredOutputReachProviderOnlyWithExplicitOptIn() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+        AtomicReference<String> payload = new AtomicReference<>();
+        HttpServer providerServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        providerServer.createContext("/v1/chat/completions", exchange -> {
+            calls.incrementAndGet();
+            payload.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] response = "{\"id\":\"test\",\"model\":\"unverified\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{}\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":2}}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length); exchange.getResponseBody().write(response); exchange.close();
+        });
+        providerServer.start();
+        try {
+            Organization org = organizations.save(new Organization("Unknown capabilities Org"));
+            Project project = projects.save(new Project(org.getId(), "unknown-capabilities"));
+            IssuedApiKey key = apiKeys.issue(project.getId(), "test", null);
+            ExternalProvider provider = new ExternalProvider(org.getId(), ExternalProviderType.OPENAI, "Test provider",
+                    "http://127.0.0.1:" + providerServer.getAddress().getPort() + "/v1", cipher.encrypt("secret"));
+            provider.recordHealth(true); provider = providers.save(provider);
+            ModelDeployment model = deployments.save(ModelDeployment.external(provider.getId(), "unverified", "unverified", "Unverified", 8192, 20, "[]", BigDecimal.ZERO, BigDecimal.ZERO));
+            LlmService service = services.save(new LlmService(org.getId(), "unknown-capabilities", "Unknown capabilities", FailoverPolicy.COMPATIBLE, RetryPolicy.SAFE, false, "[]", BigDecimal.ZERO, BigDecimal.ZERO));
+            controlPlane.addTarget(service.getId(), new AdminDtos.CreateTarget(model.getId(), 1, 100, false, null));
+            serviceAccess.save(new ProjectServiceAccess(project.getId(), service.getId()));
+            externalPolicies.decide(project.getId(), provider.getId(), ExternalAccessStatus.APPROVED, true, false, BigDecimal.valueOf(100), null, null);
+            String body = "{\"model\":\"unknown-capabilities\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"describe\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,aGVsbG8=\"}}]}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"result\",\"schema\":{\"type\":\"object\"}}}}";
+            mvc.perform(post("/v1/chat/completions").header("Authorization", "Bearer " + key.secret()).contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isServiceUnavailable());
+            assertThat(calls).hasValue(0);
+            model.configureFeatureSupport("{\"routingUnknownCapabilities\":\"TRY_UNCONFIRMED\"}"); deployments.save(model);
+            mvc.perform(post("/v1/chat/completions").header("Authorization", "Bearer " + key.secret()).contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isOk());
+            assertThat(calls).hasValue(1);
+            assertThat(payload.get()).contains("image_url", "json_schema");
+        } finally { providerServer.stop(0); }
+    }
+
+    @Test
     void requiresApprovalForManualUseAndExplicitToggleForAutomaticFailover() throws Exception {
         AtomicInteger calls = new AtomicInteger();
         AtomicReference<String> authorization = new AtomicReference<>();
