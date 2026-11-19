@@ -49,6 +49,8 @@ public class ChatCompletionGateway {
     private DataProtectionPolicyService dataProtection;
     @org.springframework.beans.factory.annotation.Autowired
     private GatewaySchedulingSupport scheduling;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.aiconnect.llmgateway.beta.BetaAccessService betaAccess;
     public ChatCompletionGateway(ApiKeyService apiKeyService, LlmServiceRepository services,
                                  ProjectServiceAccessRepository access, RoutingService routing,
                                  InferenceRuntimeClient runtimeClient, OpenAiRuntimeClient openAiClient,
@@ -76,6 +78,8 @@ public class ChatCompletionGateway {
         if (!access.existsByIdProjectIdAndIdServiceId(credentials.project().getId(), service.getId())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "MODEL_NOT_ALLOWED", "This API key is not allowed to use the requested model.");
         }
+        betaAccess.checkProject(credentials.project().getId(), service.getId());
+        if (betaAccess.isBetaProject(credentials.project().getId())) com.aiconnect.llmgateway.beta.BetaRequestPolicy.apply(request);
 
         DataProtectionDecision protection = dataProtection.inspect(credentials.project(), credentials.apiKey(), service, request, null);
         String requestId = UUID.randomUUID().toString();
@@ -117,6 +121,8 @@ public class ChatCompletionGateway {
         ProviderFailureClassifier.Analysis lastFailure = null;
         ProviderFailureClassifier.Analysis capacityFailure = null;
         for (ResolvedTarget candidate : candidates) {
+            betaAccess.checkProject(audit.getProjectId(), audit.getServiceId());
+            if (candidate.external() && betaAccess.isBetaProject(audit.getProjectId())) continue;
             ActiveRequestRegistry.Lease lease=plan.acquire(candidate);
             if (lease==null) continue;
             Instant attemptStarted = Instant.now();

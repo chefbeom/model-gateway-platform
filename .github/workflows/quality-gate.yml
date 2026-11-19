@@ -75,7 +75,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - name: Frontend behavior tests
-        run: npm run test:docs && npm run test:quota && npm run test:topology && npm run test:project-security && npm run test:runtime-status && npm run test:date-time && npm run test:playground-response && npm run test:external-model-deletion && npm run test:external-capabilities
+        run: npm run test:docs && npm run test:quota && npm run test:topology && npm run test:project-security && npm run test:runtime-status && npm run test:date-time && npm run test:playground-response && npm run test:external-model-deletion && npm run test:external-capabilities && npm run test:beta-operator
       - run: npm run build
 
   deployment-contract:
@@ -110,6 +110,16 @@ jobs:
         run: docker compose -f docker-compose.yml -f docker-compose.tls.yml config -q
       - name: Validate HA Compose contract
         run: docker compose -f deploy/ha/docker-compose.yml config -q
+      - name: Validate opt-in beta ingress contract
+        env:
+          AICONNECT_BETA_INGRESS_TOKEN: ci-beta-ingress-config-test-only-00000000
+        run: |
+          docker compose -f deploy/ha/docker-compose.yml -f deploy/ha/docker-compose.beta.yml config -q
+          docker run --rm \
+            --add-host api-1:127.0.0.1 --add-host api-2:127.0.0.1 \
+            -e AICONNECT_BETA_INGRESS_TOKEN -e 'NGINX_ENVSUBST_FILTER=^AICONNECT_BETA_INGRESS_TOKEN$' \
+            -v "$PWD/deploy/ha/beta-nginx.conf.template:/etc/nginx/templates/default.conf.template:ro" \
+            nginx:1.27-alpine nginx -t
       - name: Install Helm
         uses: azure/setup-helm@v4
         with:

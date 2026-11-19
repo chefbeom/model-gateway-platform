@@ -28,11 +28,15 @@ class MigrationVersionOrderingTest {
         }
         Integer deployedBaseline = versions.get("playground_request_metadata.sql");
         assertNotNull(deployedBaseline);
-        for (String feature : new String[]{"playground_conversation_history.sql", "model_feature_support.sql"}) {
+        for (String feature : new String[]{"playground_conversation_history.sql", "model_feature_support.sql", "beta_invitation_service.sql"}) {
             Integer version = versions.get(feature);
             assertNotNull(version, "Missing migration: " + feature);
             assertTrue(version > deployedBaseline,
                     "New migration would be ignored on an existing production schema: " + feature);
         }
+        Integer previousRelease = versions.get("archive_external_models.sql");
+        assertNotNull(previousRelease, "Missing migration: archive_external_models.sql");
+        assertTrue(versions.get("beta_invitation_service.sql") > previousRelease,
+                "Beta invitation migration must order after archive_external_models.sql");
     }
 }

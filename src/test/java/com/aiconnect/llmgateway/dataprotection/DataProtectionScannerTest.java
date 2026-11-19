@@ -11,6 +11,27 @@ class DataProtectionScannerTest {
     private final DataProtectionScanner scanner = new DataProtectionScanner(new ObjectMapper());
 
     @Test
+    void recordsIncompleteInspectionAndRecognizesNestedMedia() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        var policy = new EffectiveDataProtectionPolicy(DataProtectionMode.ENFORCE, DataProtectionLevel.STRICT,
+                DataProtectionAction.LOCAL_ONLY, false, true, false, false, false, true, List.of(), List.of());
+        var longText = mapper.createObjectNode().put("content", "a".repeat(65_537));
+        assertThat(scanner.scan(longText, policy).has(DataClassification.SCAN_INCOMPLETE)).isTrue();
+        var image = mapper.readTree("{\"image_url\":{\"url\":\"https://example.invalid/image.png\"}}");
+        assertThat(scanner.scan(image, policy).has(DataClassification.UNKNOWN_MEDIA)).isTrue();
+        var pdf = mapper.createObjectNode().put("file", "data:application/pdf;base64,AAAA");
+        assertThat(scanner.scan(pdf, policy).has(DataClassification.UNKNOWN_MEDIA)).isTrue();
+        assertThat(scanner.scan(mapper.createObjectNode().put("content", "ordinary text"), policy).hasSensitiveData()).isFalse();
+        var deeplyNested = mapper.createObjectNode();
+        var current = deeplyNested;
+        for (int i = 0; i < 70; i++) current = current.putObject("nested");
+        assertThat(scanner.scan(deeplyNested, policy).has(DataClassification.SCAN_INCOMPLETE)).isTrue();
+        var largeImage = mapper.createObjectNode().put("url", "data:image/png;base64," + "A".repeat(70_000));
+        assertThat(scanner.scan(largeImage, policy).has(DataClassification.UNKNOWN_MEDIA)).isTrue();
+        assertThat(scanner.scan(largeImage, policy).has(DataClassification.SCAN_INCOMPLETE)).isFalse();
+    }
+
+    @Test
     void detectsSecretPiiFinancialConfidentialAndMediaWithoutReturningMatchedValues() throws Exception {
         var request = new ObjectMapper().readTree("""
                 {

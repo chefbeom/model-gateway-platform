@@ -20,11 +20,12 @@ import DataProtectionPage from './DataProtectionPage.vue'
 import ApiPlaygroundPage from './ApiPlaygroundPage.vue'
 import ModelPlaygroundPage from './ModelPlaygroundPage.vue'
 import PlatformAdminPage from './PlatformAdminPage.vue'
+import BetaOperatorPage from './BetaOperatorPage.vue'
 import { adminFetch, type AdminAuth, type User } from './api'
 
 type Theme = 'dark' | 'light'
 type FontScale = '100' | '115' | '125' | '135'
-type PageKey = 'dashboard' | 'infrastructure' | 'system' | 'external' | 'services' | 'teams' | 'projects' | 'observability' | 'usage' | 'quotas' | 'data-protection' | 'notifications' | 'audit' | 'platform' | 'portal' | 'playground' | 'model-playground' | 'docs'
+type PageKey = 'beta' | 'dashboard' | 'infrastructure' | 'system' | 'external' | 'services' | 'teams' | 'projects' | 'observability' | 'usage' | 'quotas' | 'data-protection' | 'notifications' | 'audit' | 'platform' | 'portal' | 'playground' | 'model-playground' | 'docs'
 type OrganizationRole = 'ORGANIZATION_ADMIN' | 'DEVELOPER'
 type TeamRole = 'TEAM_ADMIN' | 'PROJECT_OWNER' | 'DEVELOPER' | 'AUDITOR'
 type Organization = { id: string; name: string; status: string }
@@ -72,6 +73,7 @@ const teams = ref<Team[]>([])
 const organizationId = ref(sessionStorage.getItem('aiconnect.setup.organizationId') ?? '')
 const memberships = ref<Membership[]>([])
 const contextPlatformAdmin = ref(false)
+const betaOperator = ref(false)
 const sidebarOpen = ref(false)
 const settingsOpen = ref(false)
 const userMenuOpen = ref(false)
@@ -90,7 +92,7 @@ const playgroundInitialTargetId = ref('')
 const selectedMembership = computed(() => memberships.value.find(member => member.organizationId === organizationId.value) ?? null)
 const platformAdmin = computed(() => Boolean(props.user?.platformAdmin || props.platformTokenSession || contextPlatformAdmin.value))
 const isAdminConsole = computed(() => platformAdmin.value || selectedMembership.value?.role === 'ORGANIZATION_ADMIN')
-const navItems = computed(() => isAdminConsole.value ? (platformAdmin.value ? [...adminNavItems, platformNavItem] : adminNavItems) : developerNavItems)
+const navItems = computed(() => [...(isAdminConsole.value ? (platformAdmin.value ? [...adminNavItems, platformNavItem] : adminNavItems) : developerNavItems), ...(platformAdmin.value || betaOperator.value ? [{id:'beta' as const,label:'초대 서비스 운영',description:'초대·접근·운영 상태',keywords:'beta invitation invite',icon:'◇',group:'운영'}] : [])])
 const groups = computed(() => [...new Set(navItems.value.map(item => item.group))])
 const allNavigation = computed(() => [...navItems.value, docsItem])
 const currentNav = computed(() => allNavigation.value.find(item => item.id === page.value) ?? navItems.value[0] ?? docsItem)
@@ -103,9 +105,9 @@ const searchResults = computed(() => {
 })
 
 function knownPage(value: string): value is PageKey {
-  return ['dashboard', 'infrastructure', 'system', 'external', 'services', 'teams', 'projects', 'observability', 'usage', 'quotas', 'data-protection', 'notifications', 'audit', 'platform', 'portal', 'playground', 'model-playground', 'docs'].includes(value)
+  return ['beta', 'dashboard', 'infrastructure', 'system', 'external', 'services', 'teams', 'projects', 'observability', 'usage', 'quotas', 'data-protection', 'notifications', 'audit', 'platform', 'portal', 'playground', 'model-playground', 'docs'].includes(value)
 }
-function isAllowedPage(target: PageKey) { return isAdminConsole.value || target === 'portal' || target === 'usage' || target === 'playground' || target === 'docs' }
+function isAllowedPage(target: PageKey) { if(target==='beta')return platformAdmin.value || betaOperator.value; return isAdminConsole.value || target === 'portal' || target === 'usage' || target === 'playground' || target === 'docs' }
 function fallbackPage(): PageKey { return isAdminConsole.value ? 'dashboard' : 'portal' }
 function resolveHash(): PageKey {
   const candidate = window.location.hash.replace(/^#\/?/, '')
@@ -209,6 +211,11 @@ onMounted(async () => {
   window.addEventListener('hashchange', onHashChange)
   window.addEventListener('keydown', onGlobalKeydown)
   await loadSessionContext()
+  if (auth.value.accessToken) {
+    try { const scoped=await adminFetch<unknown[]>('/api/beta/operator/services',auth.value); betaOperator.value=scoped.length>0 } catch { betaOperator.value=false }
+  } else {
+    betaOperator.value=false
+  }
   await loadOrganizations()
   ensureAllowedPage()
   if (!window.location.hash) window.history.replaceState(null, '', `#${page.value}`)
@@ -257,6 +264,7 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
         <NotificationsPage v-else-if="isAdminConsole && page === 'notifications'" :organization-id="organizationId" :auth="auth" />
         <AuditLogPage v-else-if="isAdminConsole && page === 'audit'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" />
         <PlatformAdminPage v-else-if="platformAdmin && page === 'platform'" :auth="auth" />
+        <BetaOperatorPage v-else-if="page === 'beta' && (platformAdmin || betaOperator)" :auth="auth" :platform-admin="platformAdmin" />
         <UsagePage v-else-if="page === 'usage'" :organization-id="organizationId" :auth="auth" />
         <QuotaPage v-else-if="isAdminConsole && page === 'quotas'" :organization-id="organizationId" :auth="auth" />
         <DataProtectionPage v-else-if="isAdminConsole && page === 'data-protection'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" />

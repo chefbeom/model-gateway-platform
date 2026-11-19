@@ -12,6 +12,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import jakarta.servlet.http.HttpServletRequest;
 
 @RestController
 public class ProjectExternalAccessController {
@@ -43,7 +44,11 @@ public class ProjectExternalAccessController {
 
     @PatchMapping("/api/admin/projects/{projectId}/external-access/{providerId}")
     public ProjectExternalAccessService.AdminAccessView decide(@PathVariable UUID projectId, @PathVariable UUID providerId,
-                                                                 @Valid @RequestBody Decision request) {
+                                                                 @Valid @RequestBody Decision request, HttpServletRequest http) {
+        UUID organization = (UUID) http.getAttribute("aiconnect.organization-id");
+        if (!Boolean.TRUE.equals(http.getAttribute("aiconnect.platform-admin"))
+                && (organization == null || !access.isOrganizationAdmin(CurrentActor.principal().orElse(null), organization)))
+            throw new ApiException(HttpStatus.FORBIDDEN, "ORGANIZATION_ADMIN_REQUIRED", "Only an organization administrator may approve external provider access.");
         return service.decide(projectId, providerId, request.status(), request.manualAllowed(),
                 request.autoFailoverEnabled(), request.monthlyCostLimit(), request.expiresAt(), CurrentActor.userIdOrNull());
     }

@@ -5,5 +5,6 @@ public enum DataClassification {
     PII,
     FINANCIAL,
     CONFIDENTIAL,
-    UNKNOWN_MEDIA
+    UNKNOWN_MEDIA,
+    SCAN_INCOMPLETE
 }

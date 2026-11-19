@@ -28,6 +28,7 @@ import java.util.UUID;
 
 @Component
 public class OrganizationAuthorizationFilter extends OncePerRequestFilter {
+    private static final int MAX_BODY_BYTES = 10 * 1024 * 1024;
     private final ObjectMapper objectMapper;
     private final ProjectRepository projects;
     private final InferenceNodeRepository nodes;
@@ -61,8 +62,10 @@ public class OrganizationAuthorizationFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws IOException, ServletException {
+        if (request.getContentLengthLong() > MAX_BODY_BYTES) { response.sendError(413, "Request body exceeds the permitted size."); return; }
         if (Boolean.TRUE.equals(request.getAttribute("aiconnect.platform-admin"))) {
-            byte[] body = request.getInputStream().readAllBytes();
+            byte[] body = request.getInputStream().readNBytes(MAX_BODY_BYTES + 1);
+            if (body.length > MAX_BODY_BYTES) { response.sendError(413, "Request body exceeds the permitted size."); return; }
             UUID organizationId = organizationFor(request.getMethod(), request.getRequestURI(), parse(body));
             attachOrganization(request, organizationId);
             filterChain.doFilter(new BufferedBodyRequest(request, body), response);
@@ -74,7 +77,8 @@ public class OrganizationAuthorizationFilter extends OncePerRequestFilter {
             return;
         }
         if (actor.platformAdmin()) {
-            byte[] body = request.getInputStream().readAllBytes();
+            byte[] body = request.getInputStream().readNBytes(MAX_BODY_BYTES + 1);
+            if (body.length > MAX_BODY_BYTES) { response.sendError(413, "Request body exceeds the permitted size."); return; }
             UUID organizationId = organizationFor(request.getMethod(), request.getRequestURI(), parse(body));
             attachOrganization(request, organizationId);
             filterChain.doFilter(new BufferedBodyRequest(request, body), response);
@@ -86,7 +90,8 @@ public class OrganizationAuthorizationFilter extends OncePerRequestFilter {
             return;
         }
 
-        byte[] body = request.getInputStream().readAllBytes();
+        byte[] body = request.getInputStream().readNBytes(MAX_BODY_BYTES + 1);
+        if (body.length > MAX_BODY_BYTES) { response.sendError(413, "Request body exceeds the permitted size."); return; }
         JsonNode parsed = parse(body);
         UUID organizationId = organizationFor(request.getMethod(), uri, parsed);
         attachOrganization(request, organizationId);

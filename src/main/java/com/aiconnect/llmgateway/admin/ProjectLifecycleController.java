@@ -14,19 +14,29 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
+import jakarta.servlet.http.HttpServletRequest;
+import com.aiconnect.llmgateway.identity.CurrentActor;
+import com.aiconnect.llmgateway.team.TeamAccessService;
+import com.aiconnect.llmgateway.repository.ProjectRepository;
 
 @RestController
 @RequestMapping("/api/admin/projects")
 public class ProjectLifecycleController {
     private final ProjectLifecycleService lifecycle;
+    private final TeamAccessService access;
+    private final ProjectRepository projects;
 
-    public ProjectLifecycleController(ProjectLifecycleService lifecycle) {
+    public ProjectLifecycleController(ProjectLifecycleService lifecycle, TeamAccessService access, ProjectRepository projects) {
         this.lifecycle = lifecycle;
+        this.access = access;
+        this.projects = projects;
     }
 
     @PatchMapping("/{projectId}")
-    public ProjectLifecycleService.ProjectView update(@PathVariable UUID projectId, @Valid @RequestBody UpdateProject request) {
-        return lifecycle.update(projectId, request.name(), request.teamId(), request.externalAiBlocked());
+    public ProjectLifecycleService.ProjectView update(@PathVariable UUID projectId, @Valid @RequestBody UpdateProject request, HttpServletRequest http) {
+        boolean platform = Boolean.TRUE.equals(http.getAttribute("aiconnect.platform-admin"));
+        boolean orgAdmin = projects.findById(projectId).map(project -> access.isOrganizationAdmin(CurrentActor.principal().orElse(null), project.getOrganizationId())).orElse(false);
+        return lifecycle.update(projectId, request.name(), request.teamId(), request.externalAiBlocked(), platform || orgAdmin);
     }
 
     /** POST intentionally requires project-management permission; it does not mutate data. */

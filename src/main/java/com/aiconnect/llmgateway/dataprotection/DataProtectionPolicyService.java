@@ -59,6 +59,10 @@ public class DataProtectionPolicyService {
                 reasons.add("DATA_PROTECTION_ENFORCED");
             }
         }
+        if (effective.mode() == DataProtectionMode.ENFORCE && scan.has(DataClassification.SCAN_INCOMPLETE)) {
+            action = strongerAction(action, DataProtectionAction.LOCAL_ONLY);
+            reasons.add("DATA_PROTECTION_SCAN_INCOMPLETE");
+        }
         if (projectLocalOnly) {
             // The hard routing boundary must not activate an otherwise dormant
             // MONITOR/OFF sensitive-data BLOCK action.
@@ -104,6 +108,15 @@ public class DataProtectionPolicyService {
             find(DataProtectionScopeType.ORGANIZATION, organizationId, organizationId).ifPresent(applicable::add);
         }
         return merge(applicable);
+    }
+
+    /** Playground is organization-scoped, so no project policy may be inferred. */
+    public boolean allowsOrganizationExternal(UUID organizationId, JsonNode request) {
+        EffectiveDataProtectionPolicy policy = resolveOrganization(organizationId);
+        DataProtectionScanResult result = scanner.scan(request, policy);
+        if (policy.mode() != DataProtectionMode.ENFORCE) return true;
+        if (result.has(DataClassification.SCAN_INCOMPLETE)) return false;
+        return !result.hasSensitiveData() || policy.externalAction() == DataProtectionAction.ALLOW;
     }
 
     private Optional<DataProtectionPolicy> find(DataProtectionScopeType scope, UUID organizationId, UUID scopeId) {

@@ -16,7 +16,7 @@ import java.io.IOException;
 import java.util.UUID;
 
 @Component
-@Order(Ordered.HIGHEST_PRECEDENCE + 1)
+@Order(Ordered.HIGHEST_PRECEDENCE + 3)
 public class QuotaFilter extends OncePerRequestFilter {
     private final ObjectMapper objectMapper;
     private final QuotaService quotaService;

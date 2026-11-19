@@ -10,6 +10,8 @@ import com.aiconnect.llmgateway.domain.RetryPolicy;
 import com.aiconnect.llmgateway.identity.AccessTokenService;
 import com.aiconnect.llmgateway.identity.AppUser;
 import com.aiconnect.llmgateway.identity.AppUserRepository;
+import com.aiconnect.llmgateway.identity.AuthRefreshToken;
+import com.aiconnect.llmgateway.identity.AuthRefreshTokenRepository;
 import com.aiconnect.llmgateway.identity.OrganizationMember;
 import com.aiconnect.llmgateway.identity.OrganizationMemberRepository;
 import com.aiconnect.llmgateway.identity.OrganizationRole;
@@ -57,6 +59,7 @@ class RoleScopedUsageIntegrationTest {
     @Autowired TeamRepository teams;
     @Autowired TeamMemberRepository teamMembers;
     @Autowired AccessTokenService tokens;
+    @Autowired AuthRefreshTokenRepository sessions;
 
     @Test
     void derivesUsageFromTheLoginRoleWithoutAcceptingAProjectApiKey() throws Exception {
@@ -96,7 +99,7 @@ class RoleScopedUsageIntegrationTest {
         apiKeys.flush();
 
         String path = "/api/portal/organizations/{organizationId}/usage-overview";
-        mvc.perform(get(path, organization.getId()).header("Authorization", "Bearer " + tokens.issue(issuer)))
+        mvc.perform(get(path, organization.getId()).header("Authorization", "Bearer " + accessToken(issuer)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.scope").value("KEY_ISSUER"))
                 .andExpect(jsonPath("$.total.requestCount").value(1))
@@ -104,7 +107,7 @@ class RoleScopedUsageIntegrationTest {
                 .andExpect(jsonPath("$.runtimeAnalytics.byServer[0].requests.requestCount").value(1))
                 .andExpect(jsonPath("$.runtimeAnalytics.playground").doesNotExist());
 
-        mvc.perform(get(path, organization.getId()).header("Authorization", "Bearer " + tokens.issue(owner)))
+        mvc.perform(get(path, organization.getId()).header("Authorization", "Bearer " + accessToken(owner)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.scope").value("PROJECT_OWNER"))
                 .andExpect(jsonPath("$.total.requestCount").value(2))
@@ -113,7 +116,7 @@ class RoleScopedUsageIntegrationTest {
                 .andExpect(jsonPath("$.runtimeAnalytics.playground").doesNotExist())
                 .andExpect(jsonPath("$.availableProjects[0].access").value("PROJECT_ALL"));
 
-        mvc.perform(get(path, organization.getId()).header("Authorization", "Bearer " + tokens.issue(administrator)))
+        mvc.perform(get(path, organization.getId()).header("Authorization", "Bearer " + accessToken(administrator)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.scope").value("ORGANIZATION"))
                 .andExpect(jsonPath("$.total.requestCount").value(3))
@@ -122,6 +125,10 @@ class RoleScopedUsageIntegrationTest {
                 .andExpect(jsonPath("$.runtimeAnalytics.playground.total.requestCount").value(0));
     }
 
+    private String accessToken(AppUser user) {
+        var token = sessions.save(new AuthRefreshToken(user.getId(), java.util.UUID.randomUUID().toString(), java.time.Instant.now().plusSeconds(3600)));
+        return tokens.issue(user, token.getId());
+    }
     private AppUser user(String email, boolean platformAdmin) {
         return users.save(new AppUser(email, "test-password-hash", platformAdmin));
     }

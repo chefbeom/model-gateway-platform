@@ -24,8 +24,9 @@ import java.util.concurrent.atomic.AtomicReference;
 import com.aiconnect.llmgateway.scheduling.GatewaySchedulingSupport;
 
 @Component
-@Order(Ordered.HIGHEST_PRECEDENCE + 1)
+@Order(StreamingChatFilter.FILTER_ORDER)
 public class StreamingChatFilter extends OncePerRequestFilter {
+    public static final int FILTER_ORDER = Ordered.HIGHEST_PRECEDENCE + 4;
     private final ObjectMapper objectMapper;
     private final StreamingChatCompletionGateway streamingGateway;
     private final SpendQuotaService spendQuota;

@@ -51,7 +51,15 @@ public class ProjectLifecycleService {
 
     @Transactional
     public ProjectView update(UUID projectId, String name, UUID teamId, Boolean externalAiBlocked) {
-        Project project = requireProject(projectId);
+        return update(projectId, name, teamId, externalAiBlocked, true);
+    }
+
+    @Transactional
+    public ProjectView update(UUID projectId, String name, UUID teamId, Boolean externalAiBlocked, boolean mayClearBoundary) {
+        Project project = entityManager.find(Project.class, projectId, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+        if (project == null) throw new ApiException(HttpStatus.NOT_FOUND, "PROJECT_NOT_FOUND", "The project does not exist.");
+        if (!mayClearBoundary && project.isExternalAiBlocked() && Boolean.FALSE.equals(externalAiBlocked))
+            throw new ApiException(HttpStatus.FORBIDDEN, "ORGANIZATION_ADMIN_REQUIRED", "Only an organization administrator may disable the external AI boundary.");
         String normalizedName = name.trim();
         if (teamId != null) requireTeam(project.getOrganizationId(), teamId);
         // An older client omitting the new field must never clear a security boundary.

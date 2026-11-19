@@ -42,6 +42,8 @@ public class SpendQuotaService {
     private final ServiceTargetRepository targets;
     private final ModelDeploymentRepository deployments;
     private final RuntimeEndpointRepository endpoints;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.aiconnect.llmgateway.external.ProjectExternalAccessService externalAccess;
 
     public SpendQuotaService(ApiKeyService apiKeys, SpendQuotaRepository quotas, SpendCostQuery costs,
                              ProjectRepository projects, TeamRepository teams, ApiKeyRepository keyRepository,
@@ -74,7 +76,11 @@ public class SpendQuotaService {
      */
     @Transactional
     public Reservation reserve(String authorization, JsonNode body) {
-        ApiKeyCredentials credentials = apiKeys.authenticate(authorization);
+        return reserve(apiKeys.authenticate(authorization), body);
+    }
+
+    @Transactional
+    public Reservation reserve(ApiKeyCredentials credentials, JsonNode body) {
         Project project = credentials.project();
         Instant now = Instant.now();
         reservations.deleteExpired(now);
@@ -88,7 +94,7 @@ public class SpendQuotaService {
         LlmService service = body == null || !body.hasNonNull("model") ? null
                 : services.findByOrganizationIdAndServiceKeyAndEnabledTrue(
                         project.getOrganizationId(), body.get("model").asText()).orElse(null);
-        Map<Currency, BigDecimal> requestedByCurrency = estimateRequestCosts(body, service);
+        Map<Currency, BigDecimal> requestedByCurrency = estimateRequestCosts(body, service, project);
         UUID reservationKey = UUID.randomUUID();
         List<SpendQuota> locked = new ArrayList<>();
         for (SpendQuota item : applicable) {
@@ -102,7 +108,6 @@ public class SpendQuotaService {
         List<SpendQuotaReservation> created = new ArrayList<>();
         for (SpendQuota quota : locked) {
             BigDecimal requested = requestedByCurrency.getOrDefault(quota.getCurrency(), BigDecimal.ZERO);
-            if (requested.signum() <= 0) continue;
 
             Instant from = periodStart(quota.getPeriod());
             BigDecimal committed = quota.getScopeType() == SpendQuotaScope.API_KEY
@@ -110,6 +115,10 @@ public class SpendQuotaService {
                     : costs.sumForProjects(scopeProjects(quota, project), quota.getCurrency(), from);
             BigDecimal active = reservations.sumActiveAmountByQuotaId(quota.getId(), now);
             BigDecimal used = committed.add(active == null ? BigDecimal.ZERO : active);
+            if (requested.signum() <= 0) {
+                if (used.compareTo(quota.getLimitAmount()) >= 0) throw new ApiException(HttpStatus.TOO_MANY_REQUESTS, "QUOTA_EXCEEDED", "The spend quota has been exceeded.");
+                continue;
+            }
             if (used.compareTo(quota.getLimitAmount()) >= 0
                     || used.add(requested).compareTo(quota.getLimitAmount()) > 0) {
                 throw new ApiException(HttpStatus.TOO_MANY_REQUESTS, "QUOTA_EXCEEDED",
@@ -150,17 +159,21 @@ public class SpendQuotaService {
     }
 
     private Map<Currency, BigDecimal> estimateRequestCosts(JsonNode body, LlmService service) {
+        return estimateRequestCosts(body, service, null);
+    }
+
+    private Map<Currency, BigDecimal> estimateRequestCosts(JsonNode body, LlmService service, Project project) {
         Map<Currency, BigDecimal> estimates = new EnumMap<>(Currency.class);
         if (service == null) return estimates;
 
         int inputTokens = estimateInputTokens(body);
-        int maxOutput = body == null
-                ? 0
-                : Math.max(0, Math.max(body.path("max_completion_tokens").asInt(0),
-                        body.path("max_tokens").asInt(0)));
+        int maxOutput = body == null ? 0 : Math.max(0, body.has("max_completion_tokens")
+                ? body.path("max_completion_tokens").asInt(0) : body.path("max_tokens").asInt(0));
         if (maxOutput == 0) maxOutput = DEFAULT_OUTPUT_RESERVATION_TOKENS;
+        int choices = body == null ? 1 : Math.max(1, body.path("n").asInt(1));
+        long totalOutput = (long) maxOutput * choices;
         addMax(estimates, service.getCurrency(),
-                quote(service.getInputPricePerMillion(), service.getOutputPricePerMillion(), inputTokens, maxOutput));
+                quote(service.getInputPricePerMillion(), service.getOutputPricePerMillion(), inputTokens, totalOutput));
 
         List<ServiceTarget> serviceTargets =
                 targets.findByServiceIdAndEnabledTrueOrderByPriorityAsc(service.getId());
@@ -169,18 +182,47 @@ public class SpendQuotaService {
                 serviceTargets.stream().map(ServiceTarget::getDeploymentId).toList())) {
             deploymentById.put(deployment.getId(), deployment);
         }
+        boolean hasLocal = deploymentById.values().stream().anyMatch(item -> !item.isExternal() && item.isEnabled() && !item.isArchived());
         for (ServiceTarget target : serviceTargets) {
             ModelDeployment deployment = deploymentById.get(target.getDeploymentId());
-            if (deployment == null) continue;
+            if (deployment == null || !deployment.isEnabled() || deployment.isArchived() || !deployment.isLoaded()
+                    || deployment.getHealthStatus() != com.aiconnect.llmgateway.domain.HealthStatus.HEALTHY) continue;
+            if (deployment.isExternal() && project != null) {
+                if (project.isExternalAiBlocked()) continue;
+                if (externalAccess != null && !(hasLocal
+                        ? externalAccess.allowsAutoFailover(project.getId(), deployment.getExternalProviderId())
+                        : externalAccess.allowsManual(project.getId(), deployment.getExternalProviderId()))) continue;
+            }
             RuntimeEndpoint endpoint = deployment.isExternal() ? null : endpoints.findById(deployment.getRuntimeEndpointId()).orElse(null);
-            TokenPricingResolver.EffectivePricing pricing = TokenPricingResolver.forLocal(service, deployment, endpoint);
+            com.fasterxml.jackson.databind.node.ObjectNode effective = body instanceof com.fasterxml.jackson.databind.node.ObjectNode obj
+                    ? obj.deepCopy() : com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+            if (deployment.isExternal()) {
+                service.applyOpenAiRequestPolicy(effective);
+                deployment.applyOpenAiDefaults(effective);
+                JsonNode output = effective.has("max_completion_tokens") ? effective.get("max_completion_tokens") : effective.get("max_tokens");
+                if (output == null || !output.isIntegralNumber() || !output.canConvertToInt() || output.asInt() <= 0) {
+                    throw new ApiException(HttpStatus.BAD_REQUEST, "QUOTA_OUTPUT_LIMIT_REQUIRED", "An explicit output token limit is required when a spend quota applies to an external target.");
+                }
+                JsonNode n = effective.get("n");
+                if (n != null && (!n.isIntegralNumber() || !n.canConvertToInt() || n.asInt() <= 0)) {
+                    throw new ApiException(HttpStatus.BAD_REQUEST, "QUOTA_CHOICE_COUNT_INVALID", "The number of choices must be a positive integer when a spend quota applies.");
+                }
+                if (deployment.getProviderInputPricePerMillion() == null || deployment.getProviderOutputPricePerMillion() == null) {
+                    throw new ApiException(HttpStatus.CONFLICT, "QUOTA_PRICE_UNAVAILABLE", "Configure external model input and output prices before using a spend quota.");
+                }
+            }
+            String tier = effective.path("service_tier").asText("");
+            TokenPricingResolver.EffectivePricing pricing = TokenPricingResolver.forRequest(service, deployment, endpoint, null, tier);
+            if (deployment.isExternal() && (!pricing.rateConfigured() || pricing.inputPricePerMillion() == null || pricing.outputPricePerMillion() == null)) {
+                throw new ApiException(HttpStatus.CONFLICT, "QUOTA_PRICE_UNAVAILABLE", "Configure the selected external model tier prices before using a spend quota.");
+            }
             addMax(estimates, pricing.currency(), quote(pricing.inputPricePerMillion(), pricing.outputPricePerMillion(),
-                    inputTokens, maxOutput));
+                    inputTokens, totalOutput));
         }
         return estimates;
     }
 
-    private BigDecimal quote(BigDecimal inputPrice, BigDecimal outputPrice, int inputTokens, int outputTokens) {
+    private BigDecimal quote(BigDecimal inputPrice, BigDecimal outputPrice, int inputTokens, long outputTokens) {
         return inputPrice.multiply(BigDecimal.valueOf(inputTokens))
                 .add(outputPrice.multiply(BigDecimal.valueOf(outputTokens))).movePointLeft(6);
     }

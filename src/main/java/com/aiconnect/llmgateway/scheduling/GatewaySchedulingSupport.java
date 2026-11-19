@@ -29,6 +29,8 @@ public class GatewaySchedulingSupport {
     private final DataProtectionPolicyService protection;
     private final RoutingService routing;
     private final LlmRequestRepository requests;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.aiconnect.llmgateway.beta.BetaAccessService betaAccess;
     public GatewaySchedulingSupport(SchedulingPolicyService policies,RequestScheduler scheduler,SchedulingTraceService traces,
             ApiKeyService keys,LlmServiceRepository services,ProjectServiceAccessRepository access,
             DataProtectionPolicyService protection,RoutingService routing,LlmRequestRepository requests) {
@@ -48,6 +50,7 @@ public class GatewaySchedulingSupport {
             var credentials=keys.authenticate(authorization);
             var service=services.findById(audit.getServiceId()).filter(s->s.isEnabled()&&!s.isDeleted())
                     .orElseThrow(()->new ApiException(HttpStatus.NOT_FOUND,"MODEL_NOT_FOUND","대기 중 논리 서비스가 비활성화되었습니다."));
+            betaAccess.checkProject(credentials.project().getId(), service.getId());
             if(!access.existsByIdProjectIdAndIdServiceId(credentials.project().getId(),service.getId()))
                 throw new ApiException(HttpStatus.FORBIDDEN,"MODEL_NOT_ALLOWED","대기 중 모델 접근 권한이 변경되었습니다.");
             var policy=protection.inspect(credentials.project(),credentials.apiKey(),service,body,null);

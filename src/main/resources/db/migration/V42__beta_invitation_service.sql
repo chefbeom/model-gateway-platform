@@ -1,0 +1,4 @@
+CREATE TABLE beta_service (id CHAR(36) NOT NULL PRIMARY KEY, organization_id CHAR(36) NOT NULL, logical_service_id CHAR(36) NOT NULL UNIQUE, mode VARCHAR(24) NOT NULL DEFAULT 'PAUSED', created_at TIMESTAMP(6) NOT NULL);
+CREATE TABLE beta_invitation (id CHAR(36) NOT NULL PRIMARY KEY, service_id CHAR(36) NOT NULL, normalized_email VARCHAR(320) NOT NULL, token_hash VARCHAR(64) NOT NULL UNIQUE, expires_at TIMESTAMP(6) NOT NULL, consumed_at TIMESTAMP(6), revoked_at TIMESTAMP(6));
+CREATE TABLE beta_member (id CHAR(36) NOT NULL PRIMARY KEY, service_id CHAR(36) NOT NULL, project_id CHAR(36) NOT NULL UNIQUE, email VARCHAR(320) NOT NULL, active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMP(6) NOT NULL, UNIQUE (service_id, email));
+CREATE TABLE beta_operator (service_id CHAR(36) NOT NULL, user_id CHAR(36) NOT NULL, PRIMARY KEY(service_id,user_id));

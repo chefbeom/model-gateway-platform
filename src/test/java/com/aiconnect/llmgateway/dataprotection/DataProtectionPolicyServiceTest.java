@@ -25,6 +25,19 @@ class DataProtectionPolicyServiceTest {
             policies, mock(ApiKeyRepository.class), new DataProtectionScanner(new ObjectMapper()), new ObjectMapper());
 
     @Test
+    void enforcedOrganizationPolicyBlocksUninspectableInputForGatewayAndPlayground() {
+        UUID organizationId = UUID.randomUUID();
+        var policy = new DataProtectionPolicy(organizationId, DataProtectionScopeType.ORGANIZATION, organizationId,
+                DataProtectionMode.ENFORCE, DataProtectionLevel.STRICT, DataProtectionAction.ALLOW,
+                true, true, false, false, false, false, "[]");
+        when(policies.findByScopeTypeAndOrganizationIdAndScopeId(DataProtectionScopeType.ORGANIZATION, organizationId, organizationId)).thenReturn(Optional.of(policy));
+        var body = new ObjectMapper().createObjectNode().put("content", "a".repeat(65_537));
+        assertThat(service.inspect(new Project(organizationId, "test"), null, null, body, null).externalAllowed()).isFalse();
+        assertThat(service.allowsOrganizationExternal(organizationId, body)).isFalse();
+        assertThat(service.allowsOrganizationExternal(organizationId, new ObjectMapper().createObjectNode().put("content", "hello"))).isTrue();
+    }
+
+    @Test
     void projectBoundaryEnforcesLocalOnlyWithoutSensitiveDataOrEnabledDetectors() throws Exception {
         UUID organizationId = UUID.randomUUID();
         Project project = new Project(organizationId, "local-only");

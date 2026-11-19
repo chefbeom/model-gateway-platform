@@ -23,6 +23,8 @@ public class RequestContentService {
     private final RequestContentRepository contents;
     private final SecretCipher cipher;
     private final AuditService audit;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.aiconnect.llmgateway.beta.BetaAccessService betaAccess;
 
     public RequestContentService(EntityManager entityManager, ProjectRepository projects, ProjectContentPolicyRepository policies,
                                  RequestContentRepository contents, SecretCipher cipher, AuditService audit) {
@@ -38,7 +40,7 @@ public class RequestContentService {
     public void capture(String publicRequestId, String request, String response) {
         if (publicRequestId == null || publicRequestId.isBlank()) return;
         LlmRequest auditRequest = requestByPublicId(publicRequestId);
-        if (auditRequest == null || mode(auditRequest.getProjectId()) != ContentRetentionMode.FULL_ENCRYPTED) return;
+        if (auditRequest == null || betaAccess.isBetaProject(auditRequest.getProjectId()) || mode(auditRequest.getProjectId()) != ContentRetentionMode.FULL_ENCRYPTED) return;
         contents.save(new RequestContent(auditRequest.getId(), cipher.encrypt(request), response == null ? null : cipher.encrypt(response)));
     }
 
@@ -50,6 +52,7 @@ public class RequestContentService {
     @Transactional
     public ProjectContentPolicy setPolicy(UUID projectId, ContentRetentionMode mode, Integer retentionDays) {
         if (!projects.existsById(projectId)) throw new ApiException(HttpStatus.NOT_FOUND, "PROJECT_NOT_FOUND", "The project does not exist.");
+        if (mode != ContentRetentionMode.METADATA_ONLY && betaAccess.isBetaProject(projectId)) throw new ApiException(HttpStatus.FORBIDDEN, "BETA_CONTENT_RETENTION_FORBIDDEN", "Beta requests cannot retain request content.");
         ProjectContentPolicy policy = policies.save(new ProjectContentPolicy(projectId, mode, retentionDays));
         if (mode == ContentRetentionMode.METADATA_ONLY) contents.deleteAllForProject(projectId);
         audit.record(null, CurrentActor.userIdOrNull(), "REQUEST_RETENTION_POLICY_CHANGED", "PROJECT", projectId,

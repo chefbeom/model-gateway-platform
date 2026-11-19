@@ -1,0 +1,29 @@
+services:
+  load-balancer:
+    # Beta override must be last: never inherit the base 0.0.0.0 admin bind.
+    ports: !override
+      - '${AICONNECT_BETA_ADMIN_BIND_ADDRESS:-127.0.0.1}:${AICONNECT_BETA_ADMIN_PORT:-80}:80'
+  api-1:
+    environment:
+      AICONNECT_BETA_INGRESS_TOKEN: ${AICONNECT_BETA_INGRESS_TOKEN:?set AICONNECT_BETA_INGRESS_TOKEN}
+    networks: [internal, beta-ingress]
+  api-2:
+    environment:
+      AICONNECT_BETA_INGRESS_TOKEN: ${AICONNECT_BETA_INGRESS_TOKEN:?set AICONNECT_BETA_INGRESS_TOKEN}
+    networks: [internal, beta-ingress]
+  beta-ingress:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    environment:
+      AICONNECT_BETA_INGRESS_TOKEN: ${AICONNECT_BETA_INGRESS_TOKEN:?set AICONNECT_BETA_INGRESS_TOKEN}
+      NGINX_ENVSUBST_FILTER: '^AICONNECT_BETA_INGRESS_TOKEN$'
+    ports: ['${AICONNECT_BETA_BIND_ADDRESS:-127.0.0.1}:${AICONNECT_BETA_PORT:-18080}:80']
+    volumes: ['./beta-nginx.conf.template:/etc/nginx/templates/default.conf.template:ro']
+    depends_on:
+      api-1:
+        condition: service_healthy
+      api-2:
+        condition: service_healthy
+    networks: [beta-ingress]
+networks:
+  beta-ingress: {}

@@ -11,9 +11,11 @@ import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.cookie;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -24,6 +26,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class RefreshTokenRotationIntegrationTest {
     private static final String COOKIE = "aiconnect_refresh";
     @Autowired MockMvc mvc;
+    @Autowired ObjectMapper mapper;
 
     @Test
     void refreshRotatesOnceAndLogoutRevokesTheReplacement() throws Exception {
@@ -42,6 +45,10 @@ class RefreshTokenRotationIntegrationTest {
                 .andExpect(cookie().httpOnly(COOKIE, true))
                 .andReturn();
         Cookie replacement = refreshed.getResponse().getCookie(COOKIE);
+        String accessToken = mapper.readTree(refreshed.getResponse().getContentAsString()).path("accessToken").asText();
+        assertThat(accessToken).isNotBlank();
+        mvc.perform(get("/api/portal/session").header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken))
+                .andExpect(status().isOk());
         assertThat(replacement).isNotNull();
         assertThat(replacement.getValue()).isNotEqualTo(original.getValue());
 
@@ -51,6 +58,9 @@ class RefreshTokenRotationIntegrationTest {
         mvc.perform(post("/api/auth/logout").cookie(replacement))
                 .andExpect(status().isNoContent())
                 .andExpect(cookie().maxAge(COOKIE, 0));
+
+        mvc.perform(get("/api/portal/session").header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken))
+                .andExpect(status().isUnauthorized());
 
         mvc.perform(post("/api/auth/refresh").cookie(replacement))
                 .andExpect(status().isUnauthorized());

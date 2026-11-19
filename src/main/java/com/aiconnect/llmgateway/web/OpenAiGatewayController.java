@@ -32,6 +32,8 @@ public class OpenAiGatewayController {
     private final LlmServiceRepository services;
     private final ProjectServiceAccessRepository access;
     private final ObjectMapper objectMapper;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.aiconnect.llmgateway.beta.BetaAccessService betaAccess;
 
     public OpenAiGatewayController(ChatCompletionGateway gateway, ApiKeyService apiKeyService,
                                    LlmServiceRepository services, ProjectServiceAccessRepository access,
@@ -71,6 +73,10 @@ public class OpenAiGatewayController {
         ArrayNode models = response.putArray("data");
         for (ProjectServiceAccess entitlement : access.findByIdProjectId(credentials.project().getId())) {
             services.findById(entitlement.getId().getServiceId()).filter(LlmService::isEnabled).ifPresent(service -> {
+                if (betaAccess.isBetaProject(credentials.project().getId())) {
+                    try { betaAccess.checkProject(credentials.project().getId(), service.getId()); }
+                    catch (ApiException denied) { return; }
+                }
                 ObjectNode model = models.addObject();
                 model.put("id", service.getServiceKey());
                 model.put("object", "model");

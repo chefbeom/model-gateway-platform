@@ -45,7 +45,12 @@ class GatewaySchedulingIntegrationTest {
     @Autowired ProjectExternalAccessRepository externalAccess;
     @Autowired com.aiconnect.llmgateway.service.SecretCipher cipher;
     @Autowired com.aiconnect.llmgateway.playground.ModelPlaygroundService playground;
+    @Autowired com.aiconnect.llmgateway.dataprotection.DataProtectionPolicyService protection;
     @Autowired com.aiconnect.llmgateway.retention.RequestContentService retention;
+    @Autowired com.aiconnect.llmgateway.beta.BetaServiceRepository betaServices;
+    @Autowired com.aiconnect.llmgateway.beta.BetaMemberRepository betaMembers;
+    @Autowired com.aiconnect.llmgateway.beta.BetaAdministration betaAdmin;
+    @Autowired com.aiconnect.llmgateway.quota.QuotaService quotaService;
     private HttpServer runtime;
     private Fixture fixture;
     private final AtomicInteger calls=new AtomicInteger();
@@ -77,8 +82,11 @@ class GatewaySchedulingIntegrationTest {
     }
     @AfterEach void stop(){runtime.stop(0);}
     private CompletableFuture<HttpResponse<String>> send(boolean stream) {
+        return send(fixture.key.secret(), stream);
+    }
+    private CompletableFuture<HttpResponse<String>> send(String secret, boolean stream) {
         var request=HttpRequest.newBuilder(URI.create("http://127.0.0.1:"+port+"/v1/chat/completions"))
-                .header("Authorization","Bearer "+fixture.key.secret()).header("Content-Type","application/json")
+                .header("Authorization","Bearer "+secret).header("Content-Type","application/json")
                 .timeout(java.time.Duration.ofSeconds(10)).POST(HttpRequest.BodyPublishers.ofString("{\"model\":\"queue-service\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}],\"stream\":"+stream+"}")).build();
         return HttpClient.newHttpClient().sendAsync(request,HttpResponse.BodyHandlers.ofString());
     }
@@ -109,6 +117,119 @@ class GatewaySchedulingIntegrationTest {
         assertThat(mapper.readTree(result.body()).path("error").path("code").asText()).as(result.body()).isEqualTo("INVALID_API_KEY");
         assertThat(calls).hasValue(0);assertThat(active.snapshot(fixture.service.getId()).queuedRequests()).isZero();
     }
+    @Test void pausedBetaIsRejectedForJsonAndStreamingBeforeAnyInference() throws Exception {
+        var beta=betaServices.save(new com.aiconnect.llmgateway.beta.BetaService(fixture.project.getOrganizationId(),fixture.service.getId()));
+        betaMembers.save(new com.aiconnect.llmgateway.beta.BetaMember(beta.getId(),fixture.project.getId(),"beta@example.invalid"));
+        for(boolean streaming : new boolean[]{false,true}) {
+            var result=send(streaming).get(8,TimeUnit.SECONDS);
+            assertThat(result.statusCode()).isEqualTo(403);
+            assertThat(mapper.readTree(result.body()).path("error").path("code").asText()).isEqualTo("BETA_ACCESS_DISABLED");
+        }
+        assertThat(calls).hasValue(0); assertThat(cloudCalls).hasValue(0);
+    }
+    @Test void activeBetaJsonAndStreamingUseOnlyLocalWithSharedLimits() throws Exception {
+        var beta=new com.aiconnect.llmgateway.beta.BetaService(fixture.project.getOrganizationId(),fixture.service.getId());
+        beta.setMode("LOCAL_ONLY"); beta=betaServices.save(beta);
+        betaMembers.save(new com.aiconnect.llmgateway.beta.BetaMember(beta.getId(),fixture.project.getId(),"active@example.invalid"));
+        var provider=new ExternalProvider(fixture.project.getOrganizationId(),ExternalProviderType.OPENAI,"Beta Cloud",fixture.endpoint.getBaseUrl()+"/v1",cipher.encrypt("test-secret"));
+        provider.recordHealth(true); provider=providers.save(provider);
+        var cloud=models.save(ModelDeployment.external(provider.getId(),"cloud","cloud","Cloud",8192,20,"[]",java.math.BigDecimal.ZERO,java.math.BigDecimal.ZERO));
+        targets.save(new ServiceTarget(fixture.service.getId(),cloud.getId(),2,100,false,null));
+        var approval=new ProjectExternalAccess(fixture.project.getId(),provider.getId(),null,"test");
+        approval.decide(ExternalAccessStatus.APPROVED,true,true,null,null,null); externalAccess.save(approval);
+        var previous=org.springframework.test.util.ReflectionTestUtils.getField(quotaService,"rateLimits");
+        var redis=org.mockito.Mockito.mock(com.aiconnect.llmgateway.quota.RedisRateLimitStore.class);
+        org.mockito.Mockito.when(redis.tryAcquire(org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.anyInt(),org.mockito.ArgumentMatchers.any())).thenReturn(true);
+        org.springframework.test.util.ReflectionTestUtils.setField(quotaService,"rateLimits",redis);
+        try {
+            for(boolean streaming : new boolean[]{false,true}) assertThat(send(streaming).get(8,TimeUnit.SECONDS).statusCode()).isEqualTo(200);
+            assertThat(calls).hasValue(2); assertThat(cloudCalls).hasValue(0);
+        } finally { org.springframework.test.util.ReflectionTestUtils.setField(quotaService,"rateLimits",previous); }
+    }
+    @Test void suspendingBetaMemberWhileQueuedRejectsWithoutCallingRuntimeAndReleasesSlot() throws Exception {
+        var betaProject=projects.save(new Project(fixture.project.getOrganizationId(),"beta-suspend-client"));
+        betaProject.configureExternalAiBlocked(true);
+        betaProject=projects.save(betaProject);
+        access.save(new ProjectServiceAccess(betaProject.getId(),fixture.service.getId()));
+        var betaKey=keys.issue(betaProject.getId(),"beta-suspend-key",null);
+        var beta=new com.aiconnect.llmgateway.beta.BetaService(fixture.project.getOrganizationId(),fixture.service.getId());
+        beta.setMode("LOCAL_ONLY"); beta=betaServices.save(beta);
+        var member=betaMembers.save(new com.aiconnect.llmgateway.beta.BetaMember(beta.getId(),betaProject.getId(),"queued-suspend@example.invalid"));
+        var previous=org.springframework.test.util.ReflectionTestUtils.getField(quotaService,"rateLimits");
+        var redis=org.mockito.Mockito.mock(com.aiconnect.llmgateway.quota.RedisRateLimitStore.class);
+        org.mockito.Mockito.when(redis.tryAcquire(org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.anyInt(),org.mockito.ArgumentMatchers.any())).thenReturn(true);
+        org.springframework.test.util.ReflectionTestUtils.setField(quotaService,"rateLimits",redis);
+        boolean held=true;
+        hold();
+        try {
+            var response=send(betaKey.secret(),false);
+            awaitQueued();
+            assertThat(calls).hasValue(0);
+            betaAdmin.suspend(beta.getId(),member.getId());
+            release(); held=false;
+            var result=response.get(8,TimeUnit.SECONDS);
+            assertThat(result.statusCode()).isEqualTo(403);
+            assertThat(mapper.readTree(result.body()).path("error").path("code").asText()).as(result.body()).isEqualTo("BETA_ACCESS_DISABLED");
+            assertThat(calls).hasValue(0); assertThat(cloudCalls).hasValue(0);
+            assertThat(active.snapshot(fixture.service.getId()).queuedRequests()).isZero();
+            assertThat(active.count(fixture.model.getId())).isZero();
+            assertThat(active.runtimeCount(fixture.endpoint.getId())).isZero();
+            String requestId=result.headers().firstValue("X-Request-Id").orElseThrow();
+            var trace=traces.view(requestId);
+            assertThat(trace.phase()).isEqualTo("FAILED");
+            assertThat(trace.errorCode()).isEqualTo("BETA_ACCESS_DISABLED");
+            var normal=send(false).get(8,TimeUnit.SECONDS);
+            assertThat(normal.statusCode()).isEqualTo(200);
+            assertThat(calls).hasValue(1);
+            assertThat(active.count(fixture.model.getId())).isZero();
+            assertThat(active.runtimeCount(fixture.endpoint.getId())).isZero();
+        } finally {
+            if(held) release();
+            org.springframework.test.util.ReflectionTestUtils.setField(quotaService,"rateLimits",previous);
+        }
+    }
+    @Test void pausingBetaServiceWhileQueuedRejectsStreamingWithoutCallingRuntimeAndReleasesSlot() throws Exception {
+        var betaProject=projects.save(new Project(fixture.project.getOrganizationId(),"beta-pause-client"));
+        betaProject.configureExternalAiBlocked(true);
+        betaProject=projects.save(betaProject);
+        access.save(new ProjectServiceAccess(betaProject.getId(),fixture.service.getId()));
+        var betaKey=keys.issue(betaProject.getId(),"beta-pause-key",null);
+        var beta=new com.aiconnect.llmgateway.beta.BetaService(fixture.project.getOrganizationId(),fixture.service.getId());
+        beta.setMode("LOCAL_ONLY"); beta=betaServices.save(beta);
+        betaMembers.save(new com.aiconnect.llmgateway.beta.BetaMember(beta.getId(),betaProject.getId(),"queued-pause@example.invalid"));
+        var previous=org.springframework.test.util.ReflectionTestUtils.getField(quotaService,"rateLimits");
+        var redis=org.mockito.Mockito.mock(com.aiconnect.llmgateway.quota.RedisRateLimitStore.class);
+        org.mockito.Mockito.when(redis.tryAcquire(org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.anyInt(),org.mockito.ArgumentMatchers.any())).thenReturn(true);
+        org.springframework.test.util.ReflectionTestUtils.setField(quotaService,"rateLimits",redis);
+        boolean held=true;
+        hold();
+        try {
+            var response=send(betaKey.secret(),true);
+            awaitQueued();
+            assertThat(calls).hasValue(0);
+            betaAdmin.mode(beta.getId(),"PAUSED");
+            release(); held=false;
+            var result=response.get(8,TimeUnit.SECONDS);
+            assertThat(result.statusCode()).isEqualTo(403);
+            assertThat(mapper.readTree(result.body()).path("error").path("code").asText()).as(result.body()).isEqualTo("BETA_ACCESS_DISABLED");
+            assertThat(calls).hasValue(0); assertThat(cloudCalls).hasValue(0);
+            assertThat(active.snapshot(fixture.service.getId()).queuedRequests()).isZero();
+            assertThat(active.count(fixture.model.getId())).isZero();
+            assertThat(active.runtimeCount(fixture.endpoint.getId())).isZero();
+            String requestId=result.headers().firstValue("X-Request-Id").orElseThrow();
+            var trace=traces.view(requestId);
+            assertThat(trace.phase()).isEqualTo("FAILED");
+            assertThat(trace.errorCode()).isEqualTo("BETA_ACCESS_DISABLED");
+            var normal=send(true).get(8,TimeUnit.SECONDS);
+            assertThat(normal.statusCode()).isEqualTo(200);
+            assertThat(calls).hasValue(1);
+            assertThat(active.count(fixture.model.getId())).isZero();
+            assertThat(active.runtimeCount(fixture.endpoint.getId())).isZero();
+        } finally {
+            if(held) release();
+            org.springframework.test.util.ReflectionTestUtils.setField(quotaService,"rateLimits",previous);
+        }
+    }
     @Test void timeoutReturnsExplicitErrorAndDoesNotSendUpstream() throws Exception {
         policies.save(fixture.service.getId(),new SchedulingSettings(SchedulingMode.LOCAL_ONLY_QUEUE,0,150,10,1024*1024,10));
         hold();try {var response=send(false).get(8,TimeUnit.SECONDS);assertThat(response.statusCode()).isEqualTo(503);
@@ -136,6 +257,27 @@ class GatewaySchedulingIntegrationTest {
                     .satisfies(e->assertThat(((com.aiconnect.llmgateway.web.ApiException)e).getCode()).isEqualTo("MODEL_AT_CAPACITY"));
             assertThat(calls).hasValue(0);assertThat(active.runtimeCount(fixture.endpoint.getId())).isEqualTo(1);
         }finally{release();}
+    }
+    @Test void playgroundHttpEnforcesOrganizationProtectionBeforeSendingExternalRequests() throws Exception {
+        var provider=new ExternalProvider(fixture.project.getOrganizationId(),ExternalProviderType.OPENAI,"Protected Cloud",fixture.endpoint.getBaseUrl()+"/v1",cipher.encrypt("test-secret"));
+        provider.recordHealth(true); provider=providers.save(provider);
+        var cloud=models.save(ModelDeployment.external(provider.getId(),"cloud","cloud","Cloud",8192,20,"[]",java.math.BigDecimal.ZERO,java.math.BigDecimal.ZERO));
+        var org=fixture.project.getOrganizationId();
+        protection.save(org,com.aiconnect.llmgateway.dataprotection.DataProtectionScopeType.ORGANIZATION,org,
+                new com.aiconnect.llmgateway.dataprotection.DataProtectionPolicyService.PolicyValues(
+                        com.aiconnect.llmgateway.dataprotection.DataProtectionMode.ENFORCE,
+                        com.aiconnect.llmgateway.dataprotection.DataProtectionLevel.STRICT,
+                        com.aiconnect.llmgateway.dataprotection.DataProtectionAction.LOCAL_ONLY,
+                        false,false,true,false,false,false,"[]"));
+        for(boolean streaming : new boolean[]{false,true}) {
+            var body=mapper.createObjectNode().put("targetId",cloud.getId().toString()).put("stream",streaming);
+            body.putArray("messages").addObject().put("role","user").put("content","user@example.com");
+            var request=HttpRequest.newBuilder(URI.create("http://127.0.0.1:"+port+"/api/admin/organizations/"+org+"/playground/chat"))
+                    .header("X-Admin-Token","integration-admin-token").header("Content-Type","application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(body.toString())).build();
+            assertThat(HttpClient.newHttpClient().send(request,HttpResponse.BodyHandlers.ofString()).statusCode()).isEqualTo(403);
+        }
+        assertThat(cloudCalls).hasValue(0);
     }
     @Test void playgroundEmptyJsonPreservesHttpAndRecordsSafeDiagnosisInHistory() {
         var body=mapper.createObjectNode().put("targetId",fixture.model.getId().toString()).put("stream",false).put("maxCompletionTokens",512);

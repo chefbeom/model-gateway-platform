@@ -41,6 +41,24 @@ class ExternalModelDeletionIntegrationTest {
     @Autowired SecretCipher cipher;
     @Autowired ControlPlaneService control;
 
+    @Test void providerAddressChangeRequiresNewCredential() throws Exception {
+        var org = organizations.save(new Organization("Provider security " + UUID.randomUUID()));
+        var provider = providers.save(new ExternalProvider(org.getId(), ExternalProviderType.OPENAI,
+                "Provider", "https://provider.test/v1", cipher.encrypt("old-key")));
+        String path = "/api/admin/external-providers/" + provider.getId();
+        mvc.perform(patch(path).header("X-Admin-Token", "integration-admin-token").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"baseUrl\":\"https://new-provider.test/v1\"}"))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("PROVIDER_URL_REQUIRES_NEW_KEY"));
+        mvc.perform(patch(path).header("X-Admin-Token", "integration-admin-token").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"baseUrl\":\"https://new-provider.test/v1\",\"apiKey\":\"old-key\"}"))
+                .andExpect(status().isBadRequest());
+        assertThat(providers.findById(provider.getId()).orElseThrow().getBaseUrl()).isEqualTo("https://provider.test/v1");
+        mvc.perform(patch(path).header("X-Admin-Token", "integration-admin-token").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"baseUrl\":\"https://new-provider.test/v1\",\"apiKey\":\"new-key\"}"))
+                .andExpect(status().isOk());
+        assertThat(cipher.decrypt(providers.findById(provider.getId()).orElseThrow().getEncryptedApiKey())).isEqualTo("new-key");
+    }
+
     @Test void deletesOnlyUnlinkedModelPreservesHistoryAndCanRestoreSameIdentity() throws Exception {
         var org=organizations.save(new Organization("Delete models " + UUID.randomUUID()));
         var provider=providers.save(new ExternalProvider(org.getId(),ExternalProviderType.OPENAI,"Provider","https://example.test/v1",cipher.encrypt("secret")));

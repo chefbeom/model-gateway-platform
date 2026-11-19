@@ -84,6 +84,15 @@ public class ExternalProviderAdministrationService {
         ExternalProvider provider = requireProvider(providerId);
         String nextName = displayName == null || displayName.isBlank() ? provider.getDisplayName() : displayName.trim();
         String nextUrl = baseUrl == null || baseUrl.isBlank() ? provider.getBaseUrl() : normalizeBaseUrl(baseUrl);
+        if (!nextUrl.equals(provider.getBaseUrl())) {
+            String previousKey = cipher.decrypt(provider.getEncryptedApiKey());
+            if (apiKey == null || apiKey.isBlank() || java.security.MessageDigest.isEqual(
+                    apiKey.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                    (previousKey == null ? "" : previousKey).getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "PROVIDER_URL_REQUIRES_NEW_KEY",
+                        "Changing a provider address requires a different API key; register a new provider if needed.");
+            }
+        }
         boolean duplicate = providers.findByOrganizationIdOrderByDisplayNameAsc(provider.getOrganizationId()).stream()
                 .filter(item -> !item.getId().equals(providerId))
                 .anyMatch(item -> item.getDisplayName().equalsIgnoreCase(nextName)
@@ -425,7 +434,18 @@ public class ExternalProviderAdministrationService {
         try { return objectMapper.readValue(json, new TypeReference<List<String>>() { }); } catch (Exception ignored) { return List.of(); }
     }
     private Integer intOrNull(JsonNode node, String field) { return node.hasNonNull(field) && node.get(field).canConvertToInt() ? node.get(field).asInt() : null; }
-    private String normalizeBaseUrl(String value) { String normalized = value == null || value.isBlank() ? "https://api.openai.com/v1" : value.trim(); return normalized.replaceAll("/+$", ""); }
+    private String normalizeBaseUrl(String value) {
+        String normalized = value == null || value.isBlank() ? "https://api.openai.com/v1" : value.trim();
+        normalized = normalized.replaceAll("/+$", "");
+        try {
+            java.net.URI uri = java.net.URI.create(normalized);
+            if (uri.getHost() == null || uri.getUserInfo() != null || uri.getQuery() != null || uri.getFragment() != null
+                    || !("https".equalsIgnoreCase(uri.getScheme()) || "http".equalsIgnoreCase(uri.getScheme()))) throw new IllegalArgumentException();
+            return normalized;
+        } catch (IllegalArgumentException ex) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_PROVIDER_BASE_URL", "Provider URL must be an absolute HTTP(S) URL without credentials, query or fragment.");
+        }
+    }
     private String requireText(String value, String code, String message) { if (value == null || value.isBlank()) throw new ApiException(HttpStatus.BAD_REQUEST, code, message); return value.trim(); }
     private ExternalProvider requireProvider(UUID id) { return providers.findById(id).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "EXTERNAL_PROVIDER_NOT_FOUND", "The external provider does not exist.")); }
     private void requireOrganization(UUID id) { if (!organizations.existsById(id)) throw new ApiException(HttpStatus.NOT_FOUND, "ORGANIZATION_NOT_FOUND", "The organization does not exist."); }

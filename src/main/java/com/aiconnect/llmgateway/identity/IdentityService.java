@@ -76,8 +76,8 @@ public class IdentityService {
     public AppUser getUser(UUID userId) { return users.findById(userId).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", "The user does not exist.")); }
     private Session issueSession(AppUser user) {
         String rawRefresh = randomHex(48);
-        refreshTokens.save(new AuthRefreshToken(user.getId(), hashRefresh(rawRefresh), Instant.now().plusSeconds(properties.refreshTokenSeconds())));
-        return new Session(accessTokens.issue(user), rawRefresh, user);
+        AuthRefreshToken session = refreshTokens.save(new AuthRefreshToken(user.getId(), hashRefresh(rawRefresh), Instant.now().plusSeconds(properties.refreshTokenSeconds())));
+        return new Session(accessTokens.issue(user, session.getId()), rawRefresh, user);
     }
     private String hashRefresh(String value) {
         try {

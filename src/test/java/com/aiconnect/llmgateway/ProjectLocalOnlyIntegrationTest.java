@@ -1,6 +1,8 @@
 package com.aiconnect.llmgateway;
 
 import com.aiconnect.llmgateway.diagnostic.RequestDiagnosticService;
+import com.aiconnect.llmgateway.admin.ProjectLifecycleService;
+import com.aiconnect.llmgateway.web.ApiException;
 import com.aiconnect.llmgateway.domain.*;
 import com.aiconnect.llmgateway.repository.*;
 import com.aiconnect.llmgateway.service.ApiKeyService;
@@ -52,6 +54,22 @@ class ProjectLocalOnlyIntegrationTest {
     @Autowired LlmRequestRepository requests;
     @Autowired SecretCipher cipher;
     @Autowired RequestDiagnosticService diagnostics;
+    @Autowired ProjectLifecycleService projectLifecycle;
+
+    @Test void nonAdminCannotClearProtectedProjectBoundary() {
+        Organization organization = organizations.save(new Organization("Protected boundary roles"));
+        Project project = new Project(organization.getId(), "protected");
+        project.configureExternalAiBlocked(true);
+        project = projects.save(project);
+        java.util.UUID id = project.getId();
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> projectLifecycle.update(id, "protected", null, false, false))
+                .isInstanceOf(ApiException.class);
+        assertThat(projects.findById(id).orElseThrow().isExternalAiBlocked()).isTrue();
+        projectLifecycle.update(id, "protected", null, null, false);
+        assertThat(projects.findById(id).orElseThrow().isExternalAiBlocked()).isTrue();
+        projectLifecycle.update(id, "protected", null, false, true);
+        assertThat(projects.findById(id).orElseThrow().isExternalAiBlocked()).isFalse();
+    }
 
     @Test
     void createPersistsBoundaryAndLegacyPatchDoesNotClearIt() throws Exception {

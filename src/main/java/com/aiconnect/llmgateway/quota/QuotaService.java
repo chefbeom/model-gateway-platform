@@ -18,11 +18,22 @@ public class QuotaService {
     private final ProjectQuotaRepository quotas;
     private final LlmRequestRepository requests;
     private final RateLimitStore rateLimits;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.aiconnect.llmgateway.beta.BetaMemberRepository betaMembers;
     public QuotaService(ApiKeyService apiKeyService, ProjectQuotaRepository quotas, LlmRequestRepository requests, RateLimitStore rateLimits) {
         this.apiKeyService = apiKeyService; this.quotas = quotas; this.requests = requests; this.rateLimits = rateLimits;
     }
     public void check(String authorization, JsonNode request) {
         ApiKeyCredentials credentials = apiKeyService.authenticate(authorization);
+        if (betaMembers != null) betaMembers.findByProjectId(credentials.project().getId()).ifPresent(member -> {
+            if (!(rateLimits instanceof RedisRateLimitStore)) throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "BETA_SHARED_LIMIT_UNAVAILABLE", "Beta requires shared rate limits.");
+            try {
+                Instant now=Instant.now();
+                if (!rateLimits.tryAcquire(member.getId(),5,now) || !rateLimits.tryAcquire(member.getServiceId(),30,now))
+                    throw new ApiException(HttpStatus.TOO_MANY_REQUESTS,"BETA_RATE_LIMIT_EXCEEDED","Beta request rate exceeded.");
+            } catch (ApiException exception) { throw exception; }
+            catch (RuntimeException exception) { throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE,"BETA_SHARED_LIMIT_UNAVAILABLE","Beta shared rate limits are unavailable."); }
+        });
         ProjectQuota quota = quotas.findById(credentials.project().getId()).orElse(null);
         int rpm = quota == null ? 60 : quota.getRequestsPerMinute();
         if (!rateLimits.tryAcquire(credentials.apiKey().getId(), rpm, Instant.now())) {

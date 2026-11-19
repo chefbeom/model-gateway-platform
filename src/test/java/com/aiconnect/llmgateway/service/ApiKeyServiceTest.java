@@ -3,6 +3,7 @@ package com.aiconnect.llmgateway.service;
 import com.aiconnect.llmgateway.config.GatewayProperties;
 import com.aiconnect.llmgateway.web.ApiException;
 import com.aiconnect.llmgateway.domain.ApiKey;
+import com.aiconnect.llmgateway.domain.ApiKeyStatus;
 import com.aiconnect.llmgateway.domain.Project;
 import com.aiconnect.llmgateway.repository.ApiKeyRepository;
 import com.aiconnect.llmgateway.repository.ProjectRepository;
@@ -48,11 +49,16 @@ class ApiKeyServiceTest {
         IssuedApiKey issued = service.issue(projectId, "integration", null);
         ApiKey stored = capturedKey(keys);
         when(keys.findByKeyPrefix(stored.getKeyPrefix())).thenReturn(Optional.of(stored));
+        when(keys.markUsedIfActive(isNull(), eq(ApiKeyStatus.ACTIVE), any(Instant.class))).thenReturn(1);
 
         ApiKeyCredentials credentials = service.authenticate("Bearer " + issued.secret());
 
         assertThat(credentials.apiKey()).isSameAs(stored);
         verify(keys, times(1)).findByKeyPrefix(stored.getKeyPrefix());
+        when(keys.markUsedIfActive(isNull(), eq(ApiKeyStatus.ACTIVE), any(Instant.class))).thenReturn(0);
+        assertThatThrownBy(() -> service.authenticate("Bearer " + issued.secret()))
+                .isInstanceOf(ApiException.class).hasMessageContaining("invalid, revoked, or expired");
+        assertThat(stored.getLastUsedAt()).isNull();
     }
 
     @Test

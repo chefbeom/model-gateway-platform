@@ -20,6 +20,10 @@ import java.util.regex.Pattern;
  */
 @Component
 public class DataProtectionScanner {
+    private static final int MAX_NODES = 10_000;
+    private static final int MAX_DEPTH = 64;
+    private static final int MAX_TEXT_CHARS = 2_000_000;
+    private static final class Budget { int nodes; int chars; boolean exhausted; }
     private static final Pattern SECRET = Pattern.compile(
             "(?i)(sk-[A-Za-z0-9]{20,}|sk_llmg_[A-Za-z0-9._-]+|AKIA[0-9A-Z]{16}|-----BEGIN (?:RSA|EC|OPENSSH|PRIVATE) KEY-----|(?:api[_-]?key|secret|password|token)\\s*[:=]\\s*[^\\s,;]{8,})");
     private static final Pattern EMAIL = Pattern.compile("(?i)\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b");
@@ -27,7 +31,7 @@ public class DataProtectionScanner {
     private static final Pattern RESIDENT_NUMBER = Pattern.compile("\\b\\d{6}-?[1-4]\\d{6}\\b");
     private static final Pattern CARD_NUMBER = Pattern.compile("\\b(?:\\d[ -]?){13,19}\\b");
     private static final Pattern CONFIDENTIAL = Pattern.compile("(?i)(confidential|internal[- ]only|trade secret|private|\\uAE30\\uBC00|\\uB300\\uC678\\uBE44|\\uC601\\uC5C5\\uBE44\\uBC00)");
-    private static final Pattern MEDIA_DATA = Pattern.compile("(?i)^data:(?:image|audio|video|application/pdf|application/octet-stream)/");
+    private static final Pattern MEDIA_DATA = Pattern.compile("(?i)^data:(?:(?:image|audio|video)/[^;,]+|application/(?:pdf|octet-stream))(?:;|,)");
     private static final Set<String> STRUCTURAL_FIELDS = Set.of(
             "model", "stream", "temperature", "top_p", "top_k", "n", "seed", "max_tokens",
             "max_completion_tokens", "presence_penalty", "frequency_penalty", "logprobs",
@@ -43,18 +47,32 @@ public class DataProtectionScanner {
     public DataProtectionScanResult scan(JsonNode request, EffectiveDataProtectionPolicy policy) {
         EnumSet<DataClassification> classifications = EnumSet.noneOf(DataClassification.class);
         EnumMap<DataClassification, Integer> counts = new EnumMap<>(DataClassification.class);
-        if (request != null && policy != null) scanNode(request, "", policy, classifications, counts);
+        if (request != null && policy != null) scanNode(request, "", policy, classifications, counts, new Budget(), 0);
         return new DataProtectionScanResult(classifications, counts);
     }
 
     private void scanNode(JsonNode node, String fieldName, EffectiveDataProtectionPolicy policy,
                           EnumSet<DataClassification> classifications,
-                          EnumMap<DataClassification, Integer> counts) {
+                          EnumMap<DataClassification, Integer> counts, Budget budget, int depth) {
         if (node == null || node.isNull()) return;
+        if (budget.exhausted) return;
+        if (++budget.nodes > MAX_NODES || depth > MAX_DEPTH) {
+            budget.exhausted = true; add(DataClassification.SCAN_INCOMPLETE, classifications, counts); return;
+        }
         if (node.isTextual()) {
             String value = node.textValue();
             if (value == null || value.isBlank()) return;
+            // Inline media is binary, not inspectable text. Its policy is controlled by detectMedia.
+            if (MEDIA_DATA.matcher(value).find()) {
+                if (policy.detectMedia()) add(DataClassification.UNKNOWN_MEDIA, classifications, counts);
+                return;
+            }
+            if ((long) budget.chars + value.length() > MAX_TEXT_CHARS) {
+                budget.exhausted = true; add(DataClassification.SCAN_INCOMPLETE, classifications, counts); return;
+            }
+            budget.chars += value.length();
             String bounded = value.length() > 65_536 ? value.substring(0, 65_536) : value;
+            if (value.length() > 65_536) add(DataClassification.SCAN_INCOMPLETE, classifications, counts);
             if (policy.detectSecrets() && SECRET.matcher(bounded).find()) add(DataClassification.SECRET, classifications, counts);
             if (policy.detectPii() && (EMAIL.matcher(bounded).find() || PHONE.matcher(bounded).find()
                     || RESIDENT_NUMBER.matcher(bounded).find())) add(DataClassification.PII, classifications, counts);
@@ -77,11 +95,15 @@ public class DataProtectionScanner {
             Iterator<Map.Entry<String, JsonNode>> fields = node.fields();
             while (fields.hasNext()) {
                 Map.Entry<String, JsonNode> field = fields.next();
-                if (STRUCTURAL_FIELDS.contains(field.getKey())) continue;
-                scanNode(field.getValue(), field.getKey(), policy, classifications, counts);
+                if (fieldName.isEmpty() && STRUCTURAL_FIELDS.contains(field.getKey())) continue;
+                scanNode(field.getValue(), fieldName + "." + field.getKey(), policy, classifications, counts, budget, depth + 1);
+                if (budget.exhausted) break;
             }
             if (node.isArray()) {
-                for (JsonNode child : node) scanNode(child, fieldName, policy, classifications, counts);
+                for (JsonNode child : node) {
+                    scanNode(child, fieldName, policy, classifications, counts, budget, depth + 1);
+                    if (budget.exhausted) break;
+                }
             }
         }
     }

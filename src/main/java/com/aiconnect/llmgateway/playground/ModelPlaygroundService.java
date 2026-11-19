@@ -79,6 +79,8 @@ public class ModelPlaygroundService {
     private final ObjectMapper mapper;
     @org.springframework.beans.factory.annotation.Autowired
     private com.aiconnect.llmgateway.routing.ActiveRequestRegistry capacity;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.aiconnect.llmgateway.dataprotection.DataProtectionPolicyService dataProtection;
 
     public ModelPlaygroundService(InferenceNodeRepository nodes, RuntimeEndpointRepository endpoints,
                                   ExternalProviderRepository providers, ModelDeploymentRepository deployments,
@@ -187,6 +189,9 @@ public class ModelPlaygroundService {
         ObjectNode upstream;
         try {
             upstream = prepareRequest(body, resolved, stream);
+            if (resolved.external() && !dataProtection.allowsOrganizationExternal(organizationId, upstream)) {
+                throw new ApiException(HttpStatus.FORBIDDEN, "PLAYGROUND_DATA_PROTECTION_BLOCKED", "데이터 보호 정책에 따라 외부 모델 테스트가 차단되었습니다.");
+            }
         } catch (ApiException exception) {
             traces.save(updateTrace(trace, false, exception.getStatus().value(), elapsed(startedNanos),
                     null, null, exception.getCode()));

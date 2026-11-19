@@ -29,6 +29,8 @@ public class ApiKeyService {
     private final ApiKeyRepository apiKeys;
     private final ProjectRepository projects;
     private final GatewayProperties properties;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.aiconnect.llmgateway.beta.BetaAccessService betaAccess;
 
     public ApiKeyService(ApiKeyRepository apiKeys, ProjectRepository projects, GatewayProperties properties) {
         this.apiKeys = apiKeys;
@@ -86,7 +88,10 @@ public class ApiKeyService {
             throw new ApiException(HttpStatus.FORBIDDEN, "PROJECT_SUSPENDED",
                     "This project is suspended by an administrator. API requests are temporarily blocked.");
         }
-        key.markUsed();
+        if (betaAccess != null && betaAccess.isBetaProject(project.getId())) betaAccess.checkActiveProject(project.getId());
+        if (apiKeys.markUsedIfActive(key.getId(), ApiKeyStatus.ACTIVE, Instant.now()) != 1) {
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_API_KEY", "The API key is invalid, revoked, or expired.");
+        }
         return new ApiKeyCredentials(key, project);
     }
 

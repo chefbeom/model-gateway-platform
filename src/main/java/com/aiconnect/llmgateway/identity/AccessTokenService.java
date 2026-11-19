@@ -22,11 +22,15 @@ public class AccessTokenService {
     public AccessTokenService(ObjectMapper objectMapper, AuthProperties properties) { this.objectMapper = objectMapper; this.properties = properties; }
 
     public String issue(AppUser user) {
+        return issue(user, null);
+    }
+    public String issue(AppUser user, UUID sessionId) {
         try {
             Map<String, Object> header = Map.of("alg", "HS256", "typ", "JWT");
             long now = Instant.now().getEpochSecond();
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("sub", user.getId().toString()); payload.put("email", user.getEmail()); payload.put("platform_admin", user.isPlatformAdmin());
+            if (sessionId != null) payload.put("sid", sessionId.toString());
             payload.put("iat", now); payload.put("exp", now + properties.accessTokenSeconds());
             String encodedHeader = encode(objectMapper.writeValueAsBytes(header));
             String encodedPayload = encode(objectMapper.writeValueAsBytes(payload));
@@ -35,16 +39,28 @@ public class AccessTokenService {
     }
 
     public AuthPrincipal parse(String token) {
+        return parseClaims(token, false).principal();
+    }
+
+    public ParsedSession parseSession(String token) {
+        return parseClaims(token, true);
+    }
+
+    private ParsedSession parseClaims(String token, boolean requireSession) {
         try {
             String[] parts = token.split("\\.");
             if (parts.length != 3 || !MessageDigest.isEqual(decode(parts[2]), hmac(parts[0] + "." + parts[1]))) throw unauthorized();
             Map<String, Object> payload = objectMapper.readValue(decode(parts[1]), new TypeReference<>() { });
             long expiresAt = ((Number) payload.get("exp")).longValue();
             if (Instant.now().getEpochSecond() >= expiresAt) throw unauthorized();
-            return new AuthPrincipal(UUID.fromString((String) payload.get("sub")), (String) payload.get("email"), Boolean.TRUE.equals(payload.get("platform_admin")));
+            AuthPrincipal principal = new AuthPrincipal(UUID.fromString((String) payload.get("sub")), (String) payload.get("email"), Boolean.TRUE.equals(payload.get("platform_admin")));
+            UUID sessionId = payload.get("sid") == null ? null : UUID.fromString((String) payload.get("sid"));
+            if (requireSession && sessionId == null) throw unauthorized();
+            return new ParsedSession(principal, sessionId);
         } catch (ApiException exception) { throw exception; }
         catch (Exception exception) { throw unauthorized(); }
     }
+    public record ParsedSession(AuthPrincipal principal, UUID sessionId) { }
     private ApiException unauthorized() { return new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_ACCESS_TOKEN", "The access token is invalid or expired."); }
     private byte[] hmac(String value) throws Exception {
         Mac mac = Mac.getInstance("HmacSHA256"); mac.init(new SecretKeySpec(properties.signingKey().getBytes(StandardCharsets.UTF_8), "HmacSHA256"));

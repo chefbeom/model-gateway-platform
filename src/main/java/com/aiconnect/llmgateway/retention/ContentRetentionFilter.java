@@ -19,8 +19,9 @@ import java.nio.charset.StandardCharsets;
 import jakarta.servlet.*;
 
 @Component
-@Order(Ordered.HIGHEST_PRECEDENCE)
+@Order(ContentRetentionFilter.FILTER_ORDER)
 public class ContentRetentionFilter extends OncePerRequestFilter {
+    public static final int FILTER_ORDER = Ordered.HIGHEST_PRECEDENCE + 2;
     private static final String CACHE="aiconnect.retention.responseCache";
     private static final String BODY="aiconnect.retention.requestBody";
     private static final Logger log = LoggerFactory.getLogger(ContentRetentionFilter.class);
@@ -43,6 +44,7 @@ public class ContentRetentionFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws IOException, ServletException {
+        if (Boolean.TRUE.equals(request.getAttribute("aiconnect.beta.ingress"))) { filterChain.doFilter(request, response); return; }
         if(isAsyncDispatch(request)) {
             Object cache=request.getAttribute(CACHE);
             if(cache instanceof ContentCachingResponseWrapper wrapped) {
