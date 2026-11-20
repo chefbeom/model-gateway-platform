@@ -665,3 +665,8 @@ export function createAccountInvitation(
     body: JSON.stringify({ organizationId, ...payload })
   })
 }
+
+/** Normalizes pasted or typed Google Authenticator OTP input to at most 6 digits. */
+export function normalizeTotpDigits(value: string): string {
+  return value.replace(/\D/g, '').slice(0, 6)
+}

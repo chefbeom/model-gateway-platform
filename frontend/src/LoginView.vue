@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import BaseModal from './BaseModal.vue'
-import { accountTierLabel, authenticate, verifyTotp, type Session, type User } from './api'
+import LoginAuthSteps from './LoginAuthSteps.vue'
+import { accountTierLabel, authenticate, normalizeTotpDigits, verifyTotp, type Session, type User } from './api'
 
 const props = defineProps<{
   theme: 'dark' | 'light'
@@ -33,12 +34,15 @@ const inMfaStep = computed(() => Boolean(props.mfaRequired || localMfaSession.va
 const mfaAccessToken = computed(() => props.pendingAccessToken || localMfaSession.value?.accessToken || '')
 const mfaUser = computed(() => props.pendingUser ?? localMfaSession.value?.user ?? null)
 const mfaEmail = computed(() => mfaUser.value?.email || email.value)
+const normalizedMfaOtp = computed(() => normalizeTotpDigits(mfaCode.value))
+const submittedMfaCode = computed(() =>
+  verificationMode.value === 'totp' ? normalizedMfaOtp.value : mfaCode.value.trim()
+)
 const canSubmitMfa = computed(() => {
-  const trimmed = mfaCode.value.trim()
   if (verificationMode.value === 'totp') {
-    return /^\d{6}$/.test(trimmed)
+    return normalizedMfaOtp.value.length === 6
   }
-  return trimmed.length >= 6
+  return submittedMfaCode.value.length >= 6
 })
 
 async function submit() {
@@ -65,7 +69,7 @@ async function submitMfaVerification() {
   busy.value = true
   message.value = ''
   try {
-    const session = await verifyTotp(mfaAccessToken.value, mfaCode.value.trim())
+    const session = await verifyTotp(mfaAccessToken.value, submittedMfaCode.value)
     localMfaSession.value = null
     mfaCode.value = ''
     emit('authenticated', session)
@@ -122,30 +126,38 @@ function useEmergencyToken() {
       <div class="login-signals">
         <div><span class="signal-dot online"></span><strong>OpenAI Compatible</strong><small>표준 API 인터페이스</small></div>
         <div><span class="signal-dot"></span><strong>Adaptive Routing</strong><small>자동 장애 전환</small></div>
-        <div><span class="signal-dot"></span><strong>Mandatory 2FA</strong><small>Google Authenticator 보호</small></div>
+        <div><span class="signal-dot online"></span><strong>2-Step QR Auth</strong><small>1. ID/PW 로그인 → 2. QR 2차 승인</small></div>
       </div>
     </section>
     <section class="login-card-wrap">
       <div class="login-card glass-panel">
+        <LoginAuthSteps :step="inMfaStep ? 2 : 1" :phase="inMfaStep ? 'verify' : 'credentials'" />
+
         <template v-if="inMfaStep">
           <div class="login-card-head">
-            <p class="eyebrow">STEP 2 · GOOGLE AUTHENTICATOR</p>
-            <h2>2차 인증 확인</h2>
+            <p class="eyebrow">STEP 2 · QR 2차 확인 및 최종 승인</p>
+            <h2>2차 확인 및 최종 승인</h2>
             <p>
               <strong>{{ mfaEmail }}</strong>
               <span v-if="mfaUser"> ({{ accountTierLabel(mfaUser.accountTier, mfaUser.platformAdmin) }})</span>
-              계정으로 계속하려면 {{ verificationMode === 'totp' ? 'Google Authenticator 6자리 코드를' : '1회용 복구 코드를' }} 입력하세요.
+              의 1차 로그인이 완료되었습니다.
+              {{
+                verificationMode === 'totp'
+                  ? '최초 1회 QR로 연결한 Google Authenticator 앱의 6자리 코드를 입력해 최종 승인하세요.'
+                  : '보관해 둔 1회용 복구 코드를 입력해 최종 승인하세요.'
+              }}
             </p>
           </div>
           <form class="login-form" @submit.prevent="submitMfaVerification">
             <label v-if="verificationMode === 'totp'">
               6자리 Google Authenticator 코드
               <input
-                v-model.trim="mfaCode"
+                v-model="mfaCode"
+                class="otp-code-input"
                 type="text"
                 inputmode="numeric"
                 autocomplete="one-time-code"
-                maxlength="6"
+                maxlength="12"
                 placeholder="000000"
                 required
               />
@@ -162,32 +174,32 @@ function useEmergencyToken() {
             </label>
             <p v-if="message" class="form-error" role="alert">{{ message }}</p>
             <button class="primary-button login-submit" :disabled="busy || !canSubmitMfa" type="submit">
-              <span>{{ busy ? '인증 확인 중…' : '2차 인증 완료 및 콘솔 진입' }}</span>
+              <span>{{ busy ? '최종 승인 확인 중…' : '최종 승인 · 콘솔 진입' }}</span>
               <b>→</b>
             </button>
           </form>
           <div class="login-switch">
             <button class="text-button" type="button" @click="toggleVerificationMode">
-              {{ verificationMode === 'totp' ? '복구 코드로 인증하기' : '6자리 앱 코드로 인증하기' }}
+              {{ verificationMode === 'totp' ? '1회용 복구 코드로 승인하기' : '6자리 앱 코드로 승인하기' }}
             </button>
           </div>
           <div class="login-switch">
-            <button class="text-button" type="button" @click="cancelMfaStep">다른 계정으로 로그인</button>
+            <button class="text-button" type="button" @click="cancelMfaStep">1단계로 돌아가기 (다른 계정 로그인)</button>
           </div>
         </template>
 
         <template v-else>
           <div class="login-card-head">
-            <p class="eyebrow">CONTROL PLANE ACCESS</p>
-            <h2>{{ mode === 'login' ? '다시 오신 것을 환영합니다' : '첫 관리자를 생성합니다' }}</h2>
-            <p>{{ mode === 'login' ? '관리 콘솔을 계속하려면 로그인하세요.' : '비어 있는 설치에서 한 번만 실행할 수 있습니다.' }}</p>
+            <p class="eyebrow">STEP 1 · 아이디 · 비밀번호 로그인</p>
+            <h2>{{ mode === 'login' ? '1차 로그인 진행' : '첫 관리자를 생성합니다' }}</h2>
+            <p>{{ mode === 'login' ? '아이디(이메일)와 비밀번호를 확인한 뒤 2단계 QR 2차 확인·최종 승인으로 이어집니다.' : '비어 있는 설치에서 한 번만 실행할 수 있습니다.' }}</p>
           </div>
           <form class="login-form" @submit.prevent="submit">
             <label>이메일 주소<input v-model.trim="email" type="email" autocomplete="username" placeholder="admin@example.com" required /></label>
             <label>비밀번호<input v-model="password" type="password" autocomplete="current-password" placeholder="12자 이상 입력" minlength="12" required /></label>
             <p v-if="message" class="form-error" role="alert">{{ message }}</p>
             <button class="primary-button login-submit" :disabled="busy || !email || password.length < 12" type="submit">
-              <span>{{ busy ? '확인 중…' : mode === 'login' ? '관리 콘솔 로그인' : '관리자 생성 및 로그인' }}</span>
+              <span>{{ busy ? '1차 확인 중…' : mode === 'login' ? '1차 로그인 · 2차 확인으로 이동' : '관리자 생성 · 2차 확인으로 이동' }}</span>
               <b>→</b>
             </button>
           </form>

@@ -6,7 +6,7 @@ import { createRenderer, defineComponent, h, nextTick } from 'vue'
 import ts from 'typescript'
 import { typeScriptModuleUrl } from './loadTypeScript.mjs'
 
-function compileVueComponent(relativePath, id, extraReplacements = {}) {
+function compileVueSourceToDataUrl(relativePath, id, extraReplacements = {}) {
   const source = readFileSync(new URL(relativePath, import.meta.url), 'utf8')
   const { descriptor } = parse(source)
   let script = ts.transpileModule(
@@ -22,7 +22,16 @@ function compileVueComponent(relativePath, id, extraReplacements = {}) {
   for (const [pattern, replacementUrl] of Object.entries(extraReplacements)) {
     script = script.replace(new RegExp(`from ['"]${pattern}['"]`, 'g'), 'from ' + JSON.stringify(replacementUrl))
   }
-  return import('data:text/javascript;base64,' + Buffer.from(script).toString('base64'))
+  return 'data:text/javascript;base64,' + Buffer.from(script).toString('base64')
+}
+
+const loginAuthStepsModuleUrl = compileVueSourceToDataUrl('../src/LoginAuthSteps.vue', 'login-auth-steps')
+
+function compileVueComponent(relativePath, id, extraReplacements = {}) {
+  return import(compileVueSourceToDataUrl(relativePath, id, {
+    '\\./LoginAuthSteps\\.vue': loginAuthStepsModuleUrl,
+    ...extraReplacements
+  }))
 }
 
 function stubModuleUrl(exportCode) {
@@ -330,11 +339,15 @@ test('TotpOnboardingView enforces local SVG QR setup, 6-digit enroll, and 8 reco
       const svgs = walk(root, el => el.tag === 'svg')
       assert.equal(svgs.length, 1)
       assert.ok(walk(svgs[0], el => el.tag === 'path').length === 1)
+      assert.match(textContent(root), /1\. 로그인 진행/)
+      assert.match(textContent(root), /아이디·비밀번호 확인 완료/)
+      assert.match(textContent(root), /2\. QR 2차 확인 · 최종 승인/)
+      assert.match(textContent(root), /STEP 2-1 · QR 스캔 2차 확인/)
       assert.match(textContent(root), /JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP/)
       assert.match(textContent(root), /프로젝트 총괄/)
 
       const codeInput = walk(root, el => el.tag === 'input')[0]
-      codeInput.value = '123456'
+      codeInput.value = ' 123-456 '
       codeInput.dispatch('input')
       await nextTick()
 
@@ -345,10 +358,11 @@ test('TotpOnboardingView enforces local SVG QR setup, 6-digit enroll, and 8 reco
       assert.ok(calls.some(c => c.url === '/api/auth/totp/enroll' && c.body.code === '123456'))
       // Must NOT complete yet before confirming recovery codes!
       assert.equal(completedEvents.length, 0)
+      assert.match(textContent(root), /STEP 2-2 · 복구 코드 보관 및 최종 승인/)
       assert.match(textContent(root), /AAAA-1111-BBBB/)
       assert.match(textContent(root), /QQQQ-8888-RRRR/)
 
-      const proceedBtn = walk(root, el => el.tag === 'button' && textContent(el).includes('확인 완료 · 콘솔로 이동'))[0]
+      const proceedBtn = walk(root, el => el.tag === 'button' && textContent(el).includes('최종 승인 · 콘솔 진입'))[0]
       assert.equal(proceedBtn.props.disabled, true)
 
       const checkbox = walk(root, el => el.tag === 'input' && el.props.type === 'checkbox')[0]
@@ -356,7 +370,7 @@ test('TotpOnboardingView enforces local SVG QR setup, 6-digit enroll, and 8 reco
       checkbox.dispatch('change')
       await nextTick()
 
-      const enabledBtn = walk(root, el => el.tag === 'button' && textContent(el).includes('확인 완료 · 콘솔로 이동'))[0]
+      const enabledBtn = walk(root, el => el.tag === 'button' && textContent(el).includes('최종 승인 · 콘솔 진입'))[0]
       assert.equal(enabledBtn.props.disabled, false)
       enabledBtn.props.onClick()
       await flush()
@@ -425,6 +439,8 @@ test('LoginView switches to 2FA verification on VERIFICATION_REQUIRED and verifi
       await flush()
 
       const inputs = walk(root, el => el.tag === 'input')
+      assert.match(textContent(root), /STEP 1 · 아이디 · 비밀번호 로그인/)
+      assert.match(textContent(root), /1차 로그인 진행/)
       inputs[0].value = 'admin@company.com'
       inputs[0].dispatch('input')
       inputs[1].value = 'SuperSecretPassword123!'
@@ -436,19 +452,21 @@ test('LoginView switches to 2FA verification on VERIFICATION_REQUIRED and verifi
 
       assert.equal(authEvents.length, 1)
       assert.equal(authEvents[0].mfaState, 'VERIFICATION_REQUIRED')
-      assert.match(textContent(root), /2차 인증 확인/)
+      assert.match(textContent(root), /아이디·비밀번호 확인 완료/)
+      assert.match(textContent(root), /2\. QR 2차 확인 · 최종 승인/)
+      assert.match(textContent(root), /2차 확인 및 최종 승인/)
       assert.match(textContent(root), /시스템 관리자/)
 
       // Toggle recovery mode and back
-      const toggleBtn = walk(root, el => el.tag === 'button' && textContent(el).includes('복구 코드로 인증하기'))[0]
+      const toggleBtn = walk(root, el => el.tag === 'button' && textContent(el).includes('1회용 복구 코드로 승인하기'))[0]
       toggleBtn.props.onClick()
       await nextTick()
       assert.match(textContent(root), /1회용 복구 코드/)
-      walk(root, el => el.tag === 'button' && textContent(el).includes('6자리 앱 코드로 인증하기'))[0].props.onClick()
+      walk(root, el => el.tag === 'button' && textContent(el).includes('6자리 앱 코드로 승인하기'))[0].props.onClick()
       await nextTick()
 
       const mfaInput = walk(root, el => el.tag === 'input')[0]
-      mfaInput.value = '654321'
+      mfaInput.value = ' 654-321 '
       mfaInput.dispatch('input')
       await nextTick()
 

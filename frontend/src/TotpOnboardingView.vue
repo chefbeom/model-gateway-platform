@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import LoginAuthSteps from './LoginAuthSteps.vue'
 import {
   accountTierLabel,
   enrollTotp,
+  normalizeTotpDigits,
   persistSession,
   setupTotp,
   type Session,
@@ -44,7 +46,7 @@ const qrModel = computed(() => {
 })
 
 const tierDisplay = computed(() => accountTierLabel(props.user?.accountTier, props.user?.platformAdmin))
-const normalizedCode = computed(() => totpCode.value.replace(/\D/g, '').slice(0, 6))
+const normalizedCode = computed(() => normalizeTotpDigits(totpCode.value))
 
 async function loadSetup() {
   if (!props.accessToken) return
@@ -151,19 +153,21 @@ onMounted(() => {
 
     <section class="login-card-wrap totp-card-wrap">
       <div class="login-card glass-panel totp-card">
+        <LoginAuthSteps :step="2" :phase="enrolledSession ? 'recovery' : 'enroll'" />
+
         <div class="totp-account-bar">
           <div>
             <strong>{{ user?.email ?? setupData?.email ?? '사용자 계정' }}</strong>
             <small>계정 계층: {{ tierDisplay }}</small>
           </div>
-          <span class="status-chip draining"><i></i>{{ enrolledSession ? '복구 코드 확인 대기' : 'TOTP 등록 필요' }}</span>
+          <span class="status-chip draining"><i></i>{{ enrolledSession ? '최종 승인 대기' : 'QR 2차 확인 필요' }}</span>
         </div>
 
         <template v-if="!enrolledSession">
           <div class="login-card-head">
-            <p class="eyebrow">STEP 1 · GOOGLE AUTHENTICATOR SETUP</p>
-            <h2>인증 앱 연결 및 검증</h2>
-            <p>Google Authenticator 앱에서 아래 QR 코드를 스캔하거나 수동 시크릿 키를 입력한 뒤 생성된 6자리 코드를 입력하세요.</p>
+            <p class="eyebrow">STEP 2-1 · QR 스캔 2차 확인</p>
+            <h2>QR 등록 및 코드 검증</h2>
+            <p>1단계 아이디·비밀번호 확인이 완료되었습니다. Google Authenticator 앱으로 아래 QR 코드를 스캔(또는 수동 키 입력)한 뒤 생성된 6자리 코드를 입력하세요.</p>
           </div>
 
           <p v-if="error" class="form-error" role="alert">{{ error }}</p>
@@ -208,11 +212,12 @@ onMounted(() => {
               <label>
                 6자리 인증 코드 (Google Authenticator)
                 <input
-                  v-model.trim="totpCode"
+                  v-model="totpCode"
+                  class="otp-code-input"
                   type="text"
                   inputmode="numeric"
                   autocomplete="one-time-code"
-                  maxlength="6"
+                  maxlength="12"
                   placeholder="000000"
                   required
                 />
@@ -222,7 +227,7 @@ onMounted(() => {
                 type="submit"
                 :disabled="busy || normalizedCode.length !== 6"
               >
-                <span>{{ busy ? '코드 확인 중…' : '인증 확인 및 복구 코드 발급' }}</span>
+                <span>{{ busy ? 'QR 코드 확인 중…' : '2차 코드 확인 · 다음(최종 승인)' }}</span>
                 <b>→</b>
               </button>
             </form>
@@ -235,9 +240,9 @@ onMounted(() => {
 
         <template v-else>
           <div class="login-card-head">
-            <p class="eyebrow">STEP 2 · ONE-TIME RECOVERY CODES</p>
-            <h2>복구 코드 8개 보관</h2>
-            <p>이 복구 코드는 지금 한 번만 표시됩니다. 기기를 분실한 경우 각 코드를 1회 로그인에 사용할 수 있습니다.</p>
+            <p class="eyebrow">STEP 2-2 · 복구 코드 보관 및 최종 승인</p>
+            <h2>복구 코드 저장 후 최종 승인</h2>
+            <p>QR 등록이 완료되었습니다. 아래 1회용 복구 코드 8개를 안전하게 저장한 뒤 최종 승인하여 콘솔로 이동하세요.</p>
           </div>
 
           <p v-if="error" class="form-error" role="alert">{{ error }}</p>
@@ -264,12 +269,12 @@ onMounted(() => {
             :disabled="!savedConfirmed"
             @click="finishOnboarding"
           >
-            <span>확인 완료 · 콘솔로 이동</span>
+            <span>최종 승인 · 콘솔 진입</span>
             <b>→</b>
           </button>
         </template>
 
-        <button class="emergency-link" type="button" @click="emit('logout')">다른 계정으로 로그인 (로그아웃)</button>
+        <button class="emergency-link" type="button" @click="emit('logout')">1단계로 돌아가기 (다른 계정 로그인)</button>
       </div>
     </section>
   </div>
@@ -376,12 +381,6 @@ onMounted(() => {
 }
 .totp-verify-form {
   margin-top: 4px;
-}
-.totp-verify-form input {
-  font-size: 20px;
-  letter-spacing: 0.28em;
-  text-align: center;
-  font-weight: 800;
 }
 .recovery-grid {
   margin: 0;
