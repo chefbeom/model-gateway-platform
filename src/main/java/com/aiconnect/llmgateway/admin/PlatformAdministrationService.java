@@ -1,14 +1,19 @@
 package com.aiconnect.llmgateway.admin;
 
 import com.aiconnect.llmgateway.domain.ApiKey;
+import com.aiconnect.llmgateway.domain.ApiKeyStatus;
 import com.aiconnect.llmgateway.domain.InferenceNode;
 import com.aiconnect.llmgateway.domain.Organization;
+import com.aiconnect.llmgateway.identity.AccountTier;
 import com.aiconnect.llmgateway.identity.AppUser;
 import com.aiconnect.llmgateway.identity.AppUserRepository;
 import com.aiconnect.llmgateway.identity.AuditService;
+import com.aiconnect.llmgateway.identity.AuthRefreshToken;
+import com.aiconnect.llmgateway.identity.AuthRefreshTokenRepository;
 import com.aiconnect.llmgateway.identity.CurrentActor;
 import com.aiconnect.llmgateway.identity.OrganizationMemberRepository;
 import com.aiconnect.llmgateway.identity.OrganizationAccessService;
+import com.aiconnect.llmgateway.identity.TotpService;
 import com.aiconnect.llmgateway.repository.ApiKeyRepository;
 import com.aiconnect.llmgateway.repository.ExternalProviderRepository;
 import com.aiconnect.llmgateway.repository.InferenceNodeRepository;
@@ -42,6 +47,8 @@ public class PlatformAdministrationService {
     private final LlmServiceRepository services;
     private final ApiKeyRepository apiKeys;
     private final AppUserRepository users;
+    private final AuthRefreshTokenRepository refreshTokens;
+    private final TotpService totpService;
     private final OrganizationMemberRepository organizationMembers;
     private final TeamRepository teams;
     private final OrganizationAccessService organizationAccess;
@@ -52,7 +59,8 @@ public class PlatformAdministrationService {
     public PlatformAdministrationService(OrganizationRepository organizations, ProjectRepository projects,
             ExternalProviderRepository providers, InferenceNodeRepository nodes, RuntimeEndpointRepository endpoints,
             ModelDeploymentRepository deployments, LlmServiceRepository services, ApiKeyRepository apiKeys,
-            AppUserRepository users, OrganizationMemberRepository organizationMembers, TeamRepository teams,
+            AppUserRepository users, AuthRefreshTokenRepository refreshTokens, TotpService totpService,
+            OrganizationMemberRepository organizationMembers, TeamRepository teams,
             OrganizationAccessService organizationAccess, LlmRequestRepository requests, AuditService audit, EntityManager entityManager) {
         this.organizations = organizations;
         this.projects = projects;
@@ -63,6 +71,8 @@ public class PlatformAdministrationService {
         this.services = services;
         this.apiKeys = apiKeys;
         this.users = users;
+        this.refreshTokens = refreshTokens;
+        this.totpService = totpService;
         this.organizationMembers = organizationMembers;
         this.teams = teams;
         this.organizationAccess = organizationAccess;
@@ -155,6 +165,7 @@ public class PlatformAdministrationService {
         execute("delete from team_member where team_id in (select id from team where organization_id = :id)", organizationId);
         execute("delete from team where organization_id = :id", organizationId);
         execute("delete from organization_member where organization_id = :id", organizationId);
+        execute("delete from account_invitation where organization_id = :id", organizationId);
         execute("delete from audit_log where organization_id = :id", organizationId);
         execute("delete from accelerator_device where node_id in (select id from inference_node where organization_id = :id)", organizationId);
         execute("delete from inference_node where organization_id = :id", organizationId);
@@ -165,8 +176,16 @@ public class PlatformAdministrationService {
 
     @Transactional(readOnly = true)
     public List<PlatformUserView> users() {
-        return users.findAll().stream().map(user -> new PlatformUserView(user.getId(), user.getEmail(), user.isPlatformAdmin(),
-                user.isEnabled(), organizationMembers.findByIdUserId(user.getId()).size(), apiKeys.findByIssuedByUserId(user.getId()).size())).toList();
+        return users.findAll().stream().map(user -> new PlatformUserView(
+                user.getId(),
+                user.getEmail(),
+                user.isPlatformAdmin(),
+                AccountTier.effectiveFor(user).name(),
+                user.isTotpEnabled(),
+                user.isEnabled(),
+                organizationMembers.findByIdUserId(user.getId()).size(),
+                apiKeys.findByIssuedByUserId(user.getId()).size()
+        )).toList();
     }
 
     @Transactional(readOnly = true)
@@ -206,7 +225,25 @@ public class PlatformAdministrationService {
     public void setUserEnabled(UUID userId, boolean enabled) {
         AppUser user = users.findById(userId).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", "사용자를 찾을 수 없습니다."));
         execute("update app_user set enabled = :enabled where id = :id", enabled, userId);
-        audit.record(null, CurrentActor.userIdOrNull(), enabled ? "PLATFORM_USER_ENABLED" : "PLATFORM_USER_DISABLED", "APP_USER", userId, Map.of("email", user.getEmail()));
+        int revokedKeyCount = 0;
+        if (!enabled) {
+            List<AuthRefreshToken> active = refreshTokens.findByUserIdAndRevokedAtIsNull(userId);
+            active.forEach(AuthRefreshToken::revoke);
+            refreshTokens.saveAll(active);
+            List<ApiKey> activeKeys = apiKeys.findByIssuedByUserIdAndStatus(userId, ApiKeyStatus.ACTIVE);
+            if (!activeKeys.isEmpty()) {
+                activeKeys.forEach(ApiKey::revoke);
+                apiKeys.saveAll(activeKeys);
+                revokedKeyCount = activeKeys.size();
+            }
+        }
+        audit.record(null, CurrentActor.userIdOrNull(), enabled ? "PLATFORM_USER_ENABLED" : "PLATFORM_USER_DISABLED", "APP_USER", userId,
+                Map.of("email", user.getEmail(), "revokedApiKeyCount", revokedKeyCount));
+    }
+
+    @Transactional
+    public void resetUserTotp(UUID userId) {
+        totpService.resetTotp(userId, CurrentActor.userIdOrNull(), null);
     }
 
     @Transactional
@@ -216,7 +253,13 @@ public class PlatformAdministrationService {
         if (userId.equals(CurrentActor.userIdOrNull())) throw new ApiException(HttpStatus.CONFLICT, "SELF_DELETE_FORBIDDEN", "현재 관리자 계정은 삭제할 수 없습니다.");
         execute("update audit_log set actor_user_id = null where actor_user_id = :id", userId);
         execute("update api_key set issued_by_user_id = null where issued_by_user_id = :id", userId);
+        execute("update app_user set invited_by_user_id = null where invited_by_user_id = :id", userId);
+        execute("update account_invitation set consumed_by_user_id = null where consumed_by_user_id = :id", userId);
+        execute("delete from account_invitation where issued_by_user_id = :id", userId);
+        execute("delete from user_totp_recovery_code where user_id = :id", userId);
+        execute("delete from beta_operator where user_id = :id", userId);
         execute("delete from auth_refresh_token where user_id = :id", userId);
+        execute("delete from project_membership where user_id = :id", userId);
         execute("delete from team_member where user_id = :id", userId);
         execute("delete from organization_member where user_id = :id", userId);
         execute("delete from app_user where id = :id", userId);
@@ -236,7 +279,8 @@ public class PlatformAdministrationService {
     public record PlatformOverview(long organizationCount, long userCount, long projectCount, long providerCount, long nodeCount, long endpointCount, long deploymentCount, long serviceCount, long apiKeyCount, long requestCount) { }
     public record OrganizationSummary(UUID id, String name, String status, int projectCount, int providerCount, int nodeCount, int memberCount) { }
     public record OrganizationCleanupPreview(UUID organizationId, String name, String status, int projectCount, int providerCount, int nodeCount, int endpointCount, int memberCount, long requestCount, String behavior) { }
-    public record PlatformUserView(UUID id, String email, boolean platformAdmin, boolean enabled, int organizationCount, int issuedApiKeyCount) { }
+    public record PlatformUserView(UUID id, String email, boolean platformAdmin, String accountTier, boolean totpEnabled,
+                                   boolean enabled, int organizationCount, int issuedApiKeyCount) { }
     public record PlatformTeamView(UUID id, UUID organizationId, String organizationName, String name, String status, int projectCount) { }
     public record PlatformApiKeyView(UUID id, UUID projectId, String projectName, String organizationName, String name,
                                      String keyPrefix, String status, java.time.Instant expiresAt, java.time.Instant lastUsedAt,

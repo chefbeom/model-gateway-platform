@@ -24,16 +24,15 @@ public final class DispatchPlan implements AutoCloseable {
     public synchronized void revalidateBeforeAttempt(java.util.function.Supplier<RoutingDecision> validator) {this.validator=validator;}
     public List<ResolvedTarget> candidates() { return candidates; }
     public synchronized void restrict(RoutingDecision current) {
-        var ids=current.eligibleTargets().stream().map(t->t.deployment().getId()).collect(java.util.stream.Collectors.toSet());
-        candidates=candidates.stream().filter(t->ids.contains(t.deployment().getId())).toList();
-        if(reserved!=null&&!ids.contains(reserved.deployment().getId())) {
+        candidates=candidates.stream().filter(t->current.eligibleTargets().stream().anyMatch(fresh->sameRoute(t,fresh))).toList();
+        if(reserved!=null&&current.eligibleTargets().stream().noneMatch(fresh->sameRoute(reserved,fresh))) {
             close(); throw new com.aiconnect.llmgateway.web.ApiException(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,"ROUTING_POLICY_CHANGED","배정 직전 모델 상태 또는 보안 정책이 변경되어 전송하지 않았습니다.");
         }
     }
     public synchronized ActiveRequestRegistry.Lease acquire(ResolvedTarget target) {
         if(validator!=null) {
             var current=validator.get();
-            if(current.eligibleTargets().stream().noneMatch(t->t.deployment().getId().equals(target.deployment().getId()))) {
+            if(current.eligibleTargets().stream().noneMatch(t->sameRoute(target,t))) {
                 if(reserved==target)close();
                 return null;
             }
@@ -42,6 +41,15 @@ public final class DispatchPlan implements AutoCloseable {
             ActiveRequestRegistry.Lease result = lease; lease = null; reserved = null; return result;
         }
         return routing.acquire(target) ? new ActiveRequestRegistry.Lease(() -> routing.release(target)) : null;
+    }
+    private static boolean sameRoute(ResolvedTarget previous, ResolvedTarget current) {
+        return Objects.equals(previous.deployment().getId(), current.deployment().getId())
+                && previous.externalDataBoundary() == current.externalDataBoundary()
+                && Objects.equals(previous.routingReason(), current.routingReason())
+                && Objects.equals(previous.endpoint() == null ? null : previous.endpoint().getBaseUrl(),
+                                  current.endpoint() == null ? null : current.endpoint().getBaseUrl())
+                && Objects.equals(previous.externalProvider() == null ? null : previous.externalProvider().getBaseUrl(),
+                                  current.externalProvider() == null ? null : current.externalProvider().getBaseUrl());
     }
     @Override public synchronized void close() { if (lease != null) { lease.close(); lease = null; } }
 }

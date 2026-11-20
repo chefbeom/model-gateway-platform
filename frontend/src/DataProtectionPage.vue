@@ -1,8 +1,16 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
-import { adminFetch, type AdminAuth } from './api'
+import { computed, onMounted, ref, watch } from 'vue'
+import {
+  adminFetch,
+  dataBoundaryLabel,
+  resolveOrgAdminAccess,
+  strictestDataBoundary,
+  type AdminAuth,
+  type DataBoundaryPolicy
+} from './api'
 
-const props = defineProps<{ organizationId: string; auth: AdminAuth; platformAdmin?: boolean }>()
+const props = defineProps<{ organizationId: string; auth: AdminAuth; platformAdmin?: boolean; orgAdmin?: boolean }>()
+const isOrgOrPlatformAdmin = computed(() => resolveOrgAdminAccess(props.auth, props.platformAdmin, props.orgAdmin))
 
 type Mode = 'OFF' | 'MONITOR' | 'ENFORCE'
 type Level = 'RELAXED' | 'BALANCED' | 'STRICT' | 'CUSTOM'
@@ -23,9 +31,15 @@ type Policy = {
   detectMedia: boolean
   customPatternsJson: string
 }
-type Project = { id: string; name: string; status: string; externalAiBlocked: boolean }
+type Project = {
+  id: string; name: string; status: string; externalAiBlocked: boolean
+  dataBoundaryPolicy?: DataBoundaryPolicy; maxDataBoundaryPolicy?: DataBoundaryPolicy
+}
 type Service = { id: string; serviceKey: string; displayName: string; enabled: boolean }
-type ApiKey = { id: string; name: string; keyPrefix: string; status: string }
+type ApiKey = {
+  id: string; name: string; keyPrefix: string; status: string
+  dataBoundaryPolicy?: DataBoundaryPolicy; effectiveDataBoundaryPolicy?: DataBoundaryPolicy
+}
 type Overview = { organizationId: string; policies: Policy[]; effective: Omit<Policy, 'scopeType'> & { scopeType?: string } }
 
 const platformPolicy = ref<Policy | null>(null)
@@ -44,6 +58,22 @@ const editor = ref<Policy>(blankPolicy('ORGANIZATION'))
 const busy = ref(false)
 const message = ref('')
 
+const selectedProject = computed(() => projects.value.find(project => project.id === selectedProjectId.value) ?? null)
+const selectedKey = computed(() => keys.value.find(key => key.id === selectedKeyId.value) ?? null)
+const activeProjectBoundary = computed<DataBoundaryPolicy>(() =>
+  strictestDataBoundary(selectedProject.value?.maxDataBoundaryPolicy, selectedProject.value?.dataBoundaryPolicy)
+)
+const activeBoundaryForEditor = computed<DataBoundaryPolicy>(() => {
+  if (editorScope.value === 'API_KEY' && selectedKey.value) {
+    return strictestDataBoundary(
+      activeProjectBoundary.value,
+      selectedKey.value.effectiveDataBoundaryPolicy,
+      selectedKey.value.dataBoundaryPolicy
+    )
+  }
+  return activeProjectBoundary.value
+})
+
 function blankPolicy(scopeType: string): Policy {
   return { scopeType, mode: 'OFF', level: 'RELAXED', externalAction: 'ALLOW', allowExternalFailover: true, detectSecrets: true, detectPii: false, detectFinancial: false, detectConfidential: false, detectMedia: true, customPatternsJson: '[]' }
 }
@@ -57,16 +87,29 @@ async function load() {
   if (!props.organizationId) { overview.value = null; projects.value = []; services.value = []; keys.value = []; return }
   busy.value = true
   try {
-    const [summary, projectItems, serviceItems] = await Promise.all([
-      adminFetch<Overview>(`/api/admin/organizations/${props.organizationId}/data-protection`, props.auth),
-      adminFetch<Project[]>(`/api/admin/organizations/${props.organizationId}/projects`, props.auth),
-      adminFetch<Service[]>(`/api/admin/organizations/${props.organizationId}/services`, props.auth)
-    ])
-    overview.value = summary; projects.value = projectItems; services.value = serviceItems
-    if (props.platformAdmin) platformPolicy.value = await adminFetch<Policy>('/api/admin/platform/data-protection', props.auth)
-    if (!projects.value.some(item => item.id === selectedProjectId.value)) selectedProjectId.value = projects.value[0]?.id ?? ''
-    copyPolicy(summary.policies.find(item => item.scopeType === 'ORGANIZATION') ?? null, 'ORGANIZATION')
-    if (selectedProjectId.value) await loadProject(selectedProjectId.value)
+    if (isOrgOrPlatformAdmin.value) {
+      const [summary, projectItems, serviceItems] = await Promise.all([
+        adminFetch<Overview>(`/api/admin/organizations/${props.organizationId}/data-protection`, props.auth),
+        adminFetch<Project[]>(`/api/admin/organizations/${props.organizationId}/projects`, props.auth),
+        adminFetch<Service[]>(`/api/admin/organizations/${props.organizationId}/services`, props.auth)
+      ])
+      overview.value = summary; projects.value = projectItems; services.value = serviceItems
+      if (props.platformAdmin) platformPolicy.value = await adminFetch<Policy>('/api/admin/platform/data-protection', props.auth)
+      if (!projects.value.some(item => item.id === selectedProjectId.value)) selectedProjectId.value = projects.value[0]?.id ?? ''
+      copyPolicy(summary.policies.find(item => item.scopeType === 'ORGANIZATION') ?? null, 'ORGANIZATION')
+      if (selectedProjectId.value) await loadProject(selectedProjectId.value)
+    } else {
+      overview.value = null; services.value = []; platformPolicy.value = null
+      projects.value = await adminFetch<Project[]>(`/api/admin/organizations/${props.organizationId}/projects`, props.auth)
+      if (!projects.value.some(item => item.id === selectedProjectId.value)) selectedProjectId.value = projects.value[0]?.id ?? ''
+      if (selectedProjectId.value) {
+        editorScope.value = 'PROJECT'
+        await loadProject(selectedProjectId.value)
+      } else {
+        keys.value = []
+        copyPolicy(null, 'PROJECT')
+      }
+    }
   } catch (error) { message.value = error instanceof Error ? error.message : '데이터 보호 설정을 불러오지 못했습니다.' }
   finally { busy.value = false }
 }
@@ -152,7 +195,7 @@ onMounted(() => { void load() })
         <article class="surface-card scope-list">
           <header class="card-header"><div><span class="card-kicker">POLICY SCOPES</span><h2>적용 범위</h2></div></header>
           <button v-if="platformAdmin" type="button" class="scope-item" :class="{ active: editorScope === 'PLATFORM' }" :aria-pressed="editorScope === 'PLATFORM'" @click="editPlatform"><span>플랫폼 전역</span><small>모든 조직의 최소 기준선</small></button>
-          <button type="button" class="scope-item" :class="{ active: editorScope === 'ORGANIZATION' }" :aria-pressed="editorScope === 'ORGANIZATION'" @click="editOrganization"><span>조직 기본</span><small>모든 프로젝트의 기본값</small></button>
+          <button v-if="isOrgOrPlatformAdmin" type="button" class="scope-item" :class="{ active: editorScope === 'ORGANIZATION' }" :aria-pressed="editorScope === 'ORGANIZATION'" @click="editOrganization"><span>조직 기본</span><small>모든 프로젝트의 기본값</small></button>
           <button v-for="project in projects" :key="project.id" type="button" class="scope-item" :class="{ active: editorScope === 'PROJECT' && selectedProjectId === project.id }" :aria-pressed="editorScope === 'PROJECT' && selectedProjectId === project.id" @click="selectProject(project.id)"><span>{{ project.name }}</span><small>프로젝트 · {{ project.status }}</small></button>
           <p v-if="!projects.length" class="empty-copy">관리 가능한 프로젝트가 없습니다.</p>
         </article>
@@ -161,14 +204,18 @@ onMounted(() => { void load() })
           <button v-for="key in keys" :key="key.id" type="button" class="key-item" :class="{ active: editorScope === 'API_KEY' && selectedKeyId === key.id }" :aria-pressed="editorScope === 'API_KEY' && selectedKeyId === key.id" @click="selectKey(key.id)"><span>{{ key.name }}</span><small>{{ key.keyPrefix }} · {{ key.status }}</small></button>
           <p v-if="!keys.length" class="empty-copy">이 프로젝트에 API 키가 없습니다.</p>
         </article>
-        <article class="surface-card service-list">
+        <article v-if="isOrgOrPlatformAdmin" class="surface-card service-list">
           <header class="card-header"><div><span class="card-kicker">AI FEATURE OVERRIDES</span><h2>AI 기능(서비스)별</h2></div><span class="count-badge">{{ services.length }}</span></header>
           <button v-for="service in services" :key="service.id" type="button" class="scope-item" :class="{ active: editorScope === 'SERVICE' && selectedServiceId === service.id }" :aria-pressed="editorScope === 'SERVICE' && selectedServiceId === service.id" @click="loadService(service.id)"><span>{{ service.displayName }}</span><small>{{ service.serviceKey }} · {{ service.enabled ? '활성' : '비활성' }}</small></button>
           <p v-if="!services.length" class="empty-copy">등록된 AI 기능이 없습니다.</p>
         </article>
       </div>
       <article class="surface-card protection-editor">
-        <div v-if="(editorScope === 'PROJECT' || editorScope === 'API_KEY') && projects.find(project => project.id === selectedProjectId)?.externalAiBlocked" class="project-boundary-notice" role="status"><strong>프로젝트 외부 AI 전송 금지 적용 중</strong><p>민감정보가 감지되지 않아도 로컬 Target만 사용합니다. 아래 설정을 OFF로 바꾸거나 외부 전송을 허용해도 프로젝트의 강제 제한은 해제되지 않습니다. 변경은 ‘프로젝트 & API 키 → 프로젝트 수정’에서 가능합니다.</p></div>
+        <div v-if="(editorScope === 'PROJECT' || editorScope === 'API_KEY') && selectedProject" class="project-boundary-notice" role="status">
+          <strong>적용 중인 데이터 경계 정책: {{ dataBoundaryLabel(activeBoundaryForEditor) }}</strong>
+          <p v-if="selectedProject.externalAiBlocked || activeBoundaryForEditor === 'INTERNAL_ONLY'">민감정보가 감지되지 않아도 사내 GPU Target만 사용합니다. 아래 DLP 설정을 OFF로 바꾸거나 외부 전송을 허용해도 상위 경계 제한은 해제되지 않습니다. 경계 정책 변경은 ‘프로젝트 & API 키’ 화면에서 설정할 수 있습니다.</p>
+          <p v-else>상위 계층(프로젝트 상한 {{ dataBoundaryLabel(selectedProject.maxDataBoundaryPolicy) }})과 교집합으로 평가됩니다. 하위 설정이 상위 경계를 완화할 수 없습니다.</p>
+        </div>
         <header class="card-header"><div><span class="card-kicker">{{ policyTitle(editorScope).toUpperCase() }}</span><h2>{{ policyTitle(editorScope) }}</h2><p>하위 범위에서 더 엄격하게 덮어쓸 수 있습니다.</p></div><span class="status-chip" :class="editor.mode === 'ENFORCE' ? 'unhealthy' : editor.mode === 'MONITOR' ? 'unknown' : 'healthy'">{{ editor.mode }}</span></header>
         <div class="preset-row" role="group" aria-label="보호 정책 프리셋">
           <button type="button" :class="{ active: editor.level === 'RELAXED' }" :aria-pressed="editor.level === 'RELAXED'" @click="applyPreset('RELAXED')"><strong>Relaxed</strong><small>기존 호환 동작</small></button>

@@ -141,6 +141,12 @@ public class RequestDiagnosticService {
                     "외부 Provider 요청에는 프로젝트 컨텍스트가 필요합니다. API 키가 속한 프로젝트와 외부 AI 권한을 확인하세요.");
             case "EXTERNAL_ACCESS_UNAVAILABLE" -> new RequestDiagnosticPayload.Recommendation(code, "외부 권한 서비스 확인",
                     "외부 AI 권한 정보를 조회할 수 없습니다. Gateway의 외부 Provider 설정과 데이터베이스 연결 상태를 확인하세요.");
+            case "EXTERNAL_PROVIDER_CAP_EXCEEDED" -> new RequestDiagnosticPayload.Recommendation(code, "외부 Provider 월 한도 확인",
+                    "프로젝트에 설정된 외부 Provider 월 비용 한도에 도달했습니다. 사용량 및 미정산 예약을 확인하고 필요 시 한도를 조정하세요.");
+            case "PROVIDER_CAP_CURRENCY_MISMATCH" -> new RequestDiagnosticPayload.Recommendation(code, "외부 Provider 한도 통화 일치 확인",
+                    "외부 Provider 월 비용 한도 통화(KRW/USD)와 대상 모델 단가 통화가 일치하지 않습니다. 묵시 환율은 적용되지 않으므로 통화를 일치시키세요.");
+            case "EXTERNAL_PROVIDER_CAP_RESERVATION_UNAVAILABLE" -> new RequestDiagnosticPayload.Recommendation(code, "외부 Provider 한도 통화 설정",
+                    "외부 Provider 월 한도 금액은 설정되었으나 통화(KRW/USD)가 미설정 상태입니다. 관리자 승인 설정에서 통화를 명시해 주세요.");
             case "EXTERNAL_PROVIDER_UNHEALTHY", "EXTERNAL_PROVIDER_DISABLED", "EXTERNAL_PROVIDER_MISSING" -> new RequestDiagnosticPayload.Recommendation(code, "외부 Provider 설정 확인",
                     "외부 Provider의 활성화 상태, API 연결 확인 결과와 등록된 모델 상태를 확인하세요.");
             case "COMPATIBILITY_MISMATCH" -> new RequestDiagnosticPayload.Recommendation(code, "호환성 Key 확인",

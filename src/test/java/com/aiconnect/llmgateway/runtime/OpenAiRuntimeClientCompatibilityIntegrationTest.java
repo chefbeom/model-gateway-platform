@@ -3,6 +3,7 @@ package com.aiconnect.llmgateway.runtime;
 import com.aiconnect.llmgateway.config.GatewayProperties;
 import com.aiconnect.llmgateway.domain.ExternalProvider;
 import com.aiconnect.llmgateway.domain.ExternalProviderType;
+import com.aiconnect.llmgateway.security.ExternalUrlSafetyValidator;
 import com.aiconnect.llmgateway.service.SecretCipher;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -41,7 +42,7 @@ class OpenAiRuntimeClientCompatibilityIntegrationTest {
             ExternalProvider provider = new ExternalProvider(UUID.randomUUID(), ExternalProviderType.OPENAI,
                     "Test provider", "http://127.0.0.1:" + providerServer.getAddress().getPort() + "/v1",
                     cipher.encrypt("provider-secret"));
-            OpenAiRuntimeClient client = new OpenAiRuntimeClient(RestClient.builder().build(), objectMapper, cipher);
+            OpenAiRuntimeClient client = new OpenAiRuntimeClient(RestClient.builder().build(), objectMapper, cipher, new ExternalUrlSafetyValidator(true));
             ObjectNode request = (ObjectNode) objectMapper.readTree("""
                     {"model":"provider-model","messages":[],"max_tokens":4096}
                     """);
@@ -79,7 +80,7 @@ class OpenAiRuntimeClientCompatibilityIntegrationTest {
             ExternalProvider provider = new ExternalProvider(UUID.randomUUID(), ExternalProviderType.OPENAI,
                     "Test provider", "http://127.0.0.1:" + providerServer.getAddress().getPort() + "/v1",
                     cipher.encrypt("provider-secret"));
-            OpenAiRuntimeClient client = new OpenAiRuntimeClient(RestClient.builder().build(), objectMapper, cipher);
+            OpenAiRuntimeClient client = new OpenAiRuntimeClient(RestClient.builder().build(), objectMapper, cipher, new ExternalUrlSafetyValidator(true));
             ObjectNode request = (ObjectNode) objectMapper.readTree("""
                     {"model":"gpt-5.6-luna","messages":[],"temperature":1,"top_p":0.9}
                     """);
@@ -116,7 +117,7 @@ class OpenAiRuntimeClientCompatibilityIntegrationTest {
             ExternalProvider provider = new ExternalProvider(UUID.randomUUID(), ExternalProviderType.OPENAI,
                     "Test provider", "http://127.0.0.1:" + providerServer.getAddress().getPort() + "/v1",
                     cipher.encrypt("provider-secret"));
-            OpenAiRuntimeClient client = new OpenAiRuntimeClient(RestClient.builder().build(), objectMapper, cipher);
+            OpenAiRuntimeClient client = new OpenAiRuntimeClient(RestClient.builder().build(), objectMapper, cipher, new ExternalUrlSafetyValidator(true));
             ObjectNode request = (ObjectNode) objectMapper.readTree("""
                     {"model":"gpt-5.6-sol","messages":[],"reasoning_effort":"high","service_tier":"fast"}
                     """);

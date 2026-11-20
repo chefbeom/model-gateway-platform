@@ -2,6 +2,7 @@ package com.aiconnect.llmgateway.web;
 
 import com.aiconnect.llmgateway.gateway.StreamingChatCompletionGateway;
 import com.aiconnect.llmgateway.gateway.StreamingGatewayResult;
+import com.aiconnect.llmgateway.quota.SpendQuotaContext;
 import com.aiconnect.llmgateway.quota.SpendQuotaService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -19,6 +20,7 @@ import java.io.IOException;
 import java.util.UUID;
 import java.io.InputStream;
 import jakarta.servlet.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import com.aiconnect.llmgateway.scheduling.GatewaySchedulingSupport;
@@ -58,11 +60,16 @@ public class StreamingChatFilter extends OncePerRequestFilter {
             filterChain.doFilter(new BufferedBodyRequest(request, raw), response);
             return;
         }
+        SpendQuotaService.Reservation ownReservation = null;
+        SpendQuotaService.Reservation previousBinding = null;
+        boolean bound = false;
         try {
-            // SpendQuotaFilter normally performs this check first. The explicit guard is needed because
-            // this streaming filter may terminate the chain before later filters are invoked.
+            // SpendQuotaFilter normally performs this reservation first. The explicit guard is needed
+            // when this streaming filter is invoked without SpendQuotaFilter in the chain.
             if (request.getAttribute("aiconnect.spendQuotaChecked") == null) {
-                spendQuota.check(request.getHeader(HttpHeaders.AUTHORIZATION), object);
+                ownReservation = spendQuota.reserve(request.getHeader(HttpHeaders.AUTHORIZATION), object);
+                previousBinding = SpendQuotaContext.bind(ownReservation);
+                bound = true;
                 request.setAttribute("aiconnect.spendQuotaChecked", Boolean.TRUE);
             }
             String logicalModel = object.path("model").asText();
@@ -104,6 +111,22 @@ public class StreamingChatFilter extends OncePerRequestFilter {
             String requestId = UUID.randomUUID().toString();
             response.setHeader("X-Request-Id", requestId);
             objectMapper.writeValue(response.getOutputStream(), OpenAiError.of(exception.getMessage(), "invalid_request_error", exception.getCode(), requestId));
+        } finally {
+            if (bound) {
+                SpendQuotaContext.restore(previousBinding);
+            }
+            if (ownReservation != null) {
+                SpendQuotaService.Reservation held = ownReservation;
+                AtomicBoolean released = new AtomicBoolean();
+                Runnable release = () -> {
+                    if (released.compareAndSet(false, true)) {
+                        try { spendQuota.releaseIfStillActive(held); } catch (RuntimeException ignored) { }
+                    }
+                };
+                Object lifecycle = request.getAttribute("aiconnect.executionDone");
+                if (lifecycle instanceof CompletableFuture<?> done) done.whenComplete((value, error) -> release.run());
+                else release.run();
+            }
         }
     }
     private void writeResult(HttpServletResponse response,StreamingGatewayResult result,String logicalModel) throws IOException {

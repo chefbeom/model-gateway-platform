@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 
@@ -20,6 +21,7 @@ import java.util.UUID;
 public class IdentityService {
     private static final SecureRandom RANDOM = new SecureRandom();
     static final String DEFAULT_WORKSPACE_NAME = "Default Workspace";
+
     private final AppUserRepository users;
     private final OrganizationRepository organizations;
     private final OrganizationMemberRepository members;
@@ -27,58 +29,149 @@ public class IdentityService {
     private final PasswordEncoder passwordEncoder;
     private final AccessTokenService accessTokens;
     private final AuthProperties properties;
+    private final TotpService totpService;
 
     public IdentityService(AppUserRepository users, OrganizationRepository organizations, OrganizationMemberRepository members,
-                           AuthRefreshTokenRepository refreshTokens, PasswordEncoder passwordEncoder, AccessTokenService accessTokens, AuthProperties properties) {
-        this.users = users; this.organizations = organizations; this.members = members; this.refreshTokens = refreshTokens;
-        this.passwordEncoder = passwordEncoder; this.accessTokens = accessTokens; this.properties = properties;
+                           AuthRefreshTokenRepository refreshTokens, PasswordEncoder passwordEncoder,
+                           AccessTokenService accessTokens, AuthProperties properties, TotpService totpService) {
+        this.users = users;
+        this.organizations = organizations;
+        this.members = members;
+        this.refreshTokens = refreshTokens;
+        this.passwordEncoder = passwordEncoder;
+        this.accessTokens = accessTokens;
+        this.properties = properties;
+        this.totpService = totpService;
     }
+
     @Transactional
     public AppUser bootstrap(String email, String password) {
         if (users.count() != 0) throw new ApiException(HttpStatus.CONFLICT, "BOOTSTRAP_ALREADY_COMPLETED", "The first platform administrator already exists.");
-        AppUser administrator = users.save(new AppUser(email, passwordEncoder.encode(password), true));
+        AppUser administrator = users.save(new AppUser(email, passwordEncoder.encode(password), true, AccountTier.SYSTEM_ADMIN, null));
         Organization workspace = organizations.findByName(DEFAULT_WORKSPACE_NAME)
                 .orElseGet(() -> organizations.save(new Organization(DEFAULT_WORKSPACE_NAME)));
         members.save(new OrganizationMember(workspace.getId(), administrator.getId(), OrganizationRole.ORGANIZATION_ADMIN));
         return administrator;
     }
+
     @Transactional
     public AppUser createUser(String email, String password, boolean platformAdmin) {
+        return createUser(email, password, platformAdmin,
+                platformAdmin ? AccountTier.SYSTEM_ADMIN : AccountTier.GENERAL_USER, null);
+    }
+
+    @Transactional
+    public AppUser createUser(String email, String password, boolean platformAdmin, AccountTier accountTier, UUID invitedByUserId) {
         String normalized = normalize(email);
         if (users.existsByEmail(normalized)) throw new ApiException(HttpStatus.CONFLICT, "EMAIL_ALREADY_EXISTS", "A user with that email already exists.");
-        return users.save(new AppUser(normalized, passwordEncoder.encode(password), platformAdmin));
+        AccountTier resolvedTier = platformAdmin ? AccountTier.SYSTEM_ADMIN : (accountTier == null ? AccountTier.GENERAL_USER : accountTier);
+        return users.save(new AppUser(normalized, passwordEncoder.encode(password), platformAdmin, resolvedTier, invitedByUserId));
     }
+
     @Transactional
     public OrganizationMember grantMembership(UUID organizationId, UUID userId, OrganizationRole role) {
         if (!organizations.existsById(organizationId)) throw new ApiException(HttpStatus.NOT_FOUND, "ORGANIZATION_NOT_FOUND", "The organization does not exist.");
-        if (!users.existsById(userId)) throw new ApiException(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", "The user does not exist.");
+        AppUser user = users.findById(userId).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", "The user does not exist."));
+        if (role == OrganizationRole.ORGANIZATION_ADMIN && !user.isPlatformAdmin() && user.getAccountTier() != AccountTier.PROJECT_DIRECTOR) {
+            user.promoteToProjectDirector();
+            users.save(user);
+        }
         return members.save(new OrganizationMember(organizationId, userId, role));
     }
-    @Transactional
+
+    @Transactional(noRollbackFor = ApiException.class)
     public Session login(String email, String password) {
-        AppUser user = users.findByEmail(normalize(email)).orElseThrow(() -> invalidCredentials());
-        if (!user.isEnabled() || !passwordEncoder.matches(password, user.getPasswordHash())) throw invalidCredentials();
-        return issueSession(user);
+        return login(email, password, null, null);
     }
+
+    @Transactional(noRollbackFor = ApiException.class)
+    public Session login(String email, String password, String totpCode, String recoveryCode) {
+        AppUser user = users.findByEmail(normalize(email)).orElseThrow(this::invalidCredentials);
+        if (!user.isEnabled() || !passwordEncoder.matches(password, user.getPasswordHash())) throw invalidCredentials();
+
+        String suppliedCode = (totpCode != null && !totpCode.isBlank()) ? totpCode
+                : (recoveryCode != null && !recoveryCode.isBlank() ? recoveryCode : null);
+        boolean mfaVerified = false;
+        if (user.isTotpEnabled() && suppliedCode != null) {
+            totpService.verify(user.getId(), suppliedCode);
+            mfaVerified = true;
+            user = users.findById(user.getId()).orElse(user);
+        }
+        return issueSession(user, mfaVerified);
+    }
+
+    @Transactional
+    public Session issueInitialSession(AppUser user) {
+        return issueSession(user, false);
+    }
+
+    @Transactional(noRollbackFor = ApiException.class)
+    public EnrollmentResult enrollTotp(UUID userId, UUID sessionId, String code) {
+        AuthRefreshToken currentSession = requireUsableSessionForUpdate(userId, sessionId);
+        List<String> recoveryCodes = totpService.enroll(userId, code);
+        AppUser user = getUser(userId);
+        currentSession.revoke();
+        refreshTokens.save(currentSession);
+        Session upgraded = issueSession(user, true);
+        return new EnrollmentResult(upgraded, recoveryCodes);
+    }
+
+    @Transactional(noRollbackFor = ApiException.class)
+    public Session verifyTotp(UUID userId, UUID sessionId, String code) {
+        AuthRefreshToken currentSession = requireUsableSessionForUpdate(userId, sessionId);
+        totpService.verify(userId, code);
+        AppUser user = getUser(userId);
+        currentSession.revoke();
+        refreshTokens.save(currentSession);
+        return issueSession(user, true);
+    }
+
     @Transactional
     public Session refresh(String rawToken) {
         AuthRefreshToken token = refreshTokens.findByTokenHashForUpdate(hashRefresh(rawToken)).orElseThrow(this::invalidCredentials);
         if (!token.isUsable(Instant.now())) throw invalidCredentials();
         AppUser user = users.findById(token.getUserId()).orElseThrow(this::invalidCredentials);
         if (!user.isEnabled()) throw invalidCredentials();
+        boolean preserveMfaVerified = user.isTotpEnabled() && token.isMfaVerified();
         token.revoke();
-        return issueSession(user);
+        return issueSession(user, preserveMfaVerified);
     }
+
     @Transactional
     public void logout(String rawToken) {
         refreshTokens.findByTokenHashForUpdate(hashRefresh(rawToken)).ifPresent(AuthRefreshToken::revoke);
     }
-    public AppUser getUser(UUID userId) { return users.findById(userId).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", "The user does not exist.")); }
-    private Session issueSession(AppUser user) {
-        String rawRefresh = randomHex(48);
-        AuthRefreshToken session = refreshTokens.save(new AuthRefreshToken(user.getId(), hashRefresh(rawRefresh), Instant.now().plusSeconds(properties.refreshTokenSeconds())));
-        return new Session(accessTokens.issue(user, session.getId()), rawRefresh, user);
+
+    public AppUser getUser(UUID userId) {
+        return users.findById(userId).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", "The user does not exist."));
     }
+
+    private AuthRefreshToken requireUsableSessionForUpdate(UUID userId, UUID sessionId) {
+        if (userId == null || sessionId == null) {
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "AUTH_REQUIRED", "An authenticated session is required.");
+        }
+        AuthRefreshToken session = refreshTokens.findByIdForUpdate(sessionId)
+                .filter(item -> item.isUsable(Instant.now()) && item.getUserId().equals(userId))
+                .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_ACCESS_TOKEN", "The session is unavailable."));
+        AppUser user = users.findById(userId).filter(AppUser::isEnabled)
+                .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_ACCESS_TOKEN", "The account is unavailable."));
+        if (!user.isEnabled()) {
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_ACCESS_TOKEN", "The account is unavailable.");
+        }
+        return session;
+    }
+
+    private Session issueSession(AppUser user, boolean mfaVerified) {
+        String rawRefresh = randomHex(48);
+        AuthRefreshToken session = refreshTokens.save(new AuthRefreshToken(
+                user.getId(),
+                hashRefresh(rawRefresh),
+                Instant.now().plusSeconds(properties.refreshTokenSeconds()),
+                mfaVerified
+        ));
+        return new Session(accessTokens.issue(user, session.getId(), mfaVerified), rawRefresh, user, mfaVerified);
+    }
+
     private String hashRefresh(String value) {
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
@@ -88,8 +181,17 @@ public class IdentityService {
             throw new IllegalStateException("Could not hash refresh token", exception);
         }
     }
+
     private String randomHex(int bytes) { byte[] data = new byte[bytes]; RANDOM.nextBytes(data); return HexFormat.of().formatHex(data); }
     private String normalize(String email) { return email.trim().toLowerCase(Locale.ROOT); }
     private ApiException invalidCredentials() { return new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS", "The email or password is invalid."); }
-    public record Session(String accessToken, String refreshToken, AppUser user) { }
+
+    public record Session(String accessToken, String refreshToken, AppUser user, boolean mfaVerified) {
+        public String mfaState() {
+            if (!user.isTotpEnabled()) return "ENROLLMENT_REQUIRED";
+            return mfaVerified ? "VERIFIED" : "VERIFICATION_REQUIRED";
+        }
+    }
+
+    public record EnrollmentResult(Session session, List<String> recoveryCodes) { }
 }

@@ -3,6 +3,7 @@ package com.aiconnect.llmgateway.routing;
 import com.aiconnect.llmgateway.domain.*;
 import com.aiconnect.llmgateway.external.ProjectExternalAccessService;
 import com.aiconnect.llmgateway.repository.*;
+import com.aiconnect.llmgateway.security.RuntimeTrustPolicy;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -15,6 +16,7 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
 import java.util.Map;
+import java.time.Instant;
 
 @Service
 public class RoutingService {
@@ -26,6 +28,8 @@ public class RoutingService {
     private final ActiveRequestRegistry activeRequests;
     private final WeightedTargetSelector weightedSelector;
     private final ObjectMapper objectMapper;
+    @org.springframework.beans.factory.annotation.Autowired
+    private RuntimeTrustPolicy runtimeTrust;
 
     @org.springframework.beans.factory.annotation.Autowired
     public RoutingService(ServiceTargetRepository targets, ModelDeploymentRepository deployments,
@@ -77,16 +81,17 @@ public class RoutingService {
         boolean degradedAllowed = service.isAllowDegraded() || service.getFailoverPolicy() == FailoverPolicy.DEGRADED;
         boolean localConfigured = configured.stream()
                 .map(target -> deployments.findById(target.getDeploymentId()).orElse(null))
-                .anyMatch(deployment -> deployment != null && !deployment.isExternal());
-        boolean blockExternal = !constraint.externalAllowed() || (localConfigured && !constraint.externalFailoverAllowed());
+                .anyMatch(this::isConfiguredLocalOrUnknown);
+        boolean blockExternalApi = !constraint.externalApiAllowed() || (localConfigured && !constraint.externalFailoverAllowed());
+        boolean blockExternalRuntime = !constraint.externalNoRetentionGpuAllowed() || (localConfigured && !constraint.externalFailoverAllowed());
         // A prohibited external primary must not become the STRICT reference and
         // make otherwise usable local models ineligible.
         String strictCompatibilityKey = service.getFailoverPolicy() == FailoverPolicy.STRICT
-                ? referenceCompatibilityKey(configured, degradedAllowed, blockExternal) : null;
+                ? referenceCompatibilityKey(configured, degradedAllowed, blockExternalApi, blockExternalRuntime) : null;
         boolean serviceHasLocalTargets = configured.stream()
                 .filter(ServiceTarget::isEnabled)
                 .map(target -> deployments.findById(target.getDeploymentId()).orElse(null))
-                .anyMatch(deployment -> deployment != null && deployment.isEnabled() && !deployment.isExternal());
+                .anyMatch(deployment -> deployment != null && deployment.isEnabled() && isConfiguredLocalOrUnknown(deployment));
 
         List<ResolvedTarget> local = new ArrayList<>();
         List<ResolvedTarget> external = new ArrayList<>();
@@ -115,6 +120,7 @@ public class RoutingService {
             ExternalProvider provider = null;
             Integer activeCount = null;
             int limit = 0;
+            boolean externalRuntime = false;
 
             if (!target.isEnabled()) reasons.add("TARGET_DISABLED");
             if (target.isDegraded() && !degradedAllowed) reasons.add("DEGRADED_NOT_ALLOWED");
@@ -132,9 +138,9 @@ public class RoutingService {
             }
 
             if (deployment != null && deployment.isExternal()) {
-                if (blockExternal) {
-                    reasons.add(!constraint.externalAllowed() ? "DATA_PROTECTION_EXTERNAL_BLOCKED" : "DATA_PROTECTION_EXTERNAL_FAILOVER_BLOCKED");
-                    if (constraint.reasons().contains("PROJECT_EXTERNAL_AI_BLOCKED")) reasons.add("PROJECT_EXTERNAL_AI_BLOCKED");
+                if (blockExternalApi) {
+                    reasons.add(!constraint.externalApiAllowed() ? "DATA_PROTECTION_EXTERNAL_BLOCKED" : "DATA_PROTECTION_EXTERNAL_FAILOVER_BLOCKED");
+                    addBoundaryReasons(reasons, constraint, true);
                     provider = providers == null ? null : providers.findById(deployment.getExternalProviderId()).orElse(null);
                 } else if (providers == null || externalAccess == null) reasons.add("EXTERNAL_ACCESS_UNAVAILABLE");
                 else {
@@ -149,7 +155,11 @@ public class RoutingService {
                             boolean allowed = serviceHasLocalTargets
                                     ? externalAccess.allowsAutoFailover(projectId, provider.getId())
                                     : externalAccess.allowsManual(projectId, provider.getId());
-                            if (!allowed) reasons.add(serviceHasLocalTargets ? "EXTERNAL_AUTO_FAILOVER_NOT_ALLOWED" : "EXTERNAL_MANUAL_ACCESS_NOT_ALLOWED");
+                            if (!allowed) {
+                                reasons.add(serviceHasLocalTargets ? "EXTERNAL_AUTO_FAILOVER_NOT_ALLOWED" : "EXTERNAL_MANUAL_ACCESS_NOT_ALLOWED");
+                                if (externalAccess.hasUnenforcedMonthlyLimit(projectId, provider.getId()))
+                                    reasons.add("EXTERNAL_PROVIDER_CAP_RESERVATION_UNAVAILABLE");
+                            }
                         }
                     }
                 }
@@ -158,6 +168,17 @@ public class RoutingService {
                         : endpoints.findById(deployment.getRuntimeEndpointId()).orElse(null);
                 if (endpoint == null) reasons.add("ENDPOINT_MISSING");
                 else {
+                    Instant now = Instant.now();
+                    externalRuntime = runtimeTrust != null && !runtimeTrust.isInternal(endpoint, now);
+                    if (externalRuntime) providerType = "EXTERNAL_RUNTIME";
+                    String trustDenial = runtimeTrust == null ? "RUNTIME_TRUST_UNAVAILABLE"
+                            : runtimeTrust.denialReason(endpoint, now, projectId, !blockExternalRuntime, serviceHasLocalTargets);
+                    if (trustDenial != null) {
+                        reasons.add(trustDenial);
+                        if (externalRuntime && blockExternalRuntime) {
+                            addBoundaryReasons(reasons, constraint, false);
+                        }
+                    }
                     if (!endpoint.isEnabled()) reasons.add("ENDPOINT_DISABLED");
                     if (!includeBusy && activeRequests.runtimeCount(endpoint.getId()) >= endpoint.getMaxConcurrentRequests()) reasons.add("RUNTIME_CONCURRENCY_LIMIT_REACHED");
                     if (endpoint.getHealthStatus() != HealthStatus.HEALTHY) reasons.add(switch (endpoint.getHealthStatus()) {
@@ -181,7 +202,9 @@ public class RoutingService {
             if (!eligible) continue;
             if (deployment.isExternal()) {
                 external.add(new ResolvedTarget(target, deployment, null, provider, limit, serviceHasLocalTargets ? "AUTO_FAILOVER" : "MANUAL_EXTERNAL"));
-            } else local.add(new ResolvedTarget(target, deployment, endpoint, null, limit, "LOCAL"));
+            } else if (externalRuntime) external.add(new ResolvedTarget(target, deployment, endpoint, null, limit,
+                    serviceHasLocalTargets ? "AUTO_FAILOVER" : "MANUAL_EXTERNAL"));
+            else local.add(new ResolvedTarget(target, deployment, endpoint, null, limit, "LOCAL"));
         }
 
         List<ResolvedTarget> ordered = new ArrayList<>(weightedSelector.order(local));
@@ -205,13 +228,45 @@ public class RoutingService {
         return evaluateInternal(service, capabilities, project, targets.findByServiceIdOrderByPriorityAsc(service.getId()), constraint, true);
     }
 
-    private String referenceCompatibilityKey(List<ServiceTarget> configured, boolean degradedAllowed, boolean localOnly) {
+    private void addBoundaryReasons(List<String> reasons, RoutingConstraint constraint, boolean includeExternalApiReason) {
+        for (String code : List.of("PROJECT_EXTERNAL_AI_BLOCKED", "SERVICE_DATA_BOUNDARY_RESTRICTED", "API_KEY_DATA_BOUNDARY_RESTRICTED")) {
+            if (constraint.reasons().contains(code) && !reasons.contains(code)) {
+                reasons.add(code);
+            }
+        }
+        if (includeExternalApiReason && constraint.reasons().contains("EXTERNAL_API_BLOCKED_BY_BOUNDARY")
+                && !reasons.contains("EXTERNAL_API_BLOCKED_BY_BOUNDARY")) {
+            reasons.add("EXTERNAL_API_BLOCKED_BY_BOUNDARY");
+        }
+    }
+
+    private String referenceCompatibilityKey(List<ServiceTarget> configured, boolean degradedAllowed,
+                                             boolean blockExternalApi, boolean blockExternalRuntime) {
         for (ServiceTarget target : configured) {
             if (!target.isEnabled() || (target.isDegraded() && !degradedAllowed)) continue;
             ModelDeployment deployment = deployments.findById(target.getDeploymentId()).orElse(null);
-            if (deployment != null && deployment.isEnabled() && (!localOnly || !deployment.isExternal())) return deployment.getCompatibilityKey();
+            if (deployment == null || !deployment.isEnabled()) continue;
+            if (deployment.isExternal()) {
+                if (blockExternalApi) continue;
+                return deployment.getCompatibilityKey();
+            }
+            if (!blockExternalRuntime || isTrustedInternalDeployment(deployment)) {
+                return deployment.getCompatibilityKey();
+            }
         }
         return null;
+    }
+
+    private boolean isTrustedInternalDeployment(ModelDeployment deployment) {
+        if (deployment == null || deployment.isExternal() || deployment.getRuntimeEndpointId() == null || runtimeTrust == null) return false;
+        return endpoints.findById(deployment.getRuntimeEndpointId())
+                .map(endpoint -> runtimeTrust.isInternal(endpoint, Instant.now())).orElse(false);
+    }
+    private boolean isConfiguredLocalOrUnknown(ModelDeployment deployment) {
+        if (deployment == null || deployment.isExternal()) return false;
+        if (deployment.getRuntimeEndpointId() == null || runtimeTrust == null) return true;
+        return endpoints.findById(deployment.getRuntimeEndpointId())
+                .map(endpoint -> !runtimeTrust.isVerifiedExternal(endpoint, Instant.now())).orElse(true);
     }
 
     private boolean hasLoadedReplacement(ModelDeployment deployment) {

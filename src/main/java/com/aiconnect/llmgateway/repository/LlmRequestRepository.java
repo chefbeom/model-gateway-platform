@@ -1,5 +1,6 @@
 package com.aiconnect.llmgateway.repository;
 
+import com.aiconnect.llmgateway.domain.Currency;
 import com.aiconnect.llmgateway.domain.LlmRequest;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -40,4 +41,18 @@ public interface LlmRequestRepository extends JpaRepository<LlmRequest, UUID> {
     BigDecimal sumCostByProjectAndDeploymentsSince(@Param("projectId") UUID projectId,
                                                    @Param("deploymentIds") Collection<UUID> deploymentIds,
                                                    @Param("from") Instant from);
+
+    @Query("""
+            select coalesce(sum(r.estimatedCost), 0)
+            from LlmRequest r
+            where r.projectId = :projectId
+              and r.finalDeploymentId in :deploymentIds
+              and r.costCurrency = :currency
+              and r.estimatedCost is not null
+              and r.startedAt >= :from
+            """)
+    BigDecimal sumEstimatedCostByProjectAndDeploymentsAndCurrencySince(@Param("projectId") UUID projectId,
+                                                                       @Param("deploymentIds") Collection<UUID> deploymentIds,
+                                                                       @Param("currency") Currency currency,
+                                                                       @Param("from") Instant from);
 }

@@ -8,6 +8,7 @@ import com.aiconnect.llmgateway.repository.*;
 import com.aiconnect.llmgateway.runtime.OpenAiRuntimeClient;
 import com.aiconnect.llmgateway.runtime.RuntimeResult;
 import com.aiconnect.llmgateway.runtime.RuntimeUnavailableException;
+import com.aiconnect.llmgateway.security.ExternalUrlSafetyValidator;
 import com.aiconnect.llmgateway.service.SecretCipher;
 import com.aiconnect.llmgateway.web.ApiException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -33,6 +34,7 @@ public class ExternalProviderAdministrationService {
     private final OrganizationRepository organizations;
     private final SecretCipher cipher;
     private final OpenAiRuntimeClient client;
+    private final ExternalUrlSafetyValidator urlSafetyValidator;
     private final ObjectMapper objectMapper;
     private final AuditService audit;
     private final EntityManager entityManager;
@@ -41,6 +43,7 @@ public class ExternalProviderAdministrationService {
             ModelDeploymentRepository deployments, ServiceTargetRepository targets,
             ProjectExternalAccessRepository externalAccess, LlmRequestRepository requests,
             OrganizationRepository organizations, SecretCipher cipher, OpenAiRuntimeClient client,
+            ExternalUrlSafetyValidator urlSafetyValidator,
             ObjectMapper objectMapper, AuditService audit, EntityManager entityManager) {
         this.providers = providers;
         this.deployments = deployments;
@@ -50,6 +53,7 @@ public class ExternalProviderAdministrationService {
         this.organizations = organizations;
         this.cipher = cipher;
         this.client = client;
+        this.urlSafetyValidator = urlSafetyValidator;
         this.objectMapper = objectMapper;
         this.audit = audit;
         this.entityManager = entityManager;
@@ -152,6 +156,14 @@ public class ExternalProviderAdministrationService {
         RuntimeResult result;
         try {
             result = client.listModels(provider);
+        } catch (ApiException exception) {
+            long latency = (System.nanoTime() - started) / 1_000_000;
+            provider.recordHealth(false);
+            providers.save(provider);
+            audit.record(provider.getOrganizationId(), CurrentActor.userIdOrNull(), "EXTERNAL_PROVIDER_PROBED", "EXTERNAL_PROVIDER",
+                    provider.getId(), Map.of("healthy", false, "httpStatus", exception.getStatus().value(),
+                            "latencyMs", latency, "failureCode", exception.getCode()));
+            throw exception;
         } catch (RuntimeUnavailableException exception) {
             long latency = (System.nanoTime() - started) / 1_000_000;
             provider.recordHealth(false);
@@ -435,16 +447,8 @@ public class ExternalProviderAdministrationService {
     }
     private Integer intOrNull(JsonNode node, String field) { return node.hasNonNull(field) && node.get(field).canConvertToInt() ? node.get(field).asInt() : null; }
     private String normalizeBaseUrl(String value) {
-        String normalized = value == null || value.isBlank() ? "https://api.openai.com/v1" : value.trim();
-        normalized = normalized.replaceAll("/+$", "");
-        try {
-            java.net.URI uri = java.net.URI.create(normalized);
-            if (uri.getHost() == null || uri.getUserInfo() != null || uri.getQuery() != null || uri.getFragment() != null
-                    || !("https".equalsIgnoreCase(uri.getScheme()) || "http".equalsIgnoreCase(uri.getScheme()))) throw new IllegalArgumentException();
-            return normalized;
-        } catch (IllegalArgumentException ex) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_PROVIDER_BASE_URL", "Provider URL must be an absolute HTTP(S) URL without credentials, query or fragment.");
-        }
+        String candidate = value == null || value.isBlank() ? "https://api.openai.com/v1" : value;
+        return urlSafetyValidator.validateAndNormalizeBaseUrl(candidate);
     }
     private String requireText(String value, String code, String message) { if (value == null || value.isBlank()) throw new ApiException(HttpStatus.BAD_REQUEST, code, message); return value.trim(); }
     private ExternalProvider requireProvider(UUID id) { return providers.findById(id).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "EXTERNAL_PROVIDER_NOT_FOUND", "The external provider does not exist.")); }

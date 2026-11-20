@@ -1,28 +1,26 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import BaseModal from './BaseModal.vue'
-import { adminFetch, type AdminAuth } from './api'
+import {
+  adminFetch,
+  createProjectSpendQuota,
+  deleteProjectSpendQuota,
+  listProjectSpendQuotas,
+  resolveOrgAdminAccess,
+  updateProjectSpendQuota,
+  type AdminAuth,
+  type Currency,
+  type ProjectQuotaView,
+  type ProjectSpendQuotaOverview,
+  type SpendQuotaPeriod,
+  type SpendQuotaScopeType,
+  type SpendQuotaView
+} from './api'
 import { buildUsageCalendar, buildUsageChart, formatSpend, type UsageCalendarCell, type UsageMetric } from './quotaVisualization'
 
-type ScopeType = 'ORGANIZATION' | 'TEAM' | 'PROJECT' | 'API_KEY'
-type Currency = 'KRW' | 'USD'
-type Period = 'MONTHLY' | 'DAILY' | 'TOTAL'
-type Quota = {
-  id: string
-  name: string
-  scopeType: ScopeType
-  scopeId?: string | null
-  scopeLabel?: string | null
-  currency: Currency
-  limitAmount: number
-  usedAmount: number
-  usagePercent: number
-  period: Period
-  periodFrom?: string | null
-  periodTo?: string | null
-  enabled: boolean
-  exceeded: boolean
-}
+type ScopeType = SpendQuotaScopeType
+type Period = SpendQuotaPeriod
+type Quota = SpendQuotaView
 type SeriesPoint = { date: string; amount: number; requestCount: number; inputTokens: number; outputTokens: number; currency?: Currency; byCurrency?: Record<string, number> }
 type Breakdown = { id?: string; label: string; requestCount: number; amount: number; currency: Currency; inputTokens: number; outputTokens: number; byCurrency?: Record<string, number> }
 type Overview = {
@@ -35,9 +33,21 @@ type Overview = {
   periodFrom?: string | null
   periodTo?: string | null
 }
+type DirectorProject = { id: string; name: string; status: string }
+type ProjectKeyOption = { id: string; name: string; keyPrefix?: string; status?: string }
 
-const props = defineProps<{ organizationId: string; auth: AdminAuth }>()
+const props = defineProps<{ organizationId: string; auth: AdminAuth; platformAdmin?: boolean; orgAdmin?: boolean }>()
+const isOrgOrPlatformAdmin = computed(() => resolveOrgAdminAccess(props.auth, props.platformAdmin, props.orgAdmin))
+
 const overview = ref<Overview | null>(null)
+const directorProjects = ref<DirectorProject[]>([])
+const selectedProjectId = ref('')
+const projectKeys = ref<ProjectKeyOption[]>([])
+const projectQuota = ref<ProjectQuotaView | null>(null)
+const projectSpendOverview = ref<ProjectSpendQuotaOverview | null>(null)
+const projectQuotaForm = ref({ requestsPerMinute: 60, monthlyTokenLimit: null as number | null })
+const projectQuotaModalOpen = ref(false)
+
 const busy = ref(false)
 const modalOpen = ref(false)
 const editingId = ref<string | null>(null)
@@ -52,6 +62,33 @@ const message = ref('요금 한도와 기간별 사용량을 불러오는 중입
 const form = ref({ name: '', scopeType: 'ORGANIZATION' as ScopeType, scopeId: '', currency: 'KRW' as Currency, limitAmount: 100000, period: 'MONTHLY' as Period, enabled: true })
 type ScopeOption = { id: string; scopeType: Exclude<ScopeType, 'ORGANIZATION'>; label: string; description: string }
 const scopeOptions = ref<ScopeOption[]>([])
+
+const directorCeilings = computed(() => {
+  const list = projectSpendOverview.value?.ceilings ?? []
+  const flagged = (projectSpendOverview.value?.quotas ?? []).filter(item => item.adminCeiling)
+  const seen = new Set(list.map(item => item.id))
+  return [...list, ...flagged.filter(item => !seen.has(item.id))]
+})
+const directorSubQuotas = computed(() =>
+  (projectSpendOverview.value?.quotas ?? []).filter(item => !item.adminCeiling)
+)
+const applicableDirectorCeiling = computed(() => {
+  const matches = directorCeilings.value.filter(ceiling =>
+    ceiling.enabled
+    && ceiling.currency === form.value.currency
+    && ceiling.period === form.value.period
+    && (ceiling.scopeType === 'ORGANIZATION'
+      || ceiling.scopeType === 'TEAM'
+      || ceiling.scopeType === 'PROJECT'
+      || (form.value.scopeType === 'API_KEY' && ceiling.scopeType === 'API_KEY' && ceiling.scopeId === form.value.scopeId))
+  )
+  if (!matches.length) return null
+  return matches.reduce((min, cur) => (cur.limitAmount < min.limitAmount ? cur : min), matches[0])
+})
+const directorLimitExceedsCeiling = computed(() => {
+  if (isOrgOrPlatformAdmin.value || !applicableDirectorCeiling.value) return false
+  return Number(form.value.limitAmount) > Number(applicableDirectorCeiling.value.limitAmount)
+})
 
 function money(value: number | null | undefined, currency: Currency = 'KRW') {
   return formatSpend(value, currency)
@@ -80,7 +117,7 @@ function queryString() {
 }
 type RawUsage = { requestCount?: number; succeeded?: number; failed?: number; inputTokens?: number; outputTokens?: number; costByCurrency?: Record<string, number> }
 type RawDimension = { id: string; name: string; usage?: RawUsage }
-type RawQuota = { id: string; organizationId: string; scopeType: ScopeType; scopeId?: string | null; name: string; currency: Currency; limitAmount: number; usedAmount?: number; usagePercent?: number; period: Period; periodFrom?: string | null; periodTo?: string | null; enabled: boolean; exceeded?: boolean; scopeLabel?: string | null }
+type RawQuota = { id: string; organizationId: string; scopeType: ScopeType; scopeId?: string | null; name: string; currency: Currency; limitAmount: number; usedAmount?: number; usagePercent?: number; period: Period; periodFrom?: string | null; periodTo?: string | null; enabled: boolean; adminCeiling?: boolean; exceeded?: boolean; scopeLabel?: string | null }
 type RawOverview = { organizationId: string; from?: string; to?: string; total?: RawUsage; series?: Array<{ date: string; usage?: RawUsage }>; byProject?: RawDimension[]; byTeam?: RawDimension[]; byApiKey?: RawDimension[]; quotas?: RawQuota[] }
 function sumCurrency(map?: Record<string, number>) { return Object.values(map ?? {}).reduce((sum, value) => sum + Number(value ?? 0), 0) }
 function amountFor(map: Record<string, number> | undefined, currency: Currency) { return Number(map?.[currency] ?? 0) }
@@ -119,13 +156,17 @@ function syncScopeId() {
     form.value.scopeId = props.organizationId
     return
   }
+  if (!isOrgOrPlatformAdmin.value && form.value.scopeType === 'PROJECT') {
+    form.value.scopeId = selectedProjectId.value
+    return
+  }
   const options = optionsForScope(form.value.scopeType)
   if (!options.some(option => option.id === form.value.scopeId)) form.value.scopeId = options[0]?.id ?? ''
 }
 async function loadScopeOptions() {
-  if (!props.organizationId) {
+  if (!props.organizationId || !isOrgOrPlatformAdmin.value) {
     scopeOptions.value = []
-    form.value.scopeId = ''
+    if (isOrgOrPlatformAdmin.value) form.value.scopeId = ''
     return
   }
   try {
@@ -152,8 +193,68 @@ async function loadScopeOptions() {
     if (form.value.scopeType !== 'ORGANIZATION') form.value.scopeId = ''
   }
 }
+async function loadDirectorProject() {
+  if (!selectedProjectId.value) {
+    projectSpendOverview.value = null
+    projectQuota.value = null
+    projectKeys.value = []
+    scopeOptions.value = []
+    return
+  }
+  busy.value = true
+  try {
+    const [spendOverview, quotaView, keys] = await Promise.all([
+      listProjectSpendQuotas(selectedProjectId.value, props.auth),
+      adminFetch<ProjectQuotaView>(`/api/admin/projects/${selectedProjectId.value}/quota`, props.auth),
+      adminFetch<ProjectKeyOption[]>(`/api/admin/projects/${selectedProjectId.value}/api-keys`, props.auth)
+    ])
+    projectSpendOverview.value = spendOverview
+    projectQuota.value = quotaView
+    projectKeys.value = keys
+    const projectName = directorProjects.value.find(item => item.id === selectedProjectId.value)?.name ?? selectedProjectId.value
+    scopeOptions.value = [
+      { id: selectedProjectId.value, scopeType: 'PROJECT', label: projectName, description: '선택 프로젝트' },
+      ...keys.map(key => ({ id: key.id, scopeType: 'API_KEY' as const, label: key.name, description: key.keyPrefix ?? key.id.slice(0, 8) }))
+    ]
+    message.value = `${projectName} 프로젝트의 관리자 상한과 하위 한도를 불러왔습니다.`
+  } catch (error) {
+    message.value = error instanceof Error ? error.message : '프로젝트 요금·한도 정보를 불러오지 못했습니다.'
+  } finally {
+    busy.value = false
+  }
+}
 async function load() {
-  if (!props.organizationId) { overview.value = null; message.value = '먼저 워크스페이스를 선택하세요.'; return }
+  if (!props.organizationId) {
+    overview.value = null
+    directorProjects.value = []
+    projectSpendOverview.value = null
+    projectQuota.value = null
+    message.value = '먼저 워크스페이스를 선택하세요.'
+    return
+  }
+  if (!isOrgOrPlatformAdmin.value) {
+    overview.value = null
+    busy.value = true
+    try {
+      const projects = await adminFetch<DirectorProject[]>(`/api/admin/organizations/${props.organizationId}/projects`, props.auth)
+      directorProjects.value = projects
+      if (!projects.some(item => item.id === selectedProjectId.value)) {
+        selectedProjectId.value = projects[0]?.id ?? ''
+      }
+      if (selectedProjectId.value) {
+        await loadDirectorProject()
+      } else {
+        projectSpendOverview.value = null
+        projectQuota.value = null
+        message.value = '관리 권한이 있는 프로젝트가 없습니다.'
+      }
+    } catch (error) {
+      message.value = error instanceof Error ? error.message : '프로젝트 목록을 불러오지 못했습니다.'
+    } finally {
+      busy.value = false
+    }
+    return
+  }
   busy.value = true
   try {
     const raw = await adminFetch<RawOverview>(`/api/admin/organizations/${props.organizationId}/quota-overview${queryString()}`, props.auth)
@@ -198,16 +299,61 @@ watch(chart, value => { if (!value.points.some(point => point.date === focusedDa
 watch(calendarCells, cells => { if (!cells.some(cell => cell.date === selectedDate.value && cell.inRange)) selectedDate.value = ([...cells].reverse().find(cell => cell.inRange && cell.requestCount > 0) ?? cells.find(cell => cell.inRange))?.date ?? '' })
 function openCreate() {
   editingId.value = null
-  form.value = { name: '', scopeType: 'ORGANIZATION', scopeId: props.organizationId, currency: 'KRW', limitAmount: 100000, period: 'MONTHLY', enabled: true }
+  if (isOrgOrPlatformAdmin.value) {
+    form.value = { name: '', scopeType: 'ORGANIZATION', scopeId: props.organizationId, currency: 'KRW', limitAmount: 100000, period: 'MONTHLY', enabled: true }
+  } else {
+    form.value = { name: '', scopeType: 'PROJECT', scopeId: selectedProjectId.value, currency: 'KRW', limitAmount: 10000, period: 'MONTHLY', enabled: true }
+  }
   modalOpen.value = true
 }
 function openEdit(item: Quota) {
+  if (!isOrgOrPlatformAdmin.value && item.adminCeiling) {
+    message.value = '관리자가 설정한 예산 상한은 프로젝트 총괄이 수정할 수 없습니다.'
+    return
+  }
   editingId.value = item.id
   form.value = { name: item.name, scopeType: item.scopeType, scopeId: item.scopeId ?? '', currency: item.currency, limitAmount: item.limitAmount, period: item.period, enabled: item.enabled }
   modalOpen.value = true
 }
 async function saveQuota() {
   if (!props.organizationId || !form.value.name.trim() || form.value.limitAmount <= 0) return
+  if (!isOrgOrPlatformAdmin.value) {
+    if (!selectedProjectId.value) return
+    if (directorLimitExceedsCeiling.value) {
+      message.value = `관리자 예산 상한(${money(applicableDirectorCeiling.value?.limitAmount, form.value.currency)}) 이하로만 설정할 수 있습니다.`
+      return
+    }
+    busy.value = true
+    try {
+      if (editingId.value) {
+        await updateProjectSpendQuota(selectedProjectId.value, editingId.value, {
+          name: form.value.name.trim(),
+          limitAmount: Number(form.value.limitAmount),
+          enabled: form.value.enabled
+        }, props.auth)
+      } else {
+        const scopeType = form.value.scopeType === 'API_KEY' ? 'API_KEY' : 'PROJECT'
+        const scopeId = scopeType === 'PROJECT' ? selectedProjectId.value : form.value.scopeId
+        if (!scopeId) return
+        await createProjectSpendQuota(selectedProjectId.value, {
+          scopeType,
+          scopeId,
+          name: form.value.name.trim(),
+          period: form.value.period,
+          currency: form.value.currency,
+          limitAmount: Number(form.value.limitAmount),
+          enabled: form.value.enabled
+        }, props.auth)
+      }
+      modalOpen.value = false
+      await loadDirectorProject()
+    } catch (error) {
+      message.value = error instanceof Error ? error.message : '프로젝트 요금 한도 저장에 실패했습니다.'
+    } finally {
+      busy.value = false
+    }
+    return
+  }
   busy.value = true
   try {
     const path = editingId.value ? `/api/admin/quotas/${editingId.value}` : `/api/admin/organizations/${props.organizationId}/quotas`
@@ -218,13 +364,61 @@ async function saveQuota() {
   finally { busy.value = false }
 }
 async function removeQuota(item: Quota) {
-  if (!confirm(`'${item.name}' 한도를 삭제할까요?`)) return
+  if (!isOrgOrPlatformAdmin.value && item.adminCeiling) {
+    message.value = '관리자가 설정한 예산 상한은 삭제할 수 없습니다.'
+    return
+  }
+  if (!window.confirm(`'${item.name}' 한도를 삭제할까요?`)) return
   busy.value = true
-  try { await adminFetch(`/api/admin/quotas/${item.id}`, props.auth, { method: 'DELETE' }); await load() }
+  try {
+    if (isOrgOrPlatformAdmin.value) {
+      await adminFetch(`/api/admin/quotas/${item.id}`, props.auth, { method: 'DELETE' })
+      await load()
+    } else if (selectedProjectId.value) {
+      await deleteProjectSpendQuota(selectedProjectId.value, item.id, props.auth)
+      await loadDirectorProject()
+    }
+  }
   catch (error) { message.value = error instanceof Error ? error.message : '요금 한도 삭제에 실패했습니다.' }
   finally { busy.value = false }
 }
-watch(() => props.organizationId, () => { void load(); void loadScopeOptions() })
+function openProjectQuotaEdit() {
+  if (!projectQuota.value) return
+  projectQuotaForm.value = {
+    requestsPerMinute: projectQuota.value.requestsPerMinute,
+    monthlyTokenLimit: projectQuota.value.monthlyTokenLimit ?? null
+  }
+  projectQuotaModalOpen.value = true
+}
+async function saveProjectQuota() {
+  if (!selectedProjectId.value) return
+  const rpm = Number(projectQuotaForm.value.requestsPerMinute)
+  const monthly = projectQuotaForm.value.monthlyTokenLimit == null || Number(projectQuotaForm.value.monthlyTokenLimit) <= 0
+    ? null
+    : Number(projectQuotaForm.value.monthlyTokenLimit)
+  if (projectQuota.value?.maxRequestsPerMinute != null && rpm > projectQuota.value.maxRequestsPerMinute) {
+    message.value = `분당 요청 수 상한(${projectQuota.value.maxRequestsPerMinute} RPM)을 초과할 수 없습니다.`
+    return
+  }
+  if (projectQuota.value?.maxMonthlyTokenLimit != null && (monthly == null || monthly > projectQuota.value.maxMonthlyTokenLimit)) {
+    message.value = `월 토큰 한도 상한(${number(projectQuota.value.maxMonthlyTokenLimit)}) 이하로 설정해야 합니다.`
+    return
+  }
+  busy.value = true
+  try {
+    projectQuota.value = await adminFetch<ProjectQuotaView>(`/api/admin/projects/${selectedProjectId.value}/quota`, props.auth, {
+      method: 'PUT',
+      body: JSON.stringify({ requestsPerMinute: rpm, monthlyTokenLimit: monthly })
+    })
+    projectQuotaModalOpen.value = false
+    message.value = '프로젝트 RPM · 토큰 한도를 저장했습니다.'
+  } catch (error) {
+    message.value = error instanceof Error ? error.message : '프로젝트 RPM · 토큰 한도 저장에 실패했습니다.'
+  } finally {
+    busy.value = false
+  }
+}
+watch(() => [props.organizationId, isOrgOrPlatformAdmin.value], () => { void load(); void loadScopeOptions() })
 watch(() => form.value.scopeType, () => syncScopeId())
 onMounted(() => { void load(); void loadScopeOptions() })
 </script>
@@ -232,12 +426,92 @@ onMounted(() => { void load(); void loadScopeOptions() })
 <template>
   <section class="page-stack quota-page">
     <div class="page-hero">
-      <div><p class="eyebrow">BUDGET CONTROL</p><h1>요금·한도</h1><p>조직, 팀, 프로젝트, API 키별로 비용 상한을 설정하고 초과 요청을 자동 차단합니다.</p></div>
-      <div class="hero-actions"><select v-model="period" :disabled="busy" aria-label="조회 기간" @change="load"><option value="7d">최근 7일</option><option value="30d">최근 30일</option><option value="month">이번 달</option><option value="all">전체 기간</option></select><button class="secondary-button" :disabled="busy" @click="load">새로고침</button><button class="primary-button" :disabled="busy || !organizationId" @click="openCreate">+ 한도 추가</button></div>
+      <div><p class="eyebrow">BUDGET CONTROL</p><h1>요금·한도</h1><p>{{ isOrgOrPlatformAdmin ? '조직, 팀, 프로젝트, API 키별로 비용 상한을 설정하고 초과 요청을 자동 차단합니다.' : '관리자가 설정한 프로젝트 상한 범위 안에서 하위 예산·요청 한도를 설정합니다.' }}</p></div>
+      <div class="hero-actions">
+        <select v-if="isOrgOrPlatformAdmin" v-model="period" :disabled="busy" aria-label="조회 기간" @change="load"><option value="7d">최근 7일</option><option value="30d">최근 30일</option><option value="month">이번 달</option><option value="all">전체 기간</option></select>
+        <select v-else v-model="selectedProjectId" :disabled="busy || !directorProjects.length" aria-label="조회 프로젝트" @change="loadDirectorProject"><option value="">프로젝트 선택</option><option v-for="project in directorProjects" :key="project.id" :value="project.id">{{ project.name }} · {{ project.status }}</option></select>
+        <button class="secondary-button" :disabled="busy" @click="load">새로고침</button>
+        <button class="primary-button" :disabled="busy || !organizationId || (!isOrgOrPlatformAdmin && !selectedProjectId)" @click="openCreate">+ 한도 추가</button>
+      </div>
     </div>
     <p class="inline-alert">{{ message }}</p>
 
-    <template v-if="overview">
+    <template v-if="!isOrgOrPlatformAdmin && selectedProjectId">
+      <div class="metric-grid budget-metrics director-metrics">
+        <article class="metric-card accent">
+          <span>요청 속도 (RPM)</span>
+          <strong>{{ number(projectQuota?.requestsPerMinute ?? 60) }}</strong>
+          <small>{{ projectQuota?.maxRequestsPerMinute != null ? `관리자 상한 ${number(projectQuota.maxRequestsPerMinute)} RPM` : '관리자 상한 미설정' }}</small>
+        </article>
+        <article class="metric-card">
+          <span>월 토큰 한도</span>
+          <strong>{{ projectQuota?.monthlyTokenLimit != null ? number(projectQuota.monthlyTokenLimit) : '무제한' }}</strong>
+          <small>{{ projectQuota?.maxMonthlyTokenLimit != null ? `관리자 상한 ${number(projectQuota.maxMonthlyTokenLimit)}` : '관리자 상한 미설정' }}</small>
+        </article>
+        <article class="metric-card">
+          <span>관리자 예산 상한</span>
+          <strong>{{ number(directorCeilings.length) }}</strong>
+          <small>읽기 전용 · 상향/삭제 불가</small>
+        </article>
+        <article class="metric-card">
+          <span>프로젝트 하위 한도</span>
+          <strong>{{ number(directorSubQuotas.length) }}</strong>
+          <small>상한 이하로 관리</small>
+        </article>
+      </div>
+
+      <article class="surface-card director-rpm-card">
+        <header class="card-header">
+          <div>
+            <span class="card-kicker">PROJECT QUOTA & CEILING</span>
+            <h2>요청 속도 · 월 토큰 한도</h2>
+          </div>
+          <button type="button" class="secondary-button" :disabled="busy || !projectQuota" @click="openProjectQuotaEdit">RPM · 토큰 한도 설정</button>
+        </header>
+      </article>
+
+      <div class="quota-layout">
+        <article class="surface-card quota-card">
+          <header class="card-header">
+            <div><span class="card-kicker">ADMIN CEILINGS (READ-ONLY)</span><h2>관리자 설정 예산 상한</h2></div>
+            <span class="count-badge">{{ directorCeilings.length }}</span>
+          </header>
+          <div v-if="directorCeilings.length" class="quota-list">
+            <div v-for="item in directorCeilings" :key="item.id" class="quota-row" :class="{ exceeded: item.exceeded }">
+              <div class="quota-row-head">
+                <div><strong>{{ item.name }}</strong><small>{{ item.scopeLabel || item.scopeType }} · {{ item.period }} · ADMIN CEILING</small></div>
+                <span :class="['status-chip tiny', item.exceeded ? 'unhealthy' : 'healthy']">{{ item.exceeded ? 'EXCEEDED' : item.enabled ? 'ACTIVE' : 'PAUSED' }}</span>
+              </div>
+              <div class="quota-progress"><span :style="{ width: `${Math.min(100, item.usagePercent)}%` }"></span></div>
+              <div class="quota-row-foot"><span>{{ money(item.usedAmount, item.currency) }} / {{ money(item.limitAmount, item.currency) }}</span><span>{{ percent(item.usagePercent) }}</span></div>
+              <small class="ceiling-readonly-note">관리자 상한은 프로젝트 총괄이 수정하거나 삭제할 수 없습니다.</small>
+            </div>
+          </div>
+          <div v-else class="empty-state compact"><span>◌</span><p>적용 중인 관리자 예산 상한이 없습니다.</p></div>
+        </article>
+
+        <article class="surface-card quota-card">
+          <header class="card-header">
+            <div><span class="card-kicker">DIRECTOR SUB-QUOTAS</span><h2>프로젝트 · API 키 하위 한도</h2></div>
+            <span class="count-badge">{{ directorSubQuotas.length }}</span>
+          </header>
+          <div v-if="directorSubQuotas.length" class="quota-list">
+            <div v-for="item in directorSubQuotas" :key="item.id" class="quota-row" :class="{ exceeded: item.exceeded }">
+              <div class="quota-row-head">
+                <div><strong>{{ item.name }}</strong><small>{{ item.scopeLabel || item.scopeType }} · {{ item.period }}</small></div>
+                <span :class="['status-chip tiny', item.exceeded ? 'unhealthy' : 'healthy']">{{ item.exceeded ? 'EXCEEDED' : item.enabled ? 'ACTIVE' : 'PAUSED' }}</span>
+              </div>
+              <div class="quota-progress"><span :style="{ width: `${Math.min(100, item.usagePercent)}%` }"></span></div>
+              <div class="quota-row-foot"><span>{{ money(item.usedAmount, item.currency) }} / {{ money(item.limitAmount, item.currency) }}</span><span>{{ percent(item.usagePercent) }}</span></div>
+              <div class="quota-actions"><button class="text-button" @click="openEdit(item)">수정</button><button class="text-button danger-text" @click="removeQuota(item)">삭제</button></div>
+            </div>
+          </div>
+          <div v-else class="empty-state compact"><span>◌</span><p>등록된 하위 예산 한도가 없습니다.</p></div>
+        </article>
+      </div>
+    </template>
+
+    <template v-if="isOrgOrPlatformAdmin && overview">
       <div class="metric-grid six budget-metrics">
         <article class="metric-card accent"><span>전체 요청</span><strong>{{ number(overview.total.requestCount) }}</strong><small>{{ periodLabel }}</small></article>
         <article class="metric-card"><span>입력 토큰</span><strong>{{ number(overview.total.inputTokens) }}</strong></article>
@@ -278,7 +552,7 @@ onMounted(() => { void load(); void loadScopeOptions() })
             <p class="visualization-note">작은 비용도 실제 최대값에 맞춰 확대합니다. 그래프 점이나 날짜를 선택하면 실제 값을 확인할 수 있습니다. 일자는 UTC 기준입니다.</p>
           </div>
         </article>
-        <article class="surface-card quota-card"><header class="card-header"><div><span class="card-kicker">QUOTA STATUS</span><h2>한도 현황</h2></div><span class="count-badge">{{ overview.quotas.length }}</span></header><div v-if="overview.quotas.length" class="quota-list"><div v-for="item in overview.quotas" :key="item.id" class="quota-row" :class="{ exceeded: item.exceeded }"><div class="quota-row-head"><div><strong>{{ item.name }}</strong><small>{{ item.scopeLabel || item.scopeType }} · {{ item.period }}</small></div><span :class="['status-chip tiny', item.exceeded ? 'unhealthy' : 'healthy']">{{ item.exceeded ? 'EXCEEDED' : item.enabled ? 'ACTIVE' : 'PAUSED' }}</span></div><div class="quota-progress"><span :style="{ width: `${Math.min(100, item.usagePercent)}%` }"></span></div><div class="quota-row-foot"><span>{{ money(item.usedAmount, item.currency) }} / {{ money(item.limitAmount, item.currency) }}</span><span>{{ percent(item.usagePercent) }}</span></div><div class="quota-actions"><button class="text-button" @click="openEdit(item)">수정</button><button class="text-button danger-text" @click="removeQuota(item)">삭제</button></div></div></div><div v-else class="empty-state compact"><span>◌</span><p>등록된 요금 한도가 없습니다.</p></div></article>
+        <article class="surface-card quota-card"><header class="card-header"><div><span class="card-kicker">QUOTA STATUS</span><h2>한도 현황</h2></div><span class="count-badge">{{ overview.quotas.length }}</span></header><div v-if="overview.quotas.length" class="quota-list"><div v-for="item in overview.quotas" :key="item.id" class="quota-row" :class="{ exceeded: item.exceeded }"><div class="quota-row-head"><div><strong>{{ item.name }}</strong><small>{{ item.scopeLabel || item.scopeType }} · {{ item.period }}<template v-if="item.adminCeiling"> · ADMIN CEILING</template></small></div><span :class="['status-chip tiny', item.exceeded ? 'unhealthy' : 'healthy']">{{ item.exceeded ? 'EXCEEDED' : item.enabled ? 'ACTIVE' : 'PAUSED' }}</span></div><div class="quota-progress"><span :style="{ width: `${Math.min(100, item.usagePercent)}%` }"></span></div><div class="quota-row-foot"><span>{{ money(item.usedAmount, item.currency) }} / {{ money(item.limitAmount, item.currency) }}</span><span>{{ percent(item.usagePercent) }}</span></div><div class="quota-actions"><button class="text-button" @click="openEdit(item)">수정</button><button class="text-button danger-text" @click="removeQuota(item)">삭제</button></div></div></div><div v-else class="empty-state compact"><span>◌</span><p>등록된 요금 한도가 없습니다.</p></div></article>
       </div>
 
       <article class="surface-card calendar-card">
@@ -308,7 +582,50 @@ onMounted(() => { void load(); void loadScopeOptions() })
     </template>
   </section>
 
-  <BaseModal v-if="modalOpen" :open="modalOpen" :title="editingId ? '요금 한도 수정' : '요금 한도 추가'" description="범위와 통화를 선택해 비용 상한을 설정합니다." @close="modalOpen = false"><div class="modal-form"><label class="field">한도 이름<input v-model.trim="form.name" placeholder="예: 팀 월간 예산" maxlength="120" /></label><div class="form-grid two"><label class="field">적용 범위<select v-model="form.scopeType"><option value="ORGANIZATION">조직 전체</option><option value="TEAM">팀</option><option value="PROJECT">프로젝트</option><option value="API_KEY">API 키</option></select></label><label v-if="form.scopeType === 'ORGANIZATION'" class="field">적용 대상<input :value="props.organizationId" disabled /></label><label v-else class="field">적용 대상<select v-model="form.scopeId"><option value="">대상을 선택하세요</option><option v-for="option in optionsForScope(form.scopeType)" :key="option.scopeType + '-' + option.id" :value="option.id">{{ option.label }} · {{ option.description }}</option></select></label></div><div class="form-grid two"><label class="field">통화<select v-model="form.currency"><option value="KRW">원화 (KRW)</option><option value="USD">달러 (USD)</option></select></label><label class="field">주기<select v-model="form.period"><option value="MONTHLY">월간</option><option value="DAILY">일간</option><option value="TOTAL">전체 누적</option></select></label></div><label class="field">최대 금액<input v-model.number="form.limitAmount" type="number" min="0.01" step="0.01" /></label><label class="check-row"><input v-model="form.enabled" type="checkbox" /> 한도 활성화</label></div><template #footer><button class="secondary-button" @click="modalOpen = false">취소</button><button class="primary-button" :disabled="busy || !form.name.trim() || form.limitAmount <= 0 || (form.scopeType !== 'ORGANIZATION' && !form.scopeId)" @click="saveQuota">저장</button></template></BaseModal>
+  <BaseModal v-if="modalOpen" :open="modalOpen" :title="editingId ? '요금 한도 수정' : '요금 한도 추가'" description="범위와 통화를 선택해 비용 상한을 설정합니다." @close="modalOpen = false">
+    <div class="modal-form">
+      <label class="field">한도 이름<input v-model.trim="form.name" placeholder="예: 프로젝트 월간 예산" maxlength="120" /></label>
+      <div class="form-grid two">
+        <label class="field">적용 범위
+          <select v-model="form.scopeType" :disabled="!isOrgOrPlatformAdmin && Boolean(editingId)">
+            <option v-if="isOrgOrPlatformAdmin" value="ORGANIZATION">조직 전체</option>
+            <option v-if="isOrgOrPlatformAdmin" value="TEAM">팀</option>
+            <option value="PROJECT">프로젝트</option>
+            <option value="API_KEY">API 키</option>
+          </select>
+        </label>
+        <label v-if="form.scopeType === 'ORGANIZATION'" class="field">적용 대상<input :value="props.organizationId" disabled /></label>
+        <label v-else-if="!isOrgOrPlatformAdmin && form.scopeType === 'PROJECT'" class="field">적용 대상<input :value="directorProjects.find(p => p.id === selectedProjectId)?.name ?? selectedProjectId" disabled /></label>
+        <label v-else class="field">적용 대상<select v-model="form.scopeId" :disabled="!isOrgOrPlatformAdmin && Boolean(editingId)"><option value="">대상을 선택하세요</option><option v-for="option in optionsForScope(form.scopeType)" :key="option.scopeType + '-' + option.id" :value="option.id">{{ option.label }} · {{ option.description }}</option></select></label>
+      </div>
+      <div class="form-grid two">
+        <label class="field">통화<select v-model="form.currency" :disabled="!isOrgOrPlatformAdmin && Boolean(editingId)"><option value="KRW">원화 (KRW)</option><option value="USD">달러 (USD)</option></select></label>
+        <label class="field">주기<select v-model="form.period" :disabled="!isOrgOrPlatformAdmin && Boolean(editingId)"><option value="MONTHLY">월간</option><option value="DAILY">일간</option><option value="TOTAL">전체 누적</option></select></label>
+      </div>
+      <label class="field">최대 금액<input v-model.number="form.limitAmount" type="number" min="0.01" step="0.01" /></label>
+      <p v-if="!isOrgOrPlatformAdmin && applicableDirectorCeiling" class="ceiling-hint" :class="{ exceeded: directorLimitExceedsCeiling }">
+        적용 중인 관리자 상한 ({{ applicableDirectorCeiling.name }}): {{ money(applicableDirectorCeiling.limitAmount, applicableDirectorCeiling.currency) }} 이하만 허용됩니다.
+      </p>
+      <label class="check-row"><input v-model="form.enabled" type="checkbox" /> 한도 활성화</label>
+    </div>
+    <template #footer>
+      <button class="secondary-button" @click="modalOpen = false">취소</button>
+      <button class="primary-button" :disabled="busy || !form.name.trim() || form.limitAmount <= 0 || directorLimitExceedsCeiling || (form.scopeType !== 'ORGANIZATION' && !form.scopeId)" @click="saveQuota">저장</button>
+    </template>
+  </BaseModal>
+
+  <BaseModal v-if="projectQuotaModalOpen" :open="projectQuotaModalOpen" title="프로젝트 RPM · 토큰 한도 설정" description="관리자가 설정한 상한 이하에서만 조정할 수 있습니다." size="sm" @close="projectQuotaModalOpen = false">
+    <div class="modal-form">
+      <label class="field">분당 요청 수 (RPM)<input v-model.number="projectQuotaForm.requestsPerMinute" type="number" min="1" :max="projectQuota?.maxRequestsPerMinute ?? undefined" /></label>
+      <small v-if="projectQuota?.maxRequestsPerMinute != null" class="ceiling-hint">관리자 RPM 상한: {{ number(projectQuota.maxRequestsPerMinute) }} RPM</small>
+      <label class="field">월 토큰 한도<input v-model.number="projectQuotaForm.monthlyTokenLimit" type="number" min="1" :max="projectQuota?.maxMonthlyTokenLimit ?? undefined" placeholder="비우면 제한 없음" /></label>
+      <small v-if="projectQuota?.maxMonthlyTokenLimit != null" class="ceiling-hint">관리자 월 토큰 상한: {{ number(projectQuota.maxMonthlyTokenLimit) }} 토큰 (비울 수 없음)</small>
+    </div>
+    <template #footer>
+      <button class="secondary-button" @click="projectQuotaModalOpen = false">취소</button>
+      <button class="primary-button" :disabled="busy || projectQuotaForm.requestsPerMinute < 1" @click="saveProjectQuota">저장</button>
+    </template>
+  </BaseModal>
 </template>
 
 <style scoped>
@@ -356,4 +673,9 @@ onMounted(() => { void load(); void loadScopeOptions() })
 .quota-page .hero-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.quota-page .hero-actions select{min-height:40px;padding:0 30px 0 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);font:inherit}.metric-money{font-size:clamp(16px,1.5vw,24px)!important}.quota-layout{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(320px,.7fr);gap:16px}.chart-card,.quota-card{min-height:350px}.line-chart{position:relative;min-height:260px;padding:16px 14px 0}.line-chart svg{width:100%;height:210px;overflow:visible;background:linear-gradient(to bottom,transparent 24%,var(--grid-line) 25%,transparent 26%,transparent 49%,var(--grid-line) 50%,transparent 51%,transparent 74%,var(--grid-line) 75%,transparent 76%)}.chart-line{fill:none;stroke:var(--accent-strong);stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.chart-area{fill:var(--accent-dim);opacity:.65}.chart-empty{position:absolute;inset:80px 0 0;display:grid;place-items:center;color:var(--muted);font-size:12px}.chart-labels{display:flex;justify-content:space-between;gap:8px;color:var(--muted);font-size:9px}.chart-labels span{display:grid;gap:3px}.chart-labels b{color:var(--text);font-size:9px;font-weight:700}.chart-max{color:var(--muted);font-size:10px}.calendar-card{min-height:250px}.calendar-wrap{padding:0 18px 18px}.calendar-week,.calendar-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px}.calendar-week{margin-bottom:5px;color:var(--muted);font-size:9px;text-align:center}.calendar-cell{display:grid;place-items:center;min-height:30px;border-radius:7px;border:1px solid var(--border);font-size:10px;color:var(--text);transition:transform .15s}.calendar-cell:not(.empty):hover{transform:translateY(-1px);border-color:var(--accent-strong)}.calendar-cell.empty{visibility:hidden;border-color:transparent;background:transparent}.heat-0{background:var(--surface-muted)}.heat-1{background:color-mix(in srgb,var(--accent-dim) 45%,var(--surface-muted))}.heat-2{background:color-mix(in srgb,var(--accent-dim) 70%,var(--surface-muted))}.heat-3{background:color-mix(in srgb,var(--accent) 45%,var(--surface-muted))}.heat-4{background:var(--accent)}.calendar-legend{display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-top:10px;color:var(--muted);font-size:9px}.calendar-legend i{display:inline-block;width:12px;height:12px;border:1px solid var(--border);border-radius:3px}.quota-list{display:grid;gap:10px;padding:0 16px 16px;max-height:410px;overflow:auto}.quota-row{position:relative;padding:13px;border:1px solid var(--border);border-radius:12px;background:var(--surface-muted)}.quota-row.exceeded{border-color:color-mix(in srgb,var(--danger) 45%,var(--border))}.quota-row-head,.quota-row-foot{display:flex;justify-content:space-between;gap:10px;align-items:center}.quota-row-head strong,.quota-row-head small{display:block}.quota-row-head strong{font-size:12px}.quota-row-head small{margin-top:4px;color:var(--muted);font-size:9px}.quota-progress{height:7px;margin:12px 0 7px;overflow:hidden;border-radius:99px;background:var(--border)}.quota-progress span{display:block;height:100%;border-radius:inherit;background:var(--accent-strong);transition:width .2s}.quota-row.exceeded .quota-progress span{background:var(--danger)}.quota-row-foot{font-size:10px;color:var(--muted)}.quota-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:8px}.text-button{border:0;background:none;color:var(--accent-strong);font:inherit;font-size:10px;cursor:pointer}.breakdown-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.breakdown-list,.breakdown-table{display:grid;padding:0 16px 16px}.breakdown-row{display:flex;justify-content:space-between;gap:12px;padding:12px 2px;border-bottom:1px solid var(--border);align-items:center}.breakdown-row:last-child{border-bottom:0}.breakdown-row strong,.breakdown-row small{display:block}.breakdown-row strong{font-size:12px}.breakdown-row small{margin-top:4px;color:var(--muted);font-size:9px}.breakdown-row b{font-size:13px;white-space:nowrap}.budget-metrics{grid-template-columns:repeat(6,minmax(0,1fr))}@media(max-width:1100px){.quota-layout{grid-template-columns:1fr}.budget-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:720px){.breakdown-grid{grid-template-columns:1fr}.budget-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.quota-page .hero-actions{display:grid;grid-template-columns:1fr 1fr}.quota-page .hero-actions .primary-button{grid-column:1/-1}.quota-page .hero-actions select{width:100%}}
 @media(max-width:720px){.usage-toolbar p{flex-basis:100%}.calendar-summary{align-items:flex-start;flex-direction:column}.calendar-scroll-hint{display:block}}
 @media(max-width:480px){.quota-page .line-chart,.quota-page .calendar-wrap{padding:16px}.chart-plot{gap:8px}.chart-y-axis{font-size:8px}.calendar-detail{padding:12px}.calendar-legend{flex-wrap:wrap}}
+.director-metrics{grid-template-columns:repeat(4,minmax(0,1fr))}
+.director-rpm-card{padding-bottom:6px}
+.ceiling-readonly-note{display:block;margin-top:6px;color:var(--muted);font-size:10px}
+.ceiling-hint{margin:0;color:var(--muted);font-size:11px;line-height:1.5}
+.ceiling-hint.exceeded{color:var(--danger)}
 </style>

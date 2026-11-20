@@ -17,6 +17,9 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, UUID> {
     List<ApiKey> findByProjectId(UUID projectId);
     List<ApiKey> findByProjectIdIn(List<UUID> projectIds);
     List<ApiKey> findByIssuedByUserId(UUID issuedByUserId);
+    List<ApiKey> findByProjectIdAndIssuedByUserIdAndStatus(UUID projectId, UUID issuedByUserId, ApiKeyStatus status);
+    List<ApiKey> findByIssuedByUserIdAndStatus(UUID issuedByUserId, ApiKeyStatus status);
+    long countByProjectIdAndIssuedByUserIdAndStatus(UUID projectId, UUID issuedByUserId, ApiKeyStatus status);
     @Modifying
     @Query("update ApiKey k set k.lastUsedAt = :now where k.id = :id and k.status = :active and (k.expiresAt is null or k.expiresAt > :now)")
     int markUsedIfActive(@Param("id") UUID id, @Param("active") ApiKeyStatus active, @Param("now") Instant now);

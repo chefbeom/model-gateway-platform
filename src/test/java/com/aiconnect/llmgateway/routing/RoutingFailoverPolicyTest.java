@@ -6,6 +6,8 @@ import com.aiconnect.llmgateway.repository.RuntimeEndpointRepository;
 import com.aiconnect.llmgateway.repository.ServiceTargetRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
+import com.aiconnect.llmgateway.security.RuntimeTrustPolicy;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
@@ -25,6 +27,11 @@ class RoutingFailoverPolicyTest {
     private final ActiveRequestRegistry active = new ActiveRequestRegistry();
     private final RoutingService routing = new RoutingService(targets, deployments, endpoints, active,
             new WeightedTargetSelector(active), new ObjectMapper());
+    @BeforeEach void markFixturesInternal() {
+        RuntimeTrustPolicy trust = mock(RuntimeTrustPolicy.class);
+        when(trust.isInternal(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any())).thenReturn(true);
+        ReflectionTestUtils.setField(routing, "runtimeTrust", trust);
+    }
 
     @Test
     void strictOnlyUsesDeploymentsInPrimaryCompatibilityGroup() {

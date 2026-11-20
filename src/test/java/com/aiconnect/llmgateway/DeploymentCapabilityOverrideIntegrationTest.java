@@ -23,6 +23,10 @@ class DeploymentCapabilityOverrideIntegrationTest {
     @Autowired OrganizationRepository organizations;
     @Autowired InferenceNodeRepository nodes;
     @Autowired RuntimeEndpointRepository endpoints;
+    @Autowired com.aiconnect.llmgateway.security.RuntimeTrustAttestationRepository runtimeTrustFixture;
+    @Autowired com.aiconnect.llmgateway.security.ProjectRuntimeApprovalRepository runtimeApprovalFixture;
+    @Autowired com.aiconnect.llmgateway.repository.ProjectRepository runtimeProjectsFixture;
+    @Autowired com.aiconnect.llmgateway.repository.InferenceNodeRepository runtimeNodesFixture;
     @Autowired ModelDeploymentRepository deployments;
     @Autowired LlmServiceRepository services;
     @Autowired ServiceTargetRepository targets;
@@ -32,9 +36,10 @@ class DeploymentCapabilityOverrideIntegrationTest {
     @Test
     void administratorVerifiedCapabilitySurvivesAsSeparateRoutingOverride() {
         Organization organization = organizations.save(new Organization("Override Org"));
+        var project = runtimeProjectsFixture.save(new com.aiconnect.llmgateway.domain.Project(organization.getId(), "Override project"));
         InferenceNode node = nodes.save(new InferenceNode(organization.getId(), "override-node", null, "DIRECT", null));
         RuntimeEndpoint endpoint = new RuntimeEndpoint(node.getId(), RuntimeType.LM_STUDIO, "http://override-node:1234", null);
-        endpoint.recordHealth(true); endpoint = endpoints.save(endpoint);
+        endpoint.recordHealth(true); endpoint = RuntimeTestTrust.internal(endpoints, runtimeTrustFixture, runtimeApprovalFixture, runtimeProjectsFixture, runtimeNodesFixture, endpoint);
         ModelDeployment deployment = deployments.save(new ModelDeployment(endpoint.getId(), "physical-model", "model-contract",
                 "Physical", null, null, 8192, true, 2, "[\"CHAT_COMPLETION\",\"STREAMING\"]"));
         LlmService service = services.save(new LlmService(organization.getId(), "structured-service", "Structured",
@@ -42,7 +47,7 @@ class DeploymentCapabilityOverrideIntegrationTest {
                 BigDecimal.ZERO, BigDecimal.ZERO));
         targets.save(new ServiceTarget(service.getId(), deployment.getId(), 1, 100, false, null));
 
-        assertThat(routing.candidates(service, Set.of())).isEmpty();
+        assertThat(routing.candidates(service, Set.of(), project.getId())).isEmpty();
 
         configuration.configure(deployment.getId(), new DeploymentConfigurationController.UpdateDeployment(
                 "verified-contract", true, 3, "[\"STRUCTURED_OUTPUT\"]"));
@@ -51,6 +56,6 @@ class DeploymentCapabilityOverrideIntegrationTest {
         assertThat(configured.getCompatibilityKey()).isEqualTo("verified-contract");
         assertThat(configured.getMaxConcurrency()).isEqualTo(3);
         assertThat(configured.getCapabilityOverridesJson()).contains("STRUCTURED_OUTPUT");
-        assertThat(routing.candidates(service, Set.of())).hasSize(1);
+        assertThat(routing.candidates(service, Set.of(), project.getId())).hasSize(1);
     }
 }

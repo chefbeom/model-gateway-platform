@@ -126,11 +126,14 @@ class RoleScopedUsageIntegrationTest {
     }
 
     private String accessToken(AppUser user) {
-        var token = sessions.save(new AuthRefreshToken(user.getId(), java.util.UUID.randomUUID().toString(), java.time.Instant.now().plusSeconds(3600)));
-        return tokens.issue(user, token.getId());
+        var token = sessions.save(new AuthRefreshToken(user.getId(), java.util.UUID.randomUUID().toString(), java.time.Instant.now().plusSeconds(3600), true));
+        return tokens.issue(user, token.getId(), true);
     }
     private AppUser user(String email, boolean platformAdmin) {
-        return users.save(new AppUser(email, "test-password-hash", platformAdmin));
+        AppUser created = new AppUser(email, "test-password-hash", platformAdmin);
+        created.assignPendingTotpSecret("encrypted-test-secret");
+        created.activateTotp(1L, java.time.Instant.now());
+        return users.save(created);
     }
 
     private void member(Organization organization, AppUser user, OrganizationRole role) {

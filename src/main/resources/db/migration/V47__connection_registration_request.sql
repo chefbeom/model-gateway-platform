@@ -1,0 +1,20 @@
+CREATE TABLE connection_registration_request (
+    id CHAR(36) NOT NULL PRIMARY KEY,
+    project_id CHAR(36) NOT NULL,
+    requester_id CHAR(36) NOT NULL,
+    kind VARCHAR(24) NOT NULL,
+    display_name VARCHAR(160) NOT NULL,
+    base_url VARCHAR(500) NOT NULL,
+    runtime_type VARCHAR(40) NULL,
+    encrypted_secret TEXT NULL,
+    reason VARCHAR(1000) NOT NULL,
+    status VARCHAR(24) NOT NULL,
+    created_at TIMESTAMP(6) NOT NULL,
+    decided_at TIMESTAMP(6) NULL,
+    decided_by CHAR(36) NULL,
+    decision_reason VARCHAR(1000) NULL,
+    result_id CHAR(36) NULL,
+    CONSTRAINT fk_connection_request_project FOREIGN KEY (project_id) REFERENCES project(id) ON DELETE CASCADE,
+    INDEX idx_connection_request_project (project_id, created_at),
+    INDEX idx_connection_request_status (status, created_at)
+);

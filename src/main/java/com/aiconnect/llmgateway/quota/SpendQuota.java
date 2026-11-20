@@ -50,6 +50,9 @@ public class SpendQuota {
     private boolean enabled = true;
 
     @Column(nullable = false)
+    private boolean adminCeiling = false;
+
+    @Column(nullable = false)
     private Instant createdAt = Instant.now();
 
     @Column(nullable = false)
@@ -59,6 +62,12 @@ public class SpendQuota {
 
     public SpendQuota(UUID organizationId, SpendQuotaScope scopeType, UUID scopeId, String name,
                       Currency currency, BigDecimal limitAmount, SpendQuotaPeriod period, boolean enabled) {
+        this(organizationId, scopeType, scopeId, name, currency, limitAmount, period, enabled, false);
+    }
+
+    public SpendQuota(UUID organizationId, SpendQuotaScope scopeType, UUID scopeId, String name,
+                      Currency currency, BigDecimal limitAmount, SpendQuotaPeriod period, boolean enabled,
+                      boolean adminCeiling) {
         this.organizationId = organizationId;
         this.scopeType = scopeType;
         this.scopeId = scopeId;
@@ -67,6 +76,7 @@ public class SpendQuota {
         this.limitAmount = limitAmount;
         this.period = period == null ? SpendQuotaPeriod.MONTHLY : period;
         this.enabled = enabled;
+        this.adminCeiling = adminCeiling;
     }
 
     public void configure(SpendQuotaScope scopeType, UUID scopeId, String name, Currency currency,
@@ -92,6 +102,8 @@ public class SpendQuota {
     public BigDecimal getLimitAmount() { return limitAmount; }
     public SpendQuotaPeriod getPeriod() { return period; }
     public boolean isEnabled() { return enabled; }
+    public boolean isAdminCeiling() { return adminCeiling; }
+    public void setAdminCeiling(boolean adminCeiling) { this.adminCeiling = adminCeiling; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
 }

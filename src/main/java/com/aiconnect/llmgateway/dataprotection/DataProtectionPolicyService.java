@@ -1,6 +1,7 @@
 package com.aiconnect.llmgateway.dataprotection;
 
 import com.aiconnect.llmgateway.domain.ApiKey;
+import com.aiconnect.llmgateway.domain.DataBoundaryPolicy;
 import com.aiconnect.llmgateway.domain.LlmService;
 import com.aiconnect.llmgateway.domain.Project;
 import com.aiconnect.llmgateway.repository.ApiKeyRepository;
@@ -43,7 +44,11 @@ public class DataProtectionPolicyService {
         List<String> reasons = new ArrayList<>();
         for (String label : scan.labels()) reasons.add("DATA_DETECTED_" + label);
 
-        boolean projectLocalOnly = project != null && project.isExternalAiBlocked();
+        DataBoundaryPolicy projectBoundary = project == null ? DataBoundaryPolicy.EXTERNAL_ALLOWED : project.effectiveDataBoundaryPolicy();
+        DataBoundaryPolicy serviceBoundary = service == null ? DataBoundaryPolicy.EXTERNAL_ALLOWED : service.getDataBoundaryPolicy();
+        DataBoundaryPolicy apiKeyBoundary = apiKey == null ? DataBoundaryPolicy.EXTERNAL_ALLOWED : apiKey.getDataBoundaryPolicy();
+        DataBoundaryPolicy effectiveBoundary = DataBoundaryPolicy.strictest(projectBoundary, serviceBoundary, apiKeyBoundary);
+
         DataProtectionAction action = DataProtectionAction.ALLOW;
         if (scan.hasSensitiveData()) {
             if (effective.mode() == DataProtectionMode.MONITOR) {
@@ -63,25 +68,47 @@ public class DataProtectionPolicyService {
             action = strongerAction(action, DataProtectionAction.LOCAL_ONLY);
             reasons.add("DATA_PROTECTION_SCAN_INCOMPLETE");
         }
-        if (projectLocalOnly) {
+        if (effectiveBoundary == DataBoundaryPolicy.INTERNAL_ONLY) {
             // The hard routing boundary must not activate an otherwise dormant
             // MONITOR/OFF sensitive-data BLOCK action.
             action = strongerAction(action, DataProtectionAction.LOCAL_ONLY);
-            reasons.add("PROJECT_EXTERNAL_AI_BLOCKED");
             List<String> scopes = new ArrayList<>(effective.appliedScopes());
-            scopes.add("PROJECT_LOCAL_ONLY");
+            if (projectBoundary == DataBoundaryPolicy.INTERNAL_ONLY) {
+                reasons.add("PROJECT_EXTERNAL_AI_BLOCKED");
+                scopes.add("PROJECT_LOCAL_ONLY");
+            }
+            if (serviceBoundary == DataBoundaryPolicy.INTERNAL_ONLY) {
+                reasons.add("SERVICE_DATA_BOUNDARY_RESTRICTED");
+                scopes.add("SERVICE_DATA_BOUNDARY");
+            }
+            if (apiKeyBoundary == DataBoundaryPolicy.INTERNAL_ONLY) {
+                reasons.add("API_KEY_DATA_BOUNDARY_RESTRICTED");
+                scopes.add("API_KEY_DATA_BOUNDARY");
+            }
             DataProtectionAction effectiveAction = effective.mode() == DataProtectionMode.ENFORCE
                     ? strongerAction(effective.externalAction(), DataProtectionAction.LOCAL_ONLY) : DataProtectionAction.LOCAL_ONLY;
             effective = new EffectiveDataProtectionPolicy(DataProtectionMode.ENFORCE, DataProtectionLevel.STRICT,
                     effectiveAction, false, effective.detectSecrets(), effective.detectPii(), effective.detectFinancial(),
                     effective.detectConfidential(), effective.detectMedia(), effective.customPatterns(), List.copyOf(scopes));
+        } else if (effectiveBoundary == DataBoundaryPolicy.APPROVED_EXTERNAL_NO_RETENTION) {
+            reasons.add("EXTERNAL_API_BLOCKED_BY_BOUNDARY");
+            if (serviceBoundary == DataBoundaryPolicy.APPROVED_EXTERNAL_NO_RETENTION) {
+                reasons.add("SERVICE_DATA_BOUNDARY_RESTRICTED");
+            }
+            if (apiKeyBoundary == DataBoundaryPolicy.APPROVED_EXTERNAL_NO_RETENTION) {
+                reasons.add("API_KEY_DATA_BOUNDARY_RESTRICTED");
+            }
         }
-        boolean externalAllowed = action == DataProtectionAction.ALLOW;
+        boolean actionAllowsExternal = action == DataProtectionAction.ALLOW;
+        boolean externalNoRetentionGpuAllowed = actionAllowsExternal && effectiveBoundary.allowsExternalNoRetentionGpu();
+        boolean externalApiAllowed = actionAllowsExternal && effectiveBoundary.allowsExternalApi();
+        boolean externalAllowed = externalNoRetentionGpuAllowed || externalApiAllowed;
         boolean externalFailoverAllowed = externalAllowed && effective.allowExternalFailover();
         if (!externalAllowed) reasons.add("DATA_PROTECTION_EXTERNAL_BLOCKED");
         else if (!externalFailoverAllowed) reasons.add("DATA_PROTECTION_EXTERNAL_FAILOVER_BLOCKED");
         return new DataProtectionDecision(effective, scan, action, externalAllowed,
-                externalFailoverAllowed, List.copyOf(new LinkedHashSet<>(reasons)));
+                externalFailoverAllowed, externalNoRetentionGpuAllowed, externalApiAllowed,
+                effectiveBoundary, List.copyOf(new LinkedHashSet<>(reasons)));
     }
 
     public EffectiveDataProtectionPolicy resolve(Project project, ApiKey apiKey, LlmService service) {
@@ -227,6 +254,22 @@ public class DataProtectionPolicyService {
             return result;
         } catch (Exception ignored) {
             return List.of();
+        }
+    }
+
+    public void assertNotRelaxingUpperPolicy(List<DataProtectionPolicy> upperPolicies, PolicyValues candidate) {
+        if (upperPolicies == null || upperPolicies.isEmpty()) {
+            return;
+        }
+        EffectiveDataProtectionPolicy upper = merge(upperPolicies);
+        boolean relaxesMode = modeRank(candidate.mode()) < modeRank(upper.mode());
+        boolean relaxesLevel = levelRank(candidate.level()) < levelRank(upper.level());
+        boolean relaxesEnforcedAction = upper.mode() == DataProtectionMode.ENFORCE
+                && (actionRank(candidate.externalAction()) < actionRank(upper.externalAction())
+                || (!upper.allowExternalFailover() && candidate.allowExternalFailover()));
+        if (relaxesMode || relaxesLevel || relaxesEnforcedAction) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "DATA_PROTECTION_RELAXATION_DENIED",
+                    "Lower-tier data protection policy cannot relax an upper-tier organization or project policy.");
         }
     }
 

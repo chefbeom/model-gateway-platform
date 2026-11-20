@@ -2,9 +2,11 @@ package com.aiconnect.llmgateway.runtime;
 
 import com.aiconnect.llmgateway.config.GatewayProperties;
 import com.aiconnect.llmgateway.domain.ExternalProvider;
+import com.aiconnect.llmgateway.security.ExternalUrlSafetyValidator;
 import com.aiconnect.llmgateway.service.SecretCipher;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -20,15 +22,25 @@ public class StreamingOpenAiRuntimeClient {
     private final ObjectMapper objectMapper;
     private final SecretCipher secretCipher;
     private final GatewayProperties properties;
+    private final ExternalUrlSafetyValidator urlSafetyValidator;
 
     public StreamingOpenAiRuntimeClient(ObjectMapper objectMapper, SecretCipher secretCipher,
                                         GatewayProperties properties) {
+        this(objectMapper, secretCipher, properties, new ExternalUrlSafetyValidator(false));
+    }
+
+    @Autowired
+    public StreamingOpenAiRuntimeClient(ObjectMapper objectMapper, SecretCipher secretCipher,
+                                        GatewayProperties properties,
+                                        ExternalUrlSafetyValidator urlSafetyValidator) {
         this.client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(properties.connectTimeoutMs()))
+                .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
         this.objectMapper = objectMapper;
         this.secretCipher = secretCipher;
         this.properties = properties;
+        this.urlSafetyValidator = urlSafetyValidator;
     }
 
     public StreamingRuntimeResult chatCompletion(ExternalProvider provider, JsonNode requestBody) {
@@ -36,9 +48,11 @@ public class StreamingOpenAiRuntimeClient {
     }
 
     public StreamingRuntimeResult chatCompletion(ExternalProvider provider, JsonNode requestBody, boolean preserveTemperature) {
+        urlSafetyValidator.assertSafeDestination(provider.getBaseUrl());
         try {
             String key = secretCipher.decrypt(provider.getEncryptedApiKey());
-            HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(provider.getBaseUrl() + "/chat/completions"))
+            String baseUrl = provider.getBaseUrl().trim().replaceAll("/+$", "");
+            HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(baseUrl + "/chat/completions"))
                     .timeout(Duration.ofMillis(properties.responseTimeoutMs()))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(

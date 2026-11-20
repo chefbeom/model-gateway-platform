@@ -34,6 +34,10 @@ class GatewaySafeRetryIntegrationTest {
     @Autowired ApiKeyService apiKeyService;
     @Autowired InferenceNodeRepository nodes;
     @Autowired RuntimeEndpointRepository endpoints;
+    @Autowired com.aiconnect.llmgateway.security.RuntimeTrustAttestationRepository runtimeTrustFixture;
+    @Autowired com.aiconnect.llmgateway.security.ProjectRuntimeApprovalRepository runtimeApprovalFixture;
+    @Autowired com.aiconnect.llmgateway.repository.ProjectRepository runtimeProjectsFixture;
+    @Autowired com.aiconnect.llmgateway.repository.InferenceNodeRepository runtimeNodesFixture;
     @Autowired ModelDeploymentRepository deployments;
     @Autowired LlmServiceRepository services;
     @Autowired ServiceTargetRepository targets;
@@ -81,7 +85,7 @@ class GatewaySafeRetryIntegrationTest {
         InferenceNode node = nodes.save(new InferenceNode(organization.getId(), model, null, "DIRECT", null));
         RuntimeEndpoint endpoint = new RuntimeEndpoint(node.getId(), RuntimeType.LM_STUDIO, "http://127.0.0.1:" + port, null);
         endpoint.recordHealth(true);
-        endpoint = endpoints.save(endpoint);
+        endpoint = RuntimeTestTrust.internal(endpoints, runtimeTrustFixture, runtimeApprovalFixture, runtimeProjectsFixture, runtimeNodesFixture, endpoint);
         return deployments.save(new ModelDeployment(endpoint.getId(), model, model, null, null, 8192, true, 4, "[]"));
     }
 

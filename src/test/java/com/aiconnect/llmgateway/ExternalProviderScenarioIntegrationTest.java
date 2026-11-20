@@ -33,7 +33,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @TestPropertySource(properties = {
         "spring.datasource.url=jdbc:h2:mem:aiconnect_external_provider;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
         "spring.flyway.enabled=false",
-        "spring.jpa.hibernate.ddl-auto=create-drop"
+        "spring.jpa.hibernate.ddl-auto=create-drop",
+        "aiconnect.security.external-url.allow-loopback-test-server=true"
 })
 class ExternalProviderScenarioIntegrationTest {
     @Autowired MockMvc mvc;
@@ -42,6 +43,10 @@ class ExternalProviderScenarioIntegrationTest {
     @Autowired ApiKeyService apiKeys;
     @Autowired InferenceNodeRepository nodes;
     @Autowired RuntimeEndpointRepository endpoints;
+    @Autowired com.aiconnect.llmgateway.security.RuntimeTrustAttestationRepository runtimeTrustFixture;
+    @Autowired com.aiconnect.llmgateway.security.ProjectRuntimeApprovalRepository runtimeApprovalFixture;
+    @Autowired com.aiconnect.llmgateway.repository.ProjectRepository runtimeProjectsFixture;
+    @Autowired com.aiconnect.llmgateway.repository.InferenceNodeRepository runtimeNodesFixture;
     @Autowired ExternalProviderRepository providers;
     @Autowired ModelDeploymentRepository deployments;
     @Autowired LlmServiceRepository services;
@@ -77,8 +82,8 @@ class ExternalProviderScenarioIntegrationTest {
             LlmService service = services.save(new LlmService(org.getId(), "unknown-capabilities", "Unknown capabilities", FailoverPolicy.COMPATIBLE, RetryPolicy.SAFE, false, "[]", BigDecimal.ZERO, BigDecimal.ZERO));
             controlPlane.addTarget(service.getId(), new AdminDtos.CreateTarget(model.getId(), 1, 100, false, null));
             serviceAccess.save(new ProjectServiceAccess(project.getId(), service.getId()));
-            externalPolicies.decide(project.getId(), provider.getId(), ExternalAccessStatus.APPROVED, true, false, BigDecimal.valueOf(100), null, null);
-            String body = "{\"model\":\"unknown-capabilities\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"describe\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,aGVsbG8=\"}}]}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"result\",\"schema\":{\"type\":\"object\"}}}}";
+            externalPolicies.decide(project.getId(), provider.getId(), ExternalAccessStatus.APPROVED, true, false, BigDecimal.valueOf(100), Currency.KRW, null, null);
+            String body = "{\"model\":\"unknown-capabilities\",\"max_tokens\":100,\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"describe\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,aGVsbG8=\"}}]}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"result\",\"schema\":{\"type\":\"object\"}}}}";
             mvc.perform(post("/v1/chat/completions").header("Authorization", "Bearer " + key.secret()).contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isServiceUnavailable());
             assertThat(calls).hasValue(0);
             model.configureFeatureSupport("{\"routingUnknownCapabilities\":\"TRY_UNCONFIRMED\"}"); deployments.save(model);
@@ -126,7 +131,7 @@ class ExternalProviderScenarioIntegrationTest {
             assertThat(calls).hasValue(0);
 
             externalPolicies.decide(project.getId(), provider.getId(), ExternalAccessStatus.APPROVED,
-                    true, false, BigDecimal.valueOf(100), null, null);
+                    true, false, BigDecimal.valueOf(100), Currency.KRW, null, null);
             ProjectExternalAccess approval = externalAccess.findByProjectIdAndProviderId(project.getId(), provider.getId()).orElseThrow();
 
             perform(issued.secret(), "text-cloud").andExpect(status().isOk())
@@ -145,7 +150,7 @@ class ExternalProviderScenarioIntegrationTest {
             InferenceNode node = nodes.save(new InferenceNode(organization.getId(), "offline-local", null, "DIRECT", null));
             RuntimeEndpoint endpoint = new RuntimeEndpoint(node.getId(), RuntimeType.LM_STUDIO, "http://127.0.0.1:1", null);
             endpoint.recordHealth(false); endpoint.recordHealth(false); endpoint.recordHealth(false);
-            endpoint = endpoints.save(endpoint);
+            endpoint = RuntimeTestTrust.internal(endpoints, runtimeTrustFixture, runtimeApprovalFixture, runtimeProjectsFixture, runtimeNodesFixture, endpoint);
             ModelDeployment local = deployments.save(new ModelDeployment(endpoint.getId(), "local-model", "text-compatible",
                     "Offline Local", null, null, 8192, true, 1, "[]"));
             LlmService resilient = services.save(new LlmService(organization.getId(), "text-resilient", "Text Resilient",
@@ -157,7 +162,7 @@ class ExternalProviderScenarioIntegrationTest {
             perform(issued.secret(), "text-resilient").andExpect(status().isServiceUnavailable());
             assertThat(calls).hasValue(1);
 
-            approval.decide(ExternalAccessStatus.APPROVED, true, true, BigDecimal.valueOf(100), null, null);
+            approval.decide(ExternalAccessStatus.APPROVED, true, true, BigDecimal.valueOf(100), Currency.KRW, null, null);
             externalAccess.save(approval);
             perform(issued.secret(), "text-resilient").andExpect(status().isOk())
                     .andExpect(jsonPath("$.model").value("text-resilient"));
@@ -172,6 +177,6 @@ class ExternalProviderScenarioIntegrationTest {
         return mvc.perform(post("/v1/chat/completions")
                 .header("Authorization", "Bearer " + key)
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"model\":\"" + model + "\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}],\"stream\":false}"));
+                .content("{\"model\":\"" + model + "\",\"max_tokens\":100,\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}],\"stream\":false}"));
     }
 }

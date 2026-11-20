@@ -11,12 +11,14 @@ import com.aiconnect.llmgateway.domain.RetryPolicy;
 import com.aiconnect.llmgateway.domain.ExternalProvider;
 import com.aiconnect.llmgateway.domain.ExternalProviderType;
 import com.aiconnect.llmgateway.external.ProjectExternalAccessService;
+import com.aiconnect.llmgateway.security.RuntimeTrustPolicy;
 import com.aiconnect.llmgateway.repository.ExternalProviderRepository;
 import com.aiconnect.llmgateway.repository.ModelDeploymentRepository;
 import com.aiconnect.llmgateway.repository.RuntimeEndpointRepository;
 import com.aiconnect.llmgateway.repository.ServiceTargetRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
@@ -36,6 +38,57 @@ class RoutingDiagnosticTest {
     private final ActiveRequestRegistry active = new ActiveRequestRegistry();
     private final RoutingService routing = new RoutingService(targets, deployments, endpoints, active,
             new WeightedTargetSelector(active), new ObjectMapper());
+    private final RuntimeTrustPolicy trust = mock(RuntimeTrustPolicy.class);
+
+    @BeforeEach void configureTrust() {
+        ReflectionTestUtils.setField(routing, "runtimeTrust", trust);
+        when(trust.isInternal(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any())).thenReturn(true);
+    }
+
+    @Test void unclassifiedRuntimeCannotEnterTheGatewayCandidateList() {
+        UUID serviceId = UUID.randomUUID();
+        var service = new LlmService(UUID.randomUUID(), "trust-test", "Trust test", FailoverPolicy.COMPATIBLE,
+                RetryPolicy.SAFE, false, "[]", BigDecimal.ZERO, BigDecimal.ZERO);
+        ReflectionTestUtils.setField(service, "id", serviceId);
+        RuntimeEndpoint endpoint = endpoint();
+        ModelDeployment model = deployment(endpoint, "model", "[]", true, HealthStatus.HEALTHY);
+        when(targets.findByServiceIdOrderByPriorityAsc(serviceId)).thenReturn(List.of(target(serviceId, model, false, true)));
+        when(deployments.findById(model.getId())).thenReturn(Optional.of(model));
+        when(endpoints.findById(endpoint.getId())).thenReturn(Optional.of(endpoint));
+        when(trust.denialReason(org.mockito.ArgumentMatchers.eq(endpoint), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyBoolean(), org.mockito.ArgumentMatchers.anyBoolean()))
+                .thenReturn("RUNTIME_TRUST_UNCLASSIFIED");
+        var result = routing.evaluate(service, Set.of(), UUID.randomUUID());
+        assertThat(result.eligibleTargets()).isEmpty();
+        assertThat(result.evaluations().get(0).reasonCodes()).contains("RUNTIME_TRUST_UNCLASSIFIED");
+    }
+    @Test void unclassifiedLocalTargetCannotDowngradeExternalFailoverToManualAccess() {
+        UUID serviceId=UUID.randomUUID(), projectId=UUID.randomUUID(), providerId=UUID.randomUUID();
+        var service=new LlmService(UUID.randomUUID(),"trust-failover","Trust",FailoverPolicy.COMPATIBLE,
+                RetryPolicy.SAFE,false,"[]",BigDecimal.ZERO,BigDecimal.ZERO);
+        ReflectionTestUtils.setField(service,"id",serviceId);
+        var endpoint=endpoint();
+        var local=deployment(endpoint,"local","[]",true,HealthStatus.HEALTHY);
+        var external=ModelDeployment.external(providerId,"cloud","cloud","Cloud",8192,4,"[]",BigDecimal.ZERO,BigDecimal.ZERO);
+        ReflectionTestUtils.setField(external,"id",UUID.randomUUID());
+        var provider=new ExternalProvider(UUID.randomUUID(),ExternalProviderType.OPENAI,"Provider","https://example.com/v1","key");
+        ReflectionTestUtils.setField(provider,"id",providerId); provider.recordHealth(true);
+        var providers=mock(ExternalProviderRepository.class);
+        var access=mock(ProjectExternalAccessService.class);
+        var guarded=new RoutingService(targets,deployments,endpoints,providers,access,active,new WeightedTargetSelector(active),new ObjectMapper());
+        ReflectionTestUtils.setField(guarded,"runtimeTrust",trust);
+        when(trust.isInternal(org.mockito.ArgumentMatchers.eq(endpoint),org.mockito.ArgumentMatchers.any())).thenReturn(false);
+        when(trust.denialReason(org.mockito.ArgumentMatchers.eq(endpoint),org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.anyBoolean(),org.mockito.ArgumentMatchers.anyBoolean())).thenReturn("RUNTIME_TRUST_UNCLASSIFIED");
+        when(targets.findByServiceIdOrderByPriorityAsc(serviceId)).thenReturn(List.of(target(serviceId,local,false,true),target(serviceId,external,false,true)));
+        when(deployments.findById(local.getId())).thenReturn(Optional.of(local));
+        when(deployments.findById(external.getId())).thenReturn(Optional.of(external));
+        when(endpoints.findById(endpoint.getId())).thenReturn(Optional.of(endpoint));
+        when(providers.findById(providerId)).thenReturn(Optional.of(provider));
+        when(access.allowsManual(projectId,providerId)).thenReturn(true);
+        when(access.allowsAutoFailover(projectId,providerId)).thenReturn(false);
+        var result=guarded.evaluate(service,Set.of(),projectId);
+        assertThat(result.eligibleTargets()).isEmpty();
+        assertThat(result.evaluations().get(1).reasonCodes()).contains("EXTERNAL_AUTO_FAILOVER_NOT_ALLOWED");
+    }
 
     @Test
     void externalUnknownCapabilitiesRequireOptInAndNeverOverrideExplicitDenialOrPrivacy() {

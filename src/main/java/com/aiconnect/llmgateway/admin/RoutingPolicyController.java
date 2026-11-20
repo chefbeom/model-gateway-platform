@@ -1,6 +1,7 @@
 package com.aiconnect.llmgateway.admin;
 
 import com.aiconnect.llmgateway.domain.Currency;
+import com.aiconnect.llmgateway.domain.DataBoundaryPolicy;
 import com.aiconnect.llmgateway.domain.FailoverPolicy;
 import com.aiconnect.llmgateway.domain.LlmService;
 import com.aiconnect.llmgateway.domain.RetryPolicy;
@@ -41,7 +42,7 @@ public class RoutingPolicyController {
         return policies.services(organizationId).stream().map(ServicePolicyView::from).toList();
     }
 
-    @PatchMapping("/services/{serviceId}")
+    @PatchMapping({"/services/{serviceId}", "/services/{serviceId}/policy"})
     public ServicePolicyView configureService(@PathVariable UUID serviceId, @Valid @RequestBody UpdateService request) {
         return ServicePolicyView.from(policies.configureService(serviceId, request));
     }
@@ -77,22 +78,33 @@ public class RoutingPolicyController {
             TemperaturePolicy temperaturePolicy,
             @DecimalMin("0.0") @DecimalMax("2.0") @Digits(integer = 1, fraction = 3) BigDecimal temperatureValue,
             ReasoningEffort reasoningEffort,
-            Boolean openAiFastMode
+            Boolean openAiFastMode,
+            DataBoundaryPolicy dataBoundaryPolicy
     ) {
+        public UpdateService(String displayName, FailoverPolicy failoverPolicy, RetryPolicy retryPolicy,
+                             Boolean allowDegraded, String requiredCapabilitiesJson,
+                             BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Currency currency,
+                             Boolean enabled, TemperaturePolicy temperaturePolicy, BigDecimal temperatureValue,
+                             ReasoningEffort reasoningEffort, Boolean openAiFastMode) {
+            this(displayName, failoverPolicy, retryPolicy, allowDegraded, requiredCapabilitiesJson,
+                    inputPricePerMillion, outputPricePerMillion, currency, enabled, temperaturePolicy,
+                    temperatureValue, reasoningEffort, openAiFastMode, null);
+        }
+
         public UpdateService(String displayName, FailoverPolicy failoverPolicy, RetryPolicy retryPolicy,
                              Boolean allowDegraded, String requiredCapabilitiesJson,
                              BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Currency currency,
                              Boolean enabled, TemperaturePolicy temperaturePolicy, BigDecimal temperatureValue) {
             this(displayName, failoverPolicy, retryPolicy, allowDegraded, requiredCapabilitiesJson,
                     inputPricePerMillion, outputPricePerMillion, currency, enabled, temperaturePolicy,
-                    temperatureValue, null, null);
+                    temperatureValue, null, null, null);
         }
 
         public UpdateService(String displayName, FailoverPolicy failoverPolicy, RetryPolicy retryPolicy,
                              Boolean allowDegraded, String requiredCapabilitiesJson,
                              BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Boolean enabled) {
             this(displayName, failoverPolicy, retryPolicy, allowDegraded, requiredCapabilitiesJson,
-                    inputPricePerMillion, outputPricePerMillion, Currency.KRW, enabled, null, null, null, null);
+                    inputPricePerMillion, outputPricePerMillion, Currency.KRW, enabled, null, null, null, null, null);
         }
     }
     public record UpdateTarget(
@@ -114,13 +126,14 @@ public class RoutingPolicyController {
                                     String requiredCapabilitiesJson, BigDecimal inputPricePerMillion,
                                     BigDecimal outputPricePerMillion, Currency currency, boolean enabled,
                                     TemperaturePolicy temperaturePolicy, BigDecimal temperatureValue,
-                                    ReasoningEffort reasoningEffort, boolean openAiFastMode) {
+                                    ReasoningEffort reasoningEffort, boolean openAiFastMode,
+                                    DataBoundaryPolicy dataBoundaryPolicy) {
         static ServicePolicyView from(LlmService service) {
             return new ServicePolicyView(service.getId(), service.getOrganizationId(), service.getServiceKey(), service.getDisplayName(),
                     service.getFailoverPolicy(), service.getRetryPolicy(), service.isAllowDegraded(), service.getRequiredCapabilitiesJson(),
                     service.getInputPricePerMillion(), service.getOutputPricePerMillion(), service.getCurrency(), service.isEnabled(),
                     service.getTemperaturePolicy(), service.getTemperatureValue(),
-                    service.getReasoningEffort(), service.isOpenAiFastMode());
+                    service.getReasoningEffort(), service.isOpenAiFastMode(), service.getDataBoundaryPolicy());
         }
     }
 

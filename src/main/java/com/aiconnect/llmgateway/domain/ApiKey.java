@@ -22,6 +22,7 @@ public class ApiKey {
     @Column(nullable = false, length = 48, unique = true) private String keyPrefix;
     @Column(nullable = false, length = 64) private String secretHash;
     @Enumerated(EnumType.STRING) @Column(nullable = false, length = 24) private ApiKeyStatus status = ApiKeyStatus.ACTIVE;
+    @Enumerated(EnumType.STRING) @Column(name = "data_boundary_policy", nullable = false, length = 40) private DataBoundaryPolicy dataBoundaryPolicy = DataBoundaryPolicy.EXTERNAL_ALLOWED;
     private Instant expiresAt;
     private Instant lastUsedAt;
     @Column(nullable = false) private Instant createdAt = Instant.now();
@@ -51,6 +52,8 @@ public class ApiKey {
     public String getKeyPrefix() { return keyPrefix; }
     public String getSecretHash() { return secretHash; }
     public ApiKeyStatus getStatus() { return status; }
+    public DataBoundaryPolicy getDataBoundaryPolicy() { return dataBoundaryPolicy == null ? DataBoundaryPolicy.EXTERNAL_ALLOWED : dataBoundaryPolicy; }
+    public void configureDataBoundaryPolicy(DataBoundaryPolicy policy) { if (policy != null) this.dataBoundaryPolicy = policy; }
     public Instant getExpiresAt() { return expiresAt; }
     public Instant getLastUsedAt() { return lastUsedAt; }
     public Instant getCreatedAt() { return createdAt; }

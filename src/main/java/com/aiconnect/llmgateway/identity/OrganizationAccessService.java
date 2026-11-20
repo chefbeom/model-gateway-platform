@@ -57,10 +57,13 @@ public class OrganizationAccessService {
     public List<OrganizationUserView> organizationUsers(UUID organizationId) {
         requireOrganization(organizationId);
         return organizationMembers.findByIdOrganizationId(organizationId).stream()
-                .map(member -> new OrganizationUserView(
-                        member.getId().getUserId(),
-                        users.findById(member.getId().getUserId()).map(AppUser::getEmail).orElse("삭제된 사용자"),
-                        member.getRole()))
+                .map(member -> {
+                    AppUser user = users.findById(member.getId().getUserId()).orElse(null);
+                    String userEmail = user != null ? user.getEmail() : "삭제된 사용자";
+                    String tier = user != null ? AccountTier.effectiveFor(user).name() : AccountTier.GENERAL_USER.name();
+                    boolean totpEnabled = user != null && user.isTotpEnabled();
+                    return new OrganizationUserView(member.getId().getUserId(), userEmail, member.getRole(), tier, totpEnabled);
+                })
                 .sorted(Comparator.comparing(OrganizationUserView::email, String.CASE_INSENSITIVE_ORDER))
                 .toList();
     }
@@ -236,7 +239,7 @@ public class OrganizationAccessService {
         return new ApiException(HttpStatus.NOT_FOUND, code, message);
     }
 
-    public record OrganizationUserView(UUID id, String email, OrganizationRole organizationRole) { }
+    public record OrganizationUserView(UUID id, String email, OrganizationRole organizationRole, String accountTier, boolean totpEnabled) { }
     public record TeamMemberReference(UUID userId, String email, TeamRole role) { }
     public record TeamMembershipReference(UUID teamId, String teamName, TeamRole role) { }
     public record ProjectReference(UUID id, String name, String status, int apiKeyCount) { }

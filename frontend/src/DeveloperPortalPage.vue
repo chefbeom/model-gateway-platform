@@ -2,18 +2,34 @@
 import { formatDate, formatDateTime } from './dateTime'
 import { computed, onMounted, ref, watch } from 'vue'
 import BaseModal from './BaseModal.vue'
-import { adminFetch, type AdminAuth } from './api'
+import {
+  adminFetch,
+  DATA_BOUNDARY_OPTIONS,
+  dataBoundaryLabel,
+  dataBoundaryShortLabel,
+  exceedsDataBoundary,
+  strictestDataBoundary,
+  type AdminAuth,
+  type Currency,
+  type DataBoundaryPolicy
+} from './api'
 import { copyText } from './clipboard'
+import { formatSpend } from './quotaVisualization'
 
 type Service = { serviceKey: string; displayName: string }
-type Project = { id: string; name: string; status: string; canIssueApiKeys: boolean; services: Service[] }
+type Project = {
+  id: string; name: string; status: string; canIssueApiKeys: boolean
+  dataBoundaryPolicy?: DataBoundaryPolicy; maxDataBoundaryPolicy?: DataBoundaryPolicy; effectiveDataBoundaryPolicy?: DataBoundaryPolicy
+  services: Service[]
+}
 type ApiKey = {
   id: string; name: string; keyPrefix: string; status: string
+  dataBoundaryPolicy?: DataBoundaryPolicy; effectiveDataBoundaryPolicy?: DataBoundaryPolicy
   expiresAt?: string | null; lastUsedAt?: string | null; createdAt: string
   canRevoke: boolean; canDelete: boolean
 }
 type ConnectionEndpoint = { scope: 'INTERNAL' | 'EXTERNAL'; label: string; url: string }
-type ExternalAccess = { providerId: string; providerName: string; providerType: string; status: string; manualAllowed: boolean; autoFailoverEnabled: boolean; monthlyCostLimit?: number | null; expiresAt?: string | null; requestedReason?: string | null }
+type ExternalAccess = { providerId: string; providerName: string; providerType: string; status: string; manualAllowed: boolean; autoFailoverEnabled: boolean; monthlyCostLimit?: number | null; monthlyCostCurrency?: Currency | null; expiresAt?: string | null; requestedReason?: string | null }
 
 const props = defineProps<{ organizationId: string; auth: AdminAuth }>()
 const projects = ref<Project[]>([])
@@ -31,6 +47,7 @@ const keyToRevoke = ref<ApiKey | null>(null)
 const keyRecordToDelete = ref<ApiKey | null>(null)
 const keyName = ref('')
 const expiresAt = ref('')
+const keyBoundaryPolicy = ref<DataBoundaryPolicy>('EXTERNAL_ALLOWED')
 const issuedSecret = ref('')
 const issuedModels = ref<Service[]>([])
 const externalAccess = ref<ExternalAccess[]>([])
@@ -38,6 +55,13 @@ const externalRequestOpen = ref(false)
 const externalProviderId = ref('')
 const externalReason = ref('')
 const selected = computed(() => projects.value.find(project => project.id === selectedId.value) ?? null)
+const effectiveProjectBoundary = computed<DataBoundaryPolicy>(() =>
+  strictestDataBoundary(
+    selected.value?.effectiveDataBoundaryPolicy,
+    selected.value?.maxDataBoundaryPolicy,
+    selected.value?.dataBoundaryPolicy
+  )
+)
 
 async function loadConnections() {
   try {
@@ -103,13 +127,33 @@ async function requestExternalAccess() {
   finally { busy.value = false }
 }
 
+function openKeyModal() {
+  if (!selected.value?.canIssueApiKeys) return
+  keyName.value = ''
+  expiresAt.value = ''
+  keyBoundaryPolicy.value = effectiveProjectBoundary.value
+  keyOpen.value = true
+}
+
 async function issueKey() {
   if (!selected.value || !keyName.value.trim()) return
+  if (!selected.value.canIssueApiKeys) {
+    message.value = 'API 키 발급 권한이 위임되지 않았습니다.'
+    return
+  }
+  if (exceedsDataBoundary(keyBoundaryPolicy.value, effectiveProjectBoundary.value)) {
+    message.value = '프로젝트 데이터 경계 상한을 초과하는 정책은 선택할 수 없습니다.'
+    return
+  }
   busy.value = true
   try {
     const result = await adminFetch<{ secret: string }>(`/api/portal/projects/${selected.value.id}/api-keys`, props.auth, {
       method: 'POST',
-      body: JSON.stringify({ name: keyName.value.trim(), expiresAt: expiresAt.value ? new Date(expiresAt.value).toISOString() : null })
+      body: JSON.stringify({
+        name: keyName.value.trim(),
+        expiresAt: expiresAt.value ? new Date(expiresAt.value).toISOString() : null,
+        dataBoundaryPolicy: keyBoundaryPolicy.value
+      })
     })
     await loadConnections()
     issuedSecret.value = result.secret
@@ -190,7 +234,7 @@ onMounted(() => { void loadProjects(); void loadConnections() })
       </div>
       <div class="hero-actions">
         <button class="secondary-button" :disabled="busy" @click="loadProjects">새로고침</button>
-        <button v-if="selected?.canIssueApiKeys" class="primary-button" @click="keyOpen = true">+ API 키 발급</button>
+        <button v-if="selected?.canIssueApiKeys" class="primary-button" @click="openKeyModal">+ API 키 발급</button>
       </div>
     </div>
     <p v-if="message" class="inline-alert">{{ message }}</p>
@@ -205,7 +249,16 @@ onMounted(() => { void loadProjects(); void loadConnections() })
         <option value="">프로젝트 선택</option>
         <option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }} · {{ project.status }}</option>
       </select>
-      <span v-if="selected" class="status-chip healthy">{{ selected.canIssueApiKeys ? '키 발급 가능' : '조회 전용' }}</span>
+      <div v-if="selected" class="project-chip-row">
+        <span class="status-chip" :class="selected.canIssueApiKeys ? 'healthy' : 'draining'">{{ selected.canIssueApiKeys ? '키 발급 가능' : '조회 전용 (미위임)' }}</span>
+        <span class="status-chip unknown">{{ dataBoundaryShortLabel(effectiveProjectBoundary) }}</span>
+      </div>
+    </article>
+
+    <article v-if="selected && !selected.canIssueApiKeys" class="surface-card delegation-notice" role="status">
+      <strong>API 키 발급 권한이 위임되지 않았습니다</strong>
+      <p v-if="selected.status !== 'ACTIVE'">프로젝트가 현재 <b>{{ selected.status }}</b> 상태이므로 새 API 키를 발급할 수 없습니다.</p>
+      <p v-else>현재 계정은 이 프로젝트에서 조회 전용입니다. API 키 발급이 필요하면 프로젝트 총괄 또는 시스템 관리자에게 키 발급 권한 위임을 요청하세요.</p>
     </article>
 
     <template v-if="selected">
@@ -228,22 +281,23 @@ onMounted(() => { void loadProjects(); void loadConnections() })
       <article class="surface-card external-access-card">
         <header class="card-header"><div><span class="card-kicker">EXTERNAL AI ACCESS</span><h2>외부 AI 사용 권한</h2></div></header>
         <p class="external-policy-copy">기본값은 외부 전송 금지입니다. 필요할 때 사용 요청을 보내고, 관리자가 승인한 수동 사용 또는 자동 Failover만 동작합니다.</p>
-        <div v-if="externalAccess.length" class="external-access-list"><div v-for="provider in externalAccess" :key="provider.providerId"><span class="status-chip tiny" :class="provider.status === 'APPROVED' ? 'healthy' : 'unknown'">{{ provider.status }}</span><span><b>{{ provider.providerName }}</b><small>{{ provider.providerType }} · 수동 {{ provider.manualAllowed ? 'ON' : 'OFF' }} · 자동 Failover {{ provider.autoFailoverEnabled ? 'ON' : 'OFF' }}</small></span><button v-if="provider.status !== 'APPROVED'" class="secondary-button" @click="openExternalRequest(provider)">{{ provider.status === 'REQUESTED' ? '요청 수정' : '사용 요청' }}</button><small v-else>{{ provider.expiresAt ? formatDate(provider.expiresAt) + '까지' : '만료 없음' }}</small></div></div>
+        <div v-if="externalAccess.length" class="external-access-list"><div v-for="provider in externalAccess" :key="provider.providerId"><span class="status-chip tiny" :class="provider.status === 'APPROVED' ? 'healthy' : 'unknown'">{{ provider.status }}</span><span><b>{{ provider.providerName }}</b><small>{{ provider.providerType }} · 수동 {{ provider.manualAllowed ? 'ON' : 'OFF' }} · 자동 Failover {{ provider.autoFailoverEnabled ? 'ON' : 'OFF' }}<template v-if="provider.monthlyCostLimit != null && provider.monthlyCostCurrency"> · 월 한도 {{ formatSpend(provider.monthlyCostLimit, provider.monthlyCostCurrency) }}</template><template v-else-if="provider.monthlyCostLimit != null"> · 통화 미설정 (차단)</template></small></span><button v-if="provider.status !== 'APPROVED'" class="secondary-button" @click="openExternalRequest(provider)">{{ provider.status === 'REQUESTED' ? '요청 수정' : '사용 요청' }}</button><small v-else>{{ provider.expiresAt ? formatDate(provider.expiresAt) + '까지' : '만료 없음' }}</small></div></div>
         <div v-else class="empty-state compact"><span>◇</span><p>관리자가 등록한 외부 AI Provider가 없습니다.</p></div>
       </article>
 
       <article class="surface-card">
         <header class="card-header">
           <div><span class="card-kicker">PROJECT CREDENTIALS</span><h2>API 키</h2></div>
-          <button v-if="selected.canIssueApiKeys" class="primary-button" @click="keyOpen = true">+ API 키 발급</button>
+          <button v-if="selected.canIssueApiKeys" class="primary-button" @click="openKeyModal">+ API 키 발급</button>
         </header>
         <div v-if="keys.length" class="data-table-wrap">
           <table class="data-table">
-            <thead><tr><th>이름</th><th>키 식별자</th><th>상태</th><th>마지막 사용</th><th>만료</th><th>관리</th></tr></thead>
+            <thead><tr><th>이름</th><th>키 식별자</th><th>데이터 경계</th><th>상태</th><th>마지막 사용</th><th>만료</th><th>관리</th></tr></thead>
             <tbody>
               <tr v-for="key in keys" :key="key.id">
                 <td><strong>{{ key.name }}</strong><small>{{ formatDate(key.createdAt) }} 생성</small></td>
                 <td class="mono">{{ key.keyPrefix }}••••••••</td>
+                <td><small>{{ dataBoundaryShortLabel(key.effectiveDataBoundaryPolicy ?? key.dataBoundaryPolicy ?? effectiveProjectBoundary) }}</small></td>
                 <td><span class="status-chip tiny" :class="key.status === 'ACTIVE' ? 'healthy' : 'unknown'">{{ key.status }}</span></td>
                 <td>{{ key.lastUsedAt ? formatDateTime(key.lastUsedAt) : '사용 전' }}</td>
                 <td>{{ key.expiresAt ? formatDate(key.expiresAt) : '만료 없음' }}</td>
@@ -258,7 +312,7 @@ onMounted(() => { void loadProjects(); void loadConnections() })
             </tbody>
           </table>
         </div>
-        <div v-else class="empty-state"><span>⌘</span><h3>아직 발급한 API 키가 없습니다</h3><p>서비스에 연결할 첫 API 키를 발급하세요.</p><button v-if="selected.canIssueApiKeys" class="text-button" @click="keyOpen = true">첫 API 키 발급</button></div>
+        <div v-else class="empty-state"><span>⌘</span><h3>아직 발급한 API 키가 없습니다</h3><p>{{ selected.canIssueApiKeys ? '서비스에 연결할 첫 API 키를 발급하세요.' : 'API 키 발급 권한이 위임되면 여기서 키를 발급할 수 있습니다.' }}</p><button v-if="selected.canIssueApiKeys" class="text-button" @click="openKeyModal">첫 API 키 발급</button></div>
       </article>
     </template>
 
@@ -268,8 +322,25 @@ onMounted(() => { void loadProjects(); void loadConnections() })
     </BaseModal>
 
     <BaseModal :open="keyOpen" title="API 키 발급" description="키 원문과 연결 정보는 발급 직후 한 번만 표시됩니다. 안전한 비밀 관리 도구에 보관하세요." size="sm" @close="keyOpen = false">
-      <div class="modal-form"><label class="field">키 이름<input v-model.trim="keyName" placeholder="production-backend" /></label><label class="field">만료일 (선택)<input v-model="expiresAt" type="datetime-local" /></label></div>
-      <template #footer><button class="secondary-button" @click="keyOpen = false">취소</button><button class="primary-button" :disabled="busy || !keyName" @click="issueKey">키 발급</button></template>
+      <div class="modal-form">
+        <label class="field">키 이름<input v-model.trim="keyName" placeholder="production-backend" /></label>
+        <label class="field">
+          데이터 경계 정책 (프로젝트 허용 상한: {{ dataBoundaryShortLabel(effectiveProjectBoundary) }})
+          <select v-model="keyBoundaryPolicy">
+            <option
+              v-for="option in DATA_BOUNDARY_OPTIONS"
+              :key="option.value"
+              :value="option.value"
+              :disabled="exceedsDataBoundary(option.value, effectiveProjectBoundary)"
+            >
+              {{ option.label }}{{ exceedsDataBoundary(option.value, effectiveProjectBoundary) ? ' (상한 초과)' : '' }}
+            </option>
+          </select>
+        </label>
+        <small class="boundary-help">{{ dataBoundaryLabel(keyBoundaryPolicy) }} — 프로젝트 및 논리 서비스 경계와 교집합으로 적용되며 상한을 완화할 수 없습니다.</small>
+        <label class="field">만료일 (선택)<input v-model="expiresAt" type="datetime-local" /></label>
+      </div>
+      <template #footer><button class="secondary-button" @click="keyOpen = false">취소</button><button class="primary-button" :disabled="busy || !keyName || exceedsDataBoundary(keyBoundaryPolicy, effectiveProjectBoundary)" @click="issueKey">키 발급</button></template>
     </BaseModal>
 
     <BaseModal :open="secretOpen" title="API 키와 연결 정보를 준비했습니다" description="API 키 원문은 이 창을 닫으면 다시 표시할 수 없습니다." @close="secretOpen = false">
@@ -305,4 +376,9 @@ onMounted(() => { void loadProjects(); void loadConnections() })
 .revocation-note { padding: 16px; display: grid; gap: 8px; border: 1px solid color-mix(in srgb, var(--danger) 38%, transparent); border-radius: 12px; background: var(--danger-dim); }.revocation-note span { color: var(--danger); font-size: 9px; font-weight: 800; letter-spacing: .12em; }.revocation-note strong { font-size: 14px; }.revocation-note code { padding: 8px; overflow: auto; border-radius: 7px; background: var(--surface); color: var(--text-soft); font-size: 10px; }.revocation-note p { margin: 2px 0 0; color: var(--text-soft); font-size: 11px; line-height: 1.6; }
 .external-access-card { overflow: hidden; }.external-policy-copy { margin: 0; padding: 16px 22px; color: var(--text-soft); font-size: 11px; line-height: 1.7; border-bottom: 1px solid var(--border); }.external-access-list { display: grid; }.external-access-list > div { padding: 13px 20px; display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 11px; align-items: center; border-bottom: 1px solid var(--border); }.external-access-list > div:last-child { border-bottom: 0; }.external-access-list > div > span:nth-child(2) { display: grid; gap: 4px; }.external-access-list small { color: var(--muted); font-size: 9px; }
 @media (max-width: 760px) { .developer-summary-grid { grid-template-columns: 1fr; }.simple-card { min-height: 0; } }
+.project-chip-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.delegation-notice { padding: 16px 20px; display: grid; gap: 6px; border-color: color-mix(in srgb, var(--warning) 42%, var(--border)); background: var(--warning-dim); }
+.delegation-notice strong { font-size: 13px; }
+.delegation-notice p { margin: 0; color: var(--text-soft); font-size: 12px; line-height: 1.6; }
+.boundary-help { color: var(--muted); font-size: 10px; line-height: 1.5; }
 </style>

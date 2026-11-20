@@ -19,9 +19,17 @@ import java.util.UUID;
 @Entity
 @Table(name = "spend_quota_reservation", indexes = {
         @Index(name = "idx_spend_quota_reservation_quota_expiry", columnList = "quota_id,expires_at"),
-        @Index(name = "idx_spend_quota_reservation_key", columnList = "reservation_key")
+        @Index(name = "idx_spend_quota_reservation_key", columnList = "reservation_key"),
+        @Index(name = "idx_sqr_quota_status_exp", columnList = "quota_id,status,expires_at")
 })
 public class SpendQuotaReservation {
+    public enum ReservationStatus {
+        ACTIVE,
+        RELEASED,
+        SETTLED,
+        HELD_UNSETTLED
+    }
+
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     @Column(columnDefinition = "char(36)")
@@ -40,11 +48,20 @@ public class SpendQuotaReservation {
     @Column(nullable = false, length = 3)
     private Currency currency;
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 24)
+    private ReservationStatus status = ReservationStatus.ACTIVE;
+
     @Column(nullable = false)
     private Instant createdAt = Instant.now();
 
     @Column(nullable = false)
     private Instant expiresAt;
+
+    private Instant settledAt;
+
+    @Column(length = 120)
+    private String reason;
 
     protected SpendQuotaReservation() { }
 
@@ -61,6 +78,9 @@ public class SpendQuotaReservation {
     public UUID getReservationKey() { return reservationKey; }
     public BigDecimal getAmount() { return amount; }
     public Currency getCurrency() { return currency; }
+    public ReservationStatus getStatus() { return status; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getExpiresAt() { return expiresAt; }
+    public Instant getSettledAt() { return settledAt; }
+    public String getReason() { return reason; }
 }

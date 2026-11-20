@@ -48,7 +48,7 @@ public class RequestScheduler {
         signal(); return p.future;
     }
     private List<ResolvedTarget> allowed(RoutingDecision decision,Pending p,long now) {
-        List<ResolvedTarget> local=decision.eligibleTargets().stream().filter(t->!t.external()).toList();
+        List<ResolvedTarget> local=decision.eligibleTargets().stream().filter(t->!t.externalDataBoundary()).toList();
         if(p.settings.mode()==SchedulingMode.LOCAL_ONLY_QUEUE) return local;
         if(now-p.created<p.settings.localWaitMs() && !local.isEmpty()) return local;
         return decision.eligibleTargets();
@@ -70,7 +70,7 @@ public class RequestScheduler {
             (p.settings.mode()==SchedulingMode.LOCAL_ONLY_QUEUE?allowed:decision.eligibleTargets()).stream().filter(t->t!=candidate).forEach(ordered::add);
             DispatchPlan plan=new DispatchPlan(routing,decision,ordered,candidate,lease);
             try {
-                traces.dispatched(p.id,candidate.deployment().getId(),candidate.external()?"LOCAL_WAIT_EXPIRED_EXTERNAL":queued?"QUEUED_LOCAL_AVAILABLE":"LOCAL_AVAILABLE",now);
+                traces.dispatched(p.id,candidate.deployment().getId(),candidate.externalDataBoundary()?"LOCAL_WAIT_EXPIRED_EXTERNAL":queued?"QUEUED_LOCAL_AVAILABLE":"LOCAL_AVAILABLE",now);
                 pending.remove(p.id,p);
                 if(!p.future.complete(plan)) plan.close();
                 return true;

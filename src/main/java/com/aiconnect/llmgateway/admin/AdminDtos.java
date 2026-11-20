@@ -1,6 +1,7 @@
 package com.aiconnect.llmgateway.admin;
 
 import com.aiconnect.llmgateway.domain.Currency;
+import com.aiconnect.llmgateway.domain.DataBoundaryPolicy;
 import com.aiconnect.llmgateway.domain.FailoverPolicy;
 import com.aiconnect.llmgateway.domain.RetryPolicy;
 import com.aiconnect.llmgateway.domain.RuntimeType;
@@ -25,8 +26,15 @@ public final class AdminDtos {
 
     public record CreateOrganization(@NotBlank @Size(max = 120) String name) { }
     public record CreateProject(@NotNull UUID organizationId, UUID teamId, @NotBlank @Size(max = 120) String name,
-                                Boolean externalAiBlocked) {
-        public CreateProject(UUID organizationId, UUID teamId, String name) { this(organizationId, teamId, name, false); }
+                                Boolean externalAiBlocked, DataBoundaryPolicy dataBoundaryPolicy,
+                                DataBoundaryPolicy maxDataBoundaryPolicy) {
+        public CreateProject(UUID organizationId, UUID teamId, String name) {
+            this(organizationId, teamId, name, false, null, null);
+        }
+
+        public CreateProject(UUID organizationId, UUID teamId, String name, Boolean externalAiBlocked) {
+            this(organizationId, teamId, name, externalAiBlocked, null, null);
+        }
     }
     public record CreateNode(@NotNull UUID organizationId, @NotBlank @Size(max = 120) String name,
                              @Size(max = 500) String description, String connectionMode, String labelsJson) { }
@@ -47,14 +55,25 @@ public final class AdminDtos {
                                 TemperaturePolicy temperaturePolicy,
                                 @DecimalMin("0.0") @DecimalMax("2.0") @Digits(integer = 1, fraction = 3) BigDecimal temperatureValue,
                                 ReasoningEffort reasoningEffort,
-                                Boolean openAiFastMode) {
+                                Boolean openAiFastMode,
+                                DataBoundaryPolicy dataBoundaryPolicy) {
+        public CreateService(UUID organizationId, String serviceKey, String displayName, FailoverPolicy failoverPolicy,
+                             RetryPolicy retryPolicy, boolean allowDegraded, String requiredCapabilitiesJson,
+                             BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Currency currency,
+                             TemperaturePolicy temperaturePolicy, BigDecimal temperatureValue,
+                             ReasoningEffort reasoningEffort, Boolean openAiFastMode) {
+            this(organizationId, serviceKey, displayName, failoverPolicy, retryPolicy, allowDegraded,
+                    requiredCapabilitiesJson, inputPricePerMillion, outputPricePerMillion, currency,
+                    temperaturePolicy, temperatureValue, reasoningEffort, openAiFastMode, null);
+        }
+
         public CreateService(UUID organizationId, String serviceKey, String displayName, FailoverPolicy failoverPolicy,
                              RetryPolicy retryPolicy, boolean allowDegraded, String requiredCapabilitiesJson,
                              BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Currency currency,
                              TemperaturePolicy temperaturePolicy, BigDecimal temperatureValue) {
             this(organizationId, serviceKey, displayName, failoverPolicy, retryPolicy, allowDegraded,
                     requiredCapabilitiesJson, inputPricePerMillion, outputPricePerMillion, currency,
-                    temperaturePolicy, temperatureValue, null, null);
+                    temperaturePolicy, temperatureValue, null, null, null);
         }
     }
     public record GrantServiceAccess(@NotNull UUID serviceId) { }
@@ -66,5 +85,10 @@ public final class AdminDtos {
             this(deploymentId, priority, weight, degraded, maxConcurrencyOverride, true);
         }
     }
-    public record CreateApiKey(@NotBlank @Size(max = 120) String name, Instant expiresAt) { }
+    public record CreateApiKey(@NotBlank @Size(max = 120) String name, Instant expiresAt,
+                               DataBoundaryPolicy dataBoundaryPolicy) {
+        public CreateApiKey(String name, Instant expiresAt) {
+            this(name, expiresAt, null);
+        }
+    }
 }

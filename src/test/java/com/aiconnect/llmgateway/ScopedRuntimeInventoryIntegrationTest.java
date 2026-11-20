@@ -3,6 +3,7 @@ package com.aiconnect.llmgateway;
 import com.aiconnect.llmgateway.domain.*;
 import com.aiconnect.llmgateway.identity.IdentityService;
 import com.aiconnect.llmgateway.identity.OrganizationRole;
+import com.aiconnect.llmgateway.identity.TotpService;
 import com.aiconnect.llmgateway.repository.InferenceNodeRepository;
 import com.aiconnect.llmgateway.repository.OrganizationRepository;
 import com.aiconnect.llmgateway.repository.RuntimeEndpointRepository;
@@ -17,6 +18,8 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.Instant;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -30,6 +33,7 @@ class ScopedRuntimeInventoryIntegrationTest {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper objectMapper;
     @Autowired IdentityService identity;
+    @Autowired TotpService totpService;
     @Autowired OrganizationRepository organizations;
     @Autowired InferenceNodeRepository nodes;
     @Autowired RuntimeEndpointRepository endpoints;
@@ -43,15 +47,24 @@ class ScopedRuntimeInventoryIntegrationTest {
         String login = mvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"email\":\"scoped@example.com\",\"password\":\"correct-horse-battery-staple\"}"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
-        String token = objectMapper.readTree(login).path("accessToken").asText();
+        String preMfa = objectMapper.readTree(login).path("accessToken").asText();
+        String setupJson = mvc.perform(post("/api/auth/totp/setup").header("Authorization", "Bearer " + preMfa))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        String secret = objectMapper.readTree(setupJson).path("secret").asText();
+        String code = totpService.generateCode(secret, Instant.now());
+        String enrollJson = mvc.perform(post("/api/auth/totp/enroll")
+                        .header("Authorization", "Bearer " + preMfa)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"code\":\"" + code + "\"}"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        String token = objectMapper.readTree(enrollJson).path("session").path("accessToken").asText();
+
         addEndpoint(own, "own-node", "http://own:1234");
         addEndpoint(other, "other-node", "http://other:1234");
 
-        String ownResponse = mvc.perform(get("/api/admin/organizations/{id}/runtime-endpoints", own.getId()).header("Authorization", "Bearer " + token))
-                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
-        JsonNode ownItems = objectMapper.readTree(ownResponse);
-        assertThat(ownItems).hasSize(1);
-        assertThat(ownItems.get(0).path("baseUrl").asText()).isEqualTo("http://own:1234");
+        // Project directors do not receive organization-wide infrastructure inventory.
+        mvc.perform(get("/api/admin/organizations/{id}/runtime-endpoints", own.getId()).header("Authorization", "Bearer " + token))
+                .andExpect(status().isForbidden());
         mvc.perform(get("/api/admin/organizations/{id}/runtime-endpoints", other.getId()).header("Authorization", "Bearer " + token))
                 .andExpect(status().isForbidden());
     }

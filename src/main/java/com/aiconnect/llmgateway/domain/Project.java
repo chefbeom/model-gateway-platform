@@ -2,6 +2,8 @@ package com.aiconnect.llmgateway.domain;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -35,6 +37,14 @@ public class Project {
     @Column(nullable = false)
     private boolean externalAiBlocked;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "data_boundary_policy", nullable = false, length = 40)
+    private DataBoundaryPolicy dataBoundaryPolicy = DataBoundaryPolicy.EXTERNAL_ALLOWED;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "max_data_boundary_policy", nullable = false, length = 40)
+    private DataBoundaryPolicy maxDataBoundaryPolicy = DataBoundaryPolicy.EXTERNAL_ALLOWED;
+
     @Column(nullable = false)
     private Instant createdAt = Instant.now();
 
@@ -63,8 +73,57 @@ public class Project {
     public UUID getTeamId() { return teamId; }
     public String getName() { return name; }
     public String getStatus() { return status; }
-    public boolean isExternalAiBlocked() { return externalAiBlocked; }
-    public void configureExternalAiBlocked(boolean blocked) { externalAiBlocked = blocked; }
+    public boolean isExternalAiBlocked() {
+        return externalAiBlocked || effectiveDataBoundaryPolicy() == DataBoundaryPolicy.INTERNAL_ONLY;
+    }
+
+    public DataBoundaryPolicy getDataBoundaryPolicy() {
+        if (externalAiBlocked) {
+            return DataBoundaryPolicy.INTERNAL_ONLY;
+        }
+        return dataBoundaryPolicy == null ? DataBoundaryPolicy.EXTERNAL_ALLOWED : dataBoundaryPolicy;
+    }
+
+    public DataBoundaryPolicy getMaxDataBoundaryPolicy() {
+        return maxDataBoundaryPolicy == null ? DataBoundaryPolicy.EXTERNAL_ALLOWED : maxDataBoundaryPolicy;
+    }
+
+    public DataBoundaryPolicy effectiveDataBoundaryPolicy() {
+        return DataBoundaryPolicy.strictest(getMaxDataBoundaryPolicy(), getDataBoundaryPolicy());
+    }
+
+    public void configureExternalAiBlocked(boolean blocked) {
+        this.externalAiBlocked = blocked;
+        if (blocked) {
+            this.dataBoundaryPolicy = DataBoundaryPolicy.INTERNAL_ONLY;
+            this.maxDataBoundaryPolicy = DataBoundaryPolicy.INTERNAL_ONLY;
+        } else {
+            if (this.maxDataBoundaryPolicy == null || this.maxDataBoundaryPolicy == DataBoundaryPolicy.INTERNAL_ONLY) {
+                this.maxDataBoundaryPolicy = DataBoundaryPolicy.EXTERNAL_ALLOWED;
+            }
+            this.dataBoundaryPolicy = this.maxDataBoundaryPolicy;
+        }
+    }
+
+    public void configureDataBoundaryPolicy(DataBoundaryPolicy policy, DataBoundaryPolicy ceiling) {
+        if (ceiling != null) {
+            this.maxDataBoundaryPolicy = ceiling;
+        }
+        DataBoundaryPolicy effectiveCeiling = getMaxDataBoundaryPolicy();
+        if (policy != null) {
+            this.dataBoundaryPolicy = policy.exceeds(effectiveCeiling) ? effectiveCeiling : policy;
+        } else if (this.dataBoundaryPolicy == null || this.dataBoundaryPolicy.exceeds(effectiveCeiling)) {
+            this.dataBoundaryPolicy = effectiveCeiling;
+        }
+        this.externalAiBlocked = DataBoundaryPolicy.strictest(effectiveCeiling, this.dataBoundaryPolicy) == DataBoundaryPolicy.INTERNAL_ONLY;
+    }
+
+    public void updateMetadata(String name, UUID teamId) {
+        if (name != null && !name.isBlank()) {
+            this.name = name.trim();
+        }
+        this.teamId = teamId;
+    }
 
     /**
      * Retains request and usage history after an owning team is removed, while

@@ -55,7 +55,13 @@ public class DeveloperPortalController {
         List<MembershipView> memberOf = memberships.findByIdUserId(actor.userId()).stream()
                 .map(member -> new MembershipView(member.getId().getOrganizationId(), member.getRole()))
                 .toList();
-        return new SessionView(actor.platformAdmin(), memberOf);
+        AccountTier tier = actor.accountTier() != null
+                ? actor.accountTier()
+                : (actor.platformAdmin() ? AccountTier.SYSTEM_ADMIN : AccountTier.GENERAL_USER);
+        String mfaState = !actor.totpEnabled()
+                ? "ENROLLMENT_REQUIRED"
+                : (actor.mfaVerified() ? "VERIFIED" : "VERIFICATION_REQUIRED");
+        return new SessionView(actor.platformAdmin(), tier.name(), actor.totpEnabled(), mfaState, memberOf);
     }
 
     @GetMapping("/connection")
@@ -73,7 +79,9 @@ public class DeveloperPortalController {
         requireOrganizationAccess(actor, organizationId);
         return projects.findByOrganizationId(organizationId).stream()
                 .filter(project -> access.canViewProject(actor, project.getId()))
-                .map(project -> ProjectView.from(project, "ACTIVE".equalsIgnoreCase(project.getStatus()), modelsFor(project)))
+                .map(project -> ProjectView.from(project,
+                        "ACTIVE".equalsIgnoreCase(project.getStatus()) && access.canIssueProjectApiKeys(actor, project.getId()),
+                        modelsFor(project)))
                 .toList();
     }
 
@@ -81,21 +89,28 @@ public class DeveloperPortalController {
     public List<ApiKeyView> apiKeys(@PathVariable UUID projectId) {
         AuthPrincipal actor = actor();
         requireProjectView(actor, projectId);
-        return apiKeys.findByProjectId(projectId).stream().map(key -> ApiKeyView.from(key, canManageKey(actor, key))).toList();
+        DataBoundaryPolicy projectBoundary = projects.findById(projectId)
+                .map(Project::effectiveDataBoundaryPolicy)
+                .orElse(DataBoundaryPolicy.EXTERNAL_ALLOWED);
+        return apiKeys.findByProjectId(projectId).stream()
+                .map(key -> ApiKeyView.from(key, canManageKey(actor, key), projectBoundary))
+                .toList();
     }
 
     @PostMapping("/projects/{projectId}/api-keys")
     public IssuedApiKey issueApiKey(@PathVariable UUID projectId, @Valid @RequestBody CreateApiKey request) {
         AuthPrincipal actor = actor();
         requireProjectView(actor, projectId);
-        return apiKeyService.issue(projectId, request.name(), request.expiresAt(), actor.userId());
+        requireApiKeyIssuancePermission(actor, projectId);
+        return apiKeyService.issue(projectId, request.name(), request.expiresAt(), actor.userId(), request.dataBoundaryPolicy());
     }
 
     @PostMapping("/projects/{projectId}/api-keys/temporary")
     public IssuedApiKey issueTemporaryApiKey(@PathVariable UUID projectId, @Valid @RequestBody CreateTemporaryApiKey request) {
         AuthPrincipal actor = actor();
         requireProjectView(actor, projectId);
-        return apiKeyService.issueTemporary(projectId, request.name(), request.durationSeconds(), actor.userId());
+        requireApiKeyIssuancePermission(actor, projectId);
+        return apiKeyService.issueTemporary(projectId, request.name(), request.durationSeconds(), actor.userId(), request.dataBoundaryPolicy());
     }
 
     @DeleteMapping("/projects/{projectId}/api-keys/{apiKeyId}")
@@ -160,27 +175,51 @@ public class DeveloperPortalController {
         }
     }
 
-    public record SessionView(boolean platformAdmin, List<MembershipView> memberships) { }
+    private void requireApiKeyIssuancePermission(AuthPrincipal actor, UUID projectId) {
+        if (!access.canIssueProjectApiKeys(actor, projectId)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "API_KEY_ISSUANCE_NOT_DELEGATED",
+                    "API key issuance permission has not been delegated to your account for this project.");
+        }
+    }
+
+    public record SessionView(boolean platformAdmin, String accountTier, boolean totpEnabled, String mfaState,
+                              List<MembershipView> memberships) { }
     public record ConnectionView(List<ConnectionEndpointView> endpoints) { }
     public record ConnectionEndpointView(String scope, String label, String url) { }
     public record MembershipView(UUID organizationId, OrganizationRole role) { }
-    public record CreateApiKey(@NotBlank @Size(max = 120) String name, Instant expiresAt) { }
+    public record CreateApiKey(@NotBlank @Size(max = 120) String name, Instant expiresAt,
+                               DataBoundaryPolicy dataBoundaryPolicy) {
+        public CreateApiKey(String name, Instant expiresAt) {
+            this(name, expiresAt, null);
+        }
+    }
     public record CreateTemporaryApiKey(@NotBlank @Size(max = 120) String name,
-                                        @Min(60) @Max(86400) long durationSeconds) { }
-    public record ProjectView(UUID id, String name, String status, boolean canIssueApiKeys, List<ServiceView> services) {
+                                        @Min(60) @Max(86400) long durationSeconds,
+                                        DataBoundaryPolicy dataBoundaryPolicy) {
+        public CreateTemporaryApiKey(String name, long durationSeconds) {
+            this(name, durationSeconds, null);
+        }
+    }
+    public record ProjectView(UUID id, String name, String status, boolean canIssueApiKeys,
+                              DataBoundaryPolicy dataBoundaryPolicy, DataBoundaryPolicy maxDataBoundaryPolicy,
+                              DataBoundaryPolicy effectiveDataBoundaryPolicy, List<ServiceView> services) {
         static ProjectView from(Project project, boolean canIssueApiKeys, List<ServiceView> services) {
-            return new ProjectView(project.getId(), project.getName(), project.getStatus(), canIssueApiKeys, services);
+            return new ProjectView(project.getId(), project.getName(), project.getStatus(), canIssueApiKeys,
+                    project.getDataBoundaryPolicy(), project.getMaxDataBoundaryPolicy(),
+                    project.effectiveDataBoundaryPolicy(), services);
         }
     }
     public record ServiceView(String serviceKey, String displayName) {
         static ServiceView from(LlmService service) { return new ServiceView(service.getServiceKey(), service.getDisplayName()); }
     }
     public record ApiKeyView(UUID id, String name, String keyPrefix, String status, Instant expiresAt,
-                             Instant lastUsedAt, Instant createdAt, boolean canRevoke, boolean canDelete) {
-        static ApiKeyView from(ApiKey key, boolean canManage) {
+                             Instant lastUsedAt, Instant createdAt, boolean canRevoke, boolean canDelete,
+                             DataBoundaryPolicy dataBoundaryPolicy, DataBoundaryPolicy effectiveDataBoundaryPolicy) {
+        static ApiKeyView from(ApiKey key, boolean canManage, DataBoundaryPolicy projectBoundary) {
             return new ApiKeyView(key.getId(), key.getName(), key.getKeyPrefix(), key.getStatus().name(),
                     key.getExpiresAt(), key.getLastUsedAt(), key.getCreatedAt(), canManage,
-                    canManage && key.getStatus() == ApiKeyStatus.REVOKED);
+                    canManage && key.getStatus() == ApiKeyStatus.REVOKED,
+                    key.getDataBoundaryPolicy(), DataBoundaryPolicy.strictest(projectBoundary, key.getDataBoundaryPolicy()));
         }
     }
 }

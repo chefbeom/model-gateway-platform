@@ -12,12 +12,28 @@ public class AuthRefreshToken {
     @Column(nullable = false, length = 64, columnDefinition = "char(64)") private String tokenHash;
     @Column(nullable = false) private Instant expiresAt;
     private Instant revokedAt;
+    @Column(nullable = false) private boolean mfaVerified = false;
     @Column(nullable = false) private Instant createdAt = Instant.now();
+
     protected AuthRefreshToken() { }
-    public AuthRefreshToken(UUID userId, String tokenHash, Instant expiresAt) { this.userId = userId; this.tokenHash = tokenHash; this.expiresAt = expiresAt; }
+
+    public AuthRefreshToken(UUID userId, String tokenHash, Instant expiresAt) {
+        this(userId, tokenHash, expiresAt, false);
+    }
+
+    public AuthRefreshToken(UUID userId, String tokenHash, Instant expiresAt, boolean mfaVerified) {
+        this.userId = userId;
+        this.tokenHash = tokenHash;
+        this.expiresAt = expiresAt;
+        this.mfaVerified = mfaVerified;
+    }
+
     public boolean isUsable(Instant now) { return revokedAt == null && expiresAt.isAfter(now); }
     public void revoke() { revokedAt = Instant.now(); }
+    public void markMfaVerified() { this.mfaVerified = true; }
     public UUID getId() { return id; }
     public UUID getUserId() { return userId; }
     public String getTokenHash() { return tokenHash; }
+    public Instant getExpiresAt() { return expiresAt; }
+    public boolean isMfaVerified() { return mfaVerified; }
 }

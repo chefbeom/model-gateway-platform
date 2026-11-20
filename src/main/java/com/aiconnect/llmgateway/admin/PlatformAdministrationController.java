@@ -87,6 +87,13 @@ public class PlatformAdministrationController {
         return service.users().stream().filter(user -> user.id().equals(userId)).findFirst().orElseThrow();
     }
 
+    @PostMapping("/users/{userId}/totp-reset")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void resetUserTotp(HttpServletRequest request, @PathVariable UUID userId) {
+        requirePlatformAdmin(request);
+        service.resetUserTotp(userId);
+    }
+
     @DeleteMapping("/users/{userId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteUser(HttpServletRequest request, @PathVariable UUID userId, @RequestParam String confirmation) {

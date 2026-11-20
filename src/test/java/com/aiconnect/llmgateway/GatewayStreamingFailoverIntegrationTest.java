@@ -35,6 +35,10 @@ class GatewayStreamingFailoverIntegrationTest {
     @Autowired ApiKeyService apiKeyService;
     @Autowired InferenceNodeRepository nodes;
     @Autowired RuntimeEndpointRepository endpoints;
+    @Autowired com.aiconnect.llmgateway.security.RuntimeTrustAttestationRepository runtimeTrustFixture;
+    @Autowired com.aiconnect.llmgateway.security.ProjectRuntimeApprovalRepository runtimeApprovalFixture;
+    @Autowired com.aiconnect.llmgateway.repository.ProjectRepository runtimeProjectsFixture;
+    @Autowired com.aiconnect.llmgateway.repository.InferenceNodeRepository runtimeNodesFixture;
     @Autowired ModelDeploymentRepository deployments;
     @Autowired LlmServiceRepository services;
     @Autowired ServiceTargetRepository targets;
@@ -78,7 +82,7 @@ class GatewayStreamingFailoverIntegrationTest {
     }
     private RuntimeEndpoint endpoint(Organization organization, String name, int port) {
         InferenceNode node = nodes.save(new InferenceNode(organization.getId(), name, null, "DIRECT", null));
-        RuntimeEndpoint endpoint = new RuntimeEndpoint(node.getId(), RuntimeType.LM_STUDIO, "http://127.0.0.1:" + port, null); endpoint.recordHealth(true); return endpoints.save(endpoint);
+        RuntimeEndpoint endpoint = new RuntimeEndpoint(node.getId(), RuntimeType.LM_STUDIO, "http://127.0.0.1:" + port, null); endpoint.recordHealth(true); return RuntimeTestTrust.internal(endpoints, runtimeTrustFixture, runtimeApprovalFixture, runtimeProjectsFixture, runtimeNodesFixture, endpoint);
     }
     private HttpServer server(int status, String response, String contentType, AtomicInteger calls) throws IOException {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);

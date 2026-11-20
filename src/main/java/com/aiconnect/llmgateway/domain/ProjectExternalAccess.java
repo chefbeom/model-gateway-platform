@@ -17,6 +17,7 @@ public class ProjectExternalAccess {
     @Column(nullable = false) private boolean manualAllowed;
     @Column(nullable = false) private boolean autoFailoverEnabled;
     @Column(precision = 18, scale = 6) private BigDecimal monthlyCostLimit;
+    @Enumerated(EnumType.STRING) @Column(length = 10) private Currency monthlyCostCurrency;
     private Instant expiresAt;
     @Column(columnDefinition = "char(36)") private UUID approvedByUserId;
     private Instant decidedAt;
@@ -43,12 +44,18 @@ public class ProjectExternalAccess {
 
     public void decide(ExternalAccessStatus status, boolean manualAllowed, boolean autoFailoverEnabled,
                        BigDecimal monthlyCostLimit, Instant expiresAt, UUID actorId) {
+        decide(status, manualAllowed, autoFailoverEnabled, monthlyCostLimit, null, expiresAt, actorId);
+    }
+
+    public void decide(ExternalAccessStatus status, boolean manualAllowed, boolean autoFailoverEnabled,
+                       BigDecimal monthlyCostLimit, Currency monthlyCostCurrency, Instant expiresAt, UUID actorId) {
         if (status == ExternalAccessStatus.REQUESTED) throw new IllegalArgumentException("A decision status is required.");
         this.status = status;
         boolean approved = status == ExternalAccessStatus.APPROVED;
         this.manualAllowed = approved && manualAllowed;
         this.autoFailoverEnabled = approved && autoFailoverEnabled;
         this.monthlyCostLimit = approved ? monthlyCostLimit : null;
+        this.monthlyCostCurrency = approved && monthlyCostLimit != null ? monthlyCostCurrency : null;
         this.expiresAt = approved ? expiresAt : null;
         this.approvedByUserId = actorId;
         this.decidedAt = Instant.now();
@@ -68,6 +75,7 @@ public class ProjectExternalAccess {
     public boolean isManualAllowed() { return manualAllowed; }
     public boolean isAutoFailoverEnabled() { return autoFailoverEnabled; }
     public BigDecimal getMonthlyCostLimit() { return monthlyCostLimit; }
+    public Currency getMonthlyCostCurrency() { return monthlyCostCurrency; }
     public Instant getExpiresAt() { return expiresAt; }
     public UUID getApprovedByUserId() { return approvedByUserId; }
     public Instant getDecidedAt() { return decidedAt; }

@@ -1,4 +1,8 @@
 limit_req_zone $binary_remote_addr zone=beta_redeem:10m rate=5r/m;
+map $http_x_forwarded_proto $beta_forwarded_proto {
+    default $scheme;
+    ~*^https$ https;
+}
 upstream beta_api {
     least_conn;
     server api-1:8080;
@@ -8,12 +12,17 @@ server {
     listen 80;
     server_tokens off;
     client_max_body_size 10m;
+    set_real_ip_from 127.0.0.1/32;
+    set_real_ip_from ${AICONNECT_BETA_TRUSTED_PROXY_CIDR};
+    real_ip_header CF-Connecting-IP;
+    real_ip_recursive on;
     proxy_set_header X-AIConnect-Beta-Ingress "${AICONNECT_BETA_INGRESS_TOKEN}";
     proxy_set_header X-Admin-Token "";
     proxy_set_header Cookie "";
     proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $remote_addr;
-    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Proto $beta_forwarded_proto;
     location = /v1/models {
         if ($request_method != GET) { return 405; }
         proxy_pass http://beta_api;
@@ -26,8 +35,9 @@ server {
         proxy_buffering off;
         proxy_cache off;
         proxy_next_upstream off;
-        proxy_read_timeout 600s;
-        proxy_send_timeout 600s;
+        proxy_read_timeout ${AICONNECT_BETA_UPSTREAM_TIMEOUT};
+        proxy_send_timeout ${AICONNECT_BETA_UPSTREAM_TIMEOUT};
+        add_header X-Accel-Buffering no always;
     }
     location = /api/beta/invitations/redeem {
         if ($request_method != POST) { return 405; }
@@ -41,8 +51,9 @@ server {
         proxy_set_header X-Admin-Token "";
         proxy_set_header Cookie "";
         proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Proto $beta_forwarded_proto;
     }
     location / { return 404; }
 }

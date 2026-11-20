@@ -3,10 +3,19 @@ import { computed, onMounted, ref, watch } from 'vue'
 import CapabilityPicker from './CapabilityPicker.vue'
 import BaseModal from './BaseModal.vue'
 import ServiceSchedulingPanel from './ServiceSchedulingPanel.vue'
-import { adminFetch, type AdminAuth, type Deployment, type Endpoint } from './api'
+import {
+  adminFetch,
+  DATA_BOUNDARY_OPTIONS,
+  dataBoundaryShortLabel,
+  updateServicePolicy,
+  type AdminAuth,
+  type DataBoundaryPolicy,
+  type Deployment,
+  type Endpoint
+} from './api'
 
 const props = defineProps<{ organizationId: string; auth: AdminAuth }>()
-type Service = { id: string; organizationId: string; serviceKey: string; displayName: string; failoverPolicy: 'STRICT' | 'COMPATIBLE' | 'DEGRADED'; retryPolicy: 'SAFE' | 'AGGRESSIVE'; allowDegraded: boolean; requiredCapabilitiesJson: string; inputPricePerMillion: number; outputPricePerMillion: number; currency?: 'KRW' | 'USD'; enabled: boolean; temperaturePolicy?: 'REQUEST' | 'FIXED' | 'OMIT'; temperatureValue?: number | null; reasoningEffort?: 'REQUEST' | 'NONE' | 'MINIMAL' | 'LOW' | 'MEDIUM' | 'HIGH' | 'XHIGH' | 'MAX'; openAiFastMode?: boolean }
+type Service = { id: string; organizationId: string; serviceKey: string; displayName: string; failoverPolicy: 'STRICT' | 'COMPATIBLE' | 'DEGRADED'; retryPolicy: 'SAFE' | 'AGGRESSIVE'; allowDegraded: boolean; dataBoundaryPolicy?: DataBoundaryPolicy; requiredCapabilitiesJson: string; inputPricePerMillion: number; outputPricePerMillion: number; currency?: 'KRW' | 'USD'; enabled: boolean; temperaturePolicy?: 'REQUEST' | 'FIXED' | 'OMIT'; temperatureValue?: number | null; reasoningEffort?: 'REQUEST' | 'NONE' | 'MINIMAL' | 'LOW' | 'MEDIUM' | 'HIGH' | 'XHIGH' | 'MAX'; openAiFastMode?: boolean }
 type Target = { id: string; deploymentId: string; priority: number; weight: number; degraded: boolean; enabled: boolean; maxConcurrencyOverride?: number | null; followModelChanges?: boolean }
 type ServiceDeletionCheck = { serviceId: string; serviceKey: string; displayName: string; projectAccessCount: number; targetCount: number; requestHistoryCount: number; linkedProjectNames: string[]; canDelete: boolean }
 
@@ -33,7 +42,7 @@ const deleteServiceModal = ref(false)
 const editingService = ref<Service | null>(null)
 const editingTarget = ref<Target | null>(null)
 const deletionCheck = ref<ServiceDeletionCheck | null>(null)
-const serviceForm = ref({ serviceKey: '', displayName: '', failoverPolicy: 'STRICT' as Service['failoverPolicy'], retryPolicy: 'SAFE' as Service['retryPolicy'], allowDegraded: false, requiredCapabilitiesJson: '[]', inputPricePerMillion: 0, outputPricePerMillion: 0, currency: 'KRW' as 'KRW' | 'USD', enabled: true, temperaturePolicy: 'REQUEST' as NonNullable<Service['temperaturePolicy']>, temperatureValue: 1, reasoningEffort: 'REQUEST' as NonNullable<Service['reasoningEffort']>, openAiFastMode: false })
+const serviceForm = ref({ serviceKey: '', displayName: '', failoverPolicy: 'STRICT' as Service['failoverPolicy'], retryPolicy: 'SAFE' as Service['retryPolicy'], allowDegraded: false, dataBoundaryPolicy: 'EXTERNAL_ALLOWED' as DataBoundaryPolicy, requiredCapabilitiesJson: '[]', inputPricePerMillion: 0, outputPricePerMillion: 0, currency: 'KRW' as 'KRW' | 'USD', enabled: true, temperaturePolicy: 'REQUEST' as NonNullable<Service['temperaturePolicy']>, temperatureValue: 1, reasoningEffort: 'REQUEST' as NonNullable<Service['reasoningEffort']>, openAiFastMode: false })
 const targetForm = ref({ deploymentId: '', priority: 1, weight: 100, degraded: false, enabled: true, maxConcurrencyOverride: null as number | null, followModelChanges: true })
 
 async function load() {
@@ -70,14 +79,14 @@ async function loadDeployments() {
 
 function openCreateService() {
   editingService.value = null
-  serviceForm.value = { serviceKey: '', displayName: '', failoverPolicy: 'STRICT', retryPolicy: 'SAFE', allowDegraded: false, requiredCapabilitiesJson: '[]', inputPricePerMillion: 0, outputPricePerMillion: 0, currency: 'KRW' as 'KRW' | 'USD', enabled: true, temperaturePolicy: 'REQUEST', temperatureValue: 1, reasoningEffort: 'REQUEST', openAiFastMode: false }
+  serviceForm.value = { serviceKey: '', displayName: '', failoverPolicy: 'STRICT', retryPolicy: 'SAFE', allowDegraded: false, dataBoundaryPolicy: 'EXTERNAL_ALLOWED', requiredCapabilitiesJson: '[]', inputPricePerMillion: 0, outputPricePerMillion: 0, currency: 'KRW' as 'KRW' | 'USD', enabled: true, temperaturePolicy: 'REQUEST', temperatureValue: 1, reasoningEffort: 'REQUEST', openAiFastMode: false }
   serviceModal.value = true
 }
 
 function openEditService() {
   if (!selected.value) return
   editingService.value = selected.value
-  serviceForm.value = { ...selected.value, currency: selected.value.currency ?? 'KRW', temperaturePolicy: selected.value.temperaturePolicy ?? 'REQUEST', temperatureValue: selected.value.temperatureValue ?? 1, reasoningEffort: selected.value.reasoningEffort ?? 'REQUEST', openAiFastMode: selected.value.openAiFastMode ?? false }
+  serviceForm.value = { ...selected.value, dataBoundaryPolicy: selected.value.dataBoundaryPolicy ?? 'EXTERNAL_ALLOWED', currency: selected.value.currency ?? 'KRW', temperaturePolicy: selected.value.temperaturePolicy ?? 'REQUEST', temperatureValue: selected.value.temperatureValue ?? 1, reasoningEffort: selected.value.reasoningEffort ?? 'REQUEST', openAiFastMode: selected.value.openAiFastMode ?? false }
   serviceModal.value = true
 }
 
@@ -85,7 +94,7 @@ async function saveService() {
   busy.value = true
   try {
     if (editingService.value) {
-      selected.value = await adminFetch<Service>(`/api/admin/services/${editingService.value.id}`, props.auth, { method: 'PATCH', body: JSON.stringify(serviceForm.value) })
+      selected.value = await updateServicePolicy<Service>(editingService.value.id, serviceForm.value, props.auth)
       message.value = '서비스 정책을 저장했습니다. 외부 model 값은 유지됩니다.'
     } else {
       const created = await adminFetch<Service>('/api/admin/services', props.auth, { method: 'POST', body: JSON.stringify({ organizationId: props.organizationId, ...serviceForm.value }) })
@@ -126,7 +135,7 @@ async function saveTarget() {
 }
 
 async function removeTarget(target: Target) {
-  if (!selected.value || !confirm('이 Target을 라우팅에서 제거할까요?')) return
+  if (!selected.value || !window.confirm('이 Target을 라우팅에서 제거할까요?')) return
   busy.value = true
   try {
     await adminFetch(`/api/admin/services/${selected.value.id}/targets/${target.id}`, props.auth, { method: 'DELETE' })
@@ -218,7 +227,7 @@ onMounted(() => { void load() })
       <article class="surface-card detail-panel">
         <template v-if="selected">
           <header class="detail-header"><div><span class="status-chip" :class="selected.enabled ? 'healthy' : 'unknown'"><i></i>{{ selected.enabled ? 'ACTIVE' : 'DISABLED' }}</span><h2>{{ selected.displayName }}</h2><p class="mono">model: {{ selected.serviceKey }}</p></div><div class="detail-actions"><button class="secondary-button" @click="openEditService">정책 편집</button><button class="secondary-button danger-text" :disabled="busy" @click="openServiceDeletion">서비스 삭제</button></div></header>
-          <div class="policy-summary"><div><span>Failover</span><strong>{{ selected.failoverPolicy }}</strong></div><div><span>Retry</span><strong>{{ selected.retryPolicy }}</strong></div><div><span>Temperature</span><strong>{{ temperaturePolicyLabel(selected) }}</strong></div><div><span>추론 수준 · 외부 API</span><strong>{{ reasoningEffortLabel(selected) }}</strong></div><div><span>Fast mode · 외부 API</span><strong>{{ selected.openAiFastMode ? '사용' : '요청/공급자 기본값' }}</strong></div><div><span>입력 단가 / 1M ({{ selected.currency ?? 'KRW' }})</span><strong>{{ selected.currency === 'USD' ? '$' : '₩' }}{{ selected.inputPricePerMillion }}</strong></div><div><span>출력 단가 / 1M ({{ selected.currency ?? 'KRW' }})</span><strong>{{ selected.currency === 'USD' ? '$' : '₩' }}{{ selected.outputPricePerMillion }}</strong></div></div>
+          <div class="policy-summary"><div><span>Failover</span><strong>{{ selected.failoverPolicy }}</strong></div><div><span>Retry</span><strong>{{ selected.retryPolicy }}</strong></div><div><span>데이터 경계</span><strong>{{ dataBoundaryShortLabel(selected.dataBoundaryPolicy) }}</strong></div><div><span>Temperature</span><strong>{{ temperaturePolicyLabel(selected) }}</strong></div><div><span>추론 수준 · 외부 API</span><strong>{{ reasoningEffortLabel(selected) }}</strong></div><div><span>Fast mode · 외부 API</span><strong>{{ selected.openAiFastMode ? '사용' : '요청/공급자 기본값' }}</strong></div><div><span>입력 단가 / 1M ({{ selected.currency ?? 'KRW' }})</span><strong>{{ selected.currency === 'USD' ? '$' : '₩' }}{{ selected.inputPricePerMillion }}</strong></div><div><span>출력 단가 / 1M ({{ selected.currency ?? 'KRW' }})</span><strong>{{ selected.currency === 'USD' ? '$' : '₩' }}{{ selected.outputPricePerMillion }}</strong></div></div>
           <ServiceSchedulingPanel :key="selected.id" :service-id="selected.id" :auth="auth" />
           <div class="section-divider"><span>SERVICE TARGETS</span><button class="text-button" :disabled="!availableDeployments.length" @click="openCreateTarget">+ Target 추가</button></div>
           <div v-if="targets.length" class="route-stack"><div v-for="target in targets" :key="target.id" class="route-row"><span class="priority-badge">P{{ target.priority }}</span><div class="route-line"><i></i></div><span class="model-cube small">◇</span><div class="route-info"><strong>{{ deploymentName(target.deploymentId) }}</strong><small class="mono">{{ deploymentIdentifier(target.deploymentId) }}</small><small v-if="deploymentStatusLabel(target.deploymentId)" class="target-state-warning">{{ deploymentStatusLabel(target.deploymentId) }}</small></div><div class="route-meta"><span>Weight {{ target.weight }}</span><span v-if="target.degraded">Degraded</span><span>{{ target.followModelChanges === false ? '모델 고정' : '모델 자동 추적' }}</span><span>{{ target.enabled ? '활성' : '중지' }}</span></div><button class="icon-button" @click="openEditTarget(target)">···</button><button class="icon-button danger-text" @click="removeTarget(target)">×</button></div></div>
@@ -238,6 +247,12 @@ onMounted(() => { void load() })
           <label class="field">Failover 정책<select v-model="serviceForm.failoverPolicy"><option>STRICT</option><option>COMPATIBLE</option><option>DEGRADED</option></select></label>
           <label class="field">Retry 정책<select v-model="serviceForm.retryPolicy"><option>SAFE</option><option>AGGRESSIVE</option></select></label>
         </div>
+        <label class="field">데이터 경계 정책
+          <select v-model="serviceForm.dataBoundaryPolicy">
+            <option v-for="option in DATA_BOUNDARY_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
+          </select>
+        </label>
+        <p class="temperature-note">서비스 데이터 경계는 민감정보 탐지 여부와 관계없이 프로젝트·API 키 정책과 교집합(더 엄격한 정책 우선)으로 적용됩니다.</p>
         <div class="form-grid">
           <label class="field">Temperature 처리
             <select v-model="serviceForm.temperaturePolicy">

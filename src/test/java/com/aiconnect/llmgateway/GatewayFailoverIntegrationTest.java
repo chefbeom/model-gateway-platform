@@ -39,6 +39,10 @@ class GatewayFailoverIntegrationTest {
     @Autowired ApiKeyService apiKeyService;
     @Autowired InferenceNodeRepository nodes;
     @Autowired RuntimeEndpointRepository endpoints;
+    @Autowired com.aiconnect.llmgateway.security.RuntimeTrustAttestationRepository runtimeTrustFixture;
+    @Autowired com.aiconnect.llmgateway.security.ProjectRuntimeApprovalRepository runtimeApprovalFixture;
+    @Autowired com.aiconnect.llmgateway.repository.ProjectRepository runtimeProjectsFixture;
+    @Autowired com.aiconnect.llmgateway.repository.InferenceNodeRepository runtimeNodesFixture;
     @Autowired ModelDeploymentRepository deployments;
     @Autowired LlmServiceRepository services;
     @Autowired ServiceTargetRepository targets;
@@ -126,7 +130,7 @@ class GatewayFailoverIntegrationTest {
     private RuntimeEndpoint healthyEndpoint(UUID nodeId, int port) {
         RuntimeEndpoint endpoint = new RuntimeEndpoint(nodeId, RuntimeType.LM_STUDIO, "http://127.0.0.1:" + port, null);
         endpoint.recordHealth(true);
-        return endpoints.save(endpoint);
+        return RuntimeTestTrust.internal(endpoints, runtimeTrustFixture, runtimeApprovalFixture, runtimeProjectsFixture, runtimeNodesFixture, endpoint);
     }
     private HttpServer server(int status, String response, AtomicInteger calls) throws IOException {
         return server(status, response, calls, null);

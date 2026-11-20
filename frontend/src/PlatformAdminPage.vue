@@ -1,16 +1,30 @@
 <script setup lang="ts">
-import { formatDateTime } from './dateTime'
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import BaseModal from './BaseModal.vue'
-import { adminFetch, type AdminAuth } from './api'
+import ConnectionRequests from './ConnectionRequests.vue'
+import {
+  accountTierLabel,
+  adminFetch,
+  listProjectManagers,
+  registrationUrl,
+  revokeProjectManager,
+  type AccountInvitationSummary,
+  type AccountTier,
+  type AdminAuth,
+  type IssuedAccountInvitation,
+  type ProjectManagerView
+} from './api'
+import { copyText } from './clipboard'
+import { formatDateTime } from './dateTime'
 
 type Props = { auth: AdminAuth }
-type Overview = { organizationCount:number; userCount:number; projectCount:number; providerCount:number; nodeCount:number; endpointCount:number; deploymentCount:number; serviceCount:number; apiKeyCount:number; requestCount:number }
-type Organization = { id:string; name:string; status:string; projectCount:number; providerCount:number; nodeCount:number; memberCount:number }
-type CleanupPreview = { organizationId:string; name:string; status:string; projectCount:number; providerCount:number; nodeCount:number; endpointCount:number; memberCount:number; requestCount:number; behavior:string }
-type PlatformUser = { id:string; email:string; platformAdmin:boolean; enabled:boolean; organizationCount:number; issuedApiKeyCount:number }
-type PlatformTeam = { id:string; organizationId:string; organizationName:string; name:string; status:string; projectCount:number }
-type PlatformApiKey = { id:string; projectId:string; projectName:string; organizationName:string; name:string; keyPrefix:string; status:string; expiresAt?:string; lastUsedAt?:string; createdAt:string }
+type Overview = { organizationCount: number; userCount: number; projectCount: number; providerCount: number; nodeCount: number; endpointCount: number; deploymentCount: number; serviceCount: number; apiKeyCount: number; requestCount: number }
+type Organization = { id: string; name: string; status: string; projectCount: number; providerCount: number; nodeCount: number; memberCount: number }
+type CleanupPreview = { organizationId: string; name: string; status: string; projectCount: number; providerCount: number; nodeCount: number; endpointCount: number; memberCount: number; requestCount: number; behavior: string }
+type PlatformUser = { id: string; email: string; platformAdmin: boolean; accountTier?: AccountTier; totpEnabled?: boolean; enabled: boolean; organizationCount: number; issuedApiKeyCount: number }
+type PlatformTeam = { id: string; organizationId: string; organizationName: string; name: string; status: string; projectCount: number }
+type PlatformApiKey = { id: string; projectId: string; projectName: string; organizationName: string; name: string; keyPrefix: string; status: string; expiresAt?: string; lastUsedAt?: string; createdAt: string }
+type TeamRole = 'TEAM_ADMIN' | 'PROJECT_OWNER' | 'DEVELOPER' | 'AUDITOR'
 
 const props = defineProps<Props>()
 const overview = ref<Overview | null>(null)
@@ -18,6 +32,11 @@ const organizations = ref<Organization[]>([])
 const users = ref<PlatformUser[]>([])
 const teams = ref<PlatformTeam[]>([])
 const apiKeys = ref<PlatformApiKey[]>([])
+const accountInvitations = ref<AccountInvitationSummary[]>([])
+const inviteProjects = ref<{ id: string; name: string }[]>([])
+const managedProjectId = ref('')
+const projectManagers = ref<ProjectManagerView[]>([])
+const existingDirectorId = ref('')
 const busy = ref(false)
 const message = ref('')
 const cleanupOpen = ref(false)
@@ -31,94 +50,361 @@ const selectedUser = ref<PlatformUser | null>(null)
 const selectedTeam = ref<PlatformTeam | null>(null)
 const teamConfirmation = ref('')
 
-function showError(error: unknown, fallback: string) { message.value = error instanceof Error ? error.message : fallback }
-function date(value?: string) { return value ? formatDateTime(value) : '-' }
-function metric(value?: number) { return (value ?? 0).toLocaleString() }
+const inviteForm = ref({
+  targetTier: 'PROJECT_DIRECTOR' as 'PROJECT_DIRECTOR' | 'GENERAL_USER',
+  organizationId: '',
+  teamId: '',
+  projectId: '',
+  teamRole: 'TEAM_ADMIN' as TeamRole,
+  canIssueApiKeys: false,
+  expectedEmail: '',
+  betaServiceId: '',
+  expiresInHours: 72
+})
+const issuedInvitation = ref<IssuedAccountInvitation | null>(null)
+
+const orgNameById = computed(() => new Map(organizations.value.map(org => [org.id, org.name])))
+const teamsForInviteOrg = computed(() =>
+  teams.value.filter(team => team.organizationId === inviteForm.value.organizationId)
+)
+const issuedLink = computed(() =>
+  issuedInvitation.value ? registrationUrl(issuedInvitation.value.registrationPath) : ''
+)
+
+function showError(error: unknown, fallback: string) {
+  message.value = error instanceof Error ? error.message : fallback
+}
+function date(value?: string | null) {
+  return value ? formatDateTime(value) : '-'
+}
+function metric(value?: number) {
+  return (value ?? 0).toLocaleString()
+}
+function userTier(user: PlatformUser): AccountTier {
+  return user.accountTier ?? (user.platformAdmin ? 'SYSTEM_ADMIN' : 'GENERAL_USER')
+}
+function invitationStatus(item: AccountInvitationSummary): 'PENDING' | 'CONSUMED' | 'REVOKED' | 'EXPIRED' {
+  if (item.status === 'PENDING' || item.status === 'CONSUMED' || item.status === 'REVOKED' || item.status === 'EXPIRED') {
+    return item.status
+  }
+  if (item.revokedAt) return 'REVOKED'
+  if (item.consumedAt) return 'CONSUMED'
+  if (item.expiresAt && new Date(item.expiresAt).getTime() <= Date.now()) return 'EXPIRED'
+  return 'PENDING'
+}
+function invitationStatusLabel(status: string): string {
+  if (status === 'PENDING') return '대기 중'
+  if (status === 'CONSUMED') return '가입 완료'
+  if (status === 'REVOKED') return '회수됨'
+  if (status === 'EXPIRED') return '만료됨'
+  return status
+}
+
 async function load() {
   busy.value = true
   try {
-    const [overviewValue, organizationItems, userItems, teamItems, keyItems] = await Promise.all([
+    const [overviewValue, organizationItems, userItems, teamItems, keyItems, invitationItems] = await Promise.all([
       adminFetch<Overview>('/api/admin/platform/overview', props.auth),
       adminFetch<Organization[]>('/api/admin/platform/organizations', props.auth),
       adminFetch<PlatformUser[]>('/api/admin/platform/users', props.auth),
       adminFetch<PlatformTeam[]>('/api/admin/platform/teams', props.auth),
-      adminFetch<PlatformApiKey[]>('/api/admin/platform/api-keys', props.auth)
+      adminFetch<PlatformApiKey[]>('/api/admin/platform/api-keys', props.auth),
+      adminFetch<AccountInvitationSummary[]>('/api/admin/platform/account-invitations', props.auth)
     ])
     overview.value = overviewValue
     organizations.value = organizationItems
     users.value = userItems
     teams.value = teamItems
     apiKeys.value = keyItems
-  } catch (error) { showError(error, '플랫폼 관리자 정보를 불러오지 못했습니다.') }
-  finally { busy.value = false }
+    accountInvitations.value = invitationItems
+    if (!organizationItems.some(org => org.id === inviteForm.value.organizationId)) {
+      inviteForm.value.organizationId = organizationItems[0]?.id ?? ''
+      inviteForm.value.teamId = ''
+    }
+    await loadInviteProjects()
+  } catch (error) {
+    showError(error, '플랫폼 관리자 정보를 불러오지 못했습니다.')
+  } finally {
+    busy.value = false
+  }
 }
+
+async function onInviteOrgChange() {
+  inviteForm.value.teamId = ''
+  inviteForm.value.projectId = ''
+  await loadInviteProjects()
+}
+
+async function loadInviteProjects() {
+  const org = inviteForm.value.organizationId
+  inviteProjects.value = org ? await adminFetch<{ id: string; name: string }[]>(`/api/admin/organizations/${org}/projects`, props.auth) : []
+  if (!inviteProjects.value.some(project => project.id === inviteForm.value.projectId)) {
+    inviteForm.value.projectId = ''
+  }
+  if (!inviteProjects.value.some(project => project.id === managedProjectId.value)) {
+    managedProjectId.value = inviteProjects.value[0]?.id ?? ''
+  }
+  await loadProjectManagers()
+}
+
+async function loadProjectManagers() {
+  if (!managedProjectId.value) {
+    projectManagers.value = []
+    return
+  }
+  try {
+    projectManagers.value = await listProjectManagers(managedProjectId.value, props.auth)
+  } catch (error) {
+    projectManagers.value = []
+    showError(error, '프로젝트 관리자 목록을 불러오지 못했습니다.')
+  }
+}
+
+async function revokeManager(manager: ProjectManagerView) {
+  if (!managedProjectId.value) return
+  if (!window.confirm(`${manager.email} 계정의 프로젝트 관리자 권한을 회수할까요? 이 프로젝트에서 해당 관리자가 발급한 활성 API 키와 대기 초대가 함께 폐기됩니다.`)) return
+  busy.value = true
+  try {
+    await revokeProjectManager(managedProjectId.value, manager.userId, props.auth)
+    await loadProjectManagers()
+    accountInvitations.value = await adminFetch<AccountInvitationSummary[]>('/api/admin/platform/account-invitations', props.auth)
+    apiKeys.value = await adminFetch<PlatformApiKey[]>('/api/admin/platform/api-keys', props.auth)
+    message.value = `${manager.email} 계정의 프로젝트 관리자 권한을 회수하고 관련 API 키·초대·세션을 무효화했습니다.`
+  } catch (error) {
+    showError(error, '프로젝트 관리자 권한 회수에 실패했습니다.')
+  } finally {
+    busy.value = false
+  }
+}
+
+async function assignExistingDirector() {
+  if (!inviteForm.value.projectId || !existingDirectorId.value) {
+    message.value = '프로젝트와 기존 프로젝트 관리자를 선택하세요.'
+    return
+  }
+  busy.value = true
+  try {
+    await adminFetch(`/api/admin/platform/projects/${inviteForm.value.projectId}/managers/${existingDirectorId.value}`, props.auth, { method: 'PUT' })
+    managedProjectId.value = inviteForm.value.projectId
+    await loadProjectManagers()
+    message.value = '기존 프로젝트 관리자에게 선택한 프로젝트를 배정했습니다.'
+  } catch (error) {
+    showError(error, '프로젝트 관리자 배정에 실패했습니다.')
+  } finally {
+    busy.value = false
+  }
+}
+
+function onTargetTierChange() {
+  inviteForm.value.teamRole = inviteForm.value.targetTier === 'PROJECT_DIRECTOR' ? 'TEAM_ADMIN' : 'DEVELOPER'
+  if (inviteForm.value.targetTier === 'PROJECT_DIRECTOR') inviteForm.value.canIssueApiKeys = false
+}
+
+async function issueAccountInvitation() {
+  if (!inviteForm.value.organizationId) {
+    message.value = '초대할 조직을 선택하세요.'
+    return
+  }
+  if (inviteForm.value.targetTier === 'PROJECT_DIRECTOR' && !inviteForm.value.projectId) {
+    message.value = '관리할 프로젝트를 선택하세요.'
+    return
+  }
+  busy.value = true
+  try {
+    const payload = {
+      targetTier: inviteForm.value.targetTier,
+      organizationId: inviteForm.value.organizationId,
+      projectId: inviteForm.value.projectId || null,
+      teamId: inviteForm.value.projectId ? null : (inviteForm.value.teamId || null),
+      teamRole: !inviteForm.value.projectId && inviteForm.value.teamId ? inviteForm.value.teamRole : null,
+      canIssueApiKeys: inviteForm.value.targetTier === 'PROJECT_DIRECTOR' ? true : Boolean(inviteForm.value.canIssueApiKeys),
+      betaServiceId: inviteForm.value.targetTier === 'PROJECT_DIRECTOR' && inviteForm.value.betaServiceId.trim()
+        ? inviteForm.value.betaServiceId.trim()
+        : null,
+      expectedEmail: inviteForm.value.expectedEmail.trim() || null,
+      expiresInHours: Math.max(1, Math.min(720, Number(inviteForm.value.expiresInHours) || 72))
+    }
+    const created = await adminFetch<IssuedAccountInvitation>(
+      '/api/admin/platform/account-invitations',
+      props.auth,
+      { method: 'POST', body: JSON.stringify(payload) }
+    )
+    issuedInvitation.value = created
+    inviteForm.value.expectedEmail = ''
+    inviteForm.value.betaServiceId = ''
+    message.value = `${accountTierLabel(created.targetTier)} 생성 코드와 링크를 발급했습니다. 이 화면을 닫으면 다시 조회할 수 없습니다.`
+    accountInvitations.value = await adminFetch<AccountInvitationSummary[]>('/api/admin/platform/account-invitations', props.auth)
+  } catch (error) {
+    showError(error, '계정 초대 코드 발급에 실패했습니다.')
+  } finally {
+    busy.value = false
+  }
+}
+
+async function copyValue(value: string, label: string) {
+  if (!value) return
+  try {
+    await copyText(value)
+    message.value = `${label}를 클립보드에 복사했습니다.`
+  } catch {
+    message.value = `${label}를 복사하지 못했습니다. 표시된 값을 직접 선택해 복사하세요.`
+  }
+}
+
+async function revokeInvitation(item: AccountInvitationSummary) {
+  if (!window.confirm('이 계정 생성 초대 코드·링크를 회수하시겠습니까?')) return
+  busy.value = true
+  try {
+    await adminFetch(`/api/admin/platform/account-invitations/${item.id}/revoke`, props.auth, { method: 'POST' })
+    accountInvitations.value = await adminFetch<AccountInvitationSummary[]>('/api/admin/platform/account-invitations', props.auth)
+    message.value = '계정 생성 초대를 회수했습니다.'
+  } catch (error) {
+    showError(error, '초대 회수에 실패했습니다.')
+  } finally {
+    busy.value = false
+  }
+}
+
+async function resetUserTotp(user: PlatformUser) {
+  if (!window.confirm(`${user.email} 계정의 Google Authenticator TOTP 등록과 복구 코드를 초기화하고 활성 세션을 종료할까요?`)) return
+  busy.value = true
+  try {
+    await adminFetch(`/api/admin/platform/users/${user.id}/totp-reset`, props.auth, { method: 'POST' })
+    users.value = await adminFetch<PlatformUser[]>('/api/admin/platform/users', props.auth)
+    message.value = `${user.email} 계정의 TOTP 인증을 초기화했습니다. 다음 로그인 시 재등록이 필요합니다.`
+  } catch (error) {
+    showError(error, 'TOTP 초기화에 실패했습니다.')
+  } finally {
+    busy.value = false
+  }
+}
+
 async function setOrganizationStatus(item: Organization) {
   busy.value = true
   try {
     await adminFetch(`/api/admin/platform/organizations/${item.id}/${item.status === 'SUSPENDED' ? 'restore' : 'suspend'}`, props.auth, { method: 'POST' })
     await load()
     message.value = item.status === 'SUSPENDED' ? '조직을 복구했습니다.' : '조직을 일시 중지했습니다.'
-  } catch (error) { showError(error, '조직 상태 변경에 실패했습니다.') }
-  finally { busy.value = false }
+  } catch (error) {
+    showError(error, '조직 상태 변경에 실패했습니다.')
+  } finally {
+    busy.value = false
+  }
 }
 async function openCleanup(item: Organization) {
   busy.value = true
   try {
     cleanup.value = await adminFetch<CleanupPreview>(`/api/admin/platform/organizations/${item.id}/cleanup-preview`, props.auth)
     cleanupOpen.value = true
-  } catch (error) { showError(error, '정리 범위를 확인하지 못했습니다.') }
-  finally { busy.value = false }
+  } catch (error) {
+    showError(error, '정리 범위를 확인하지 못했습니다.')
+  } finally {
+    busy.value = false
+  }
 }
-function openDelete() { orgConfirmation.value = ''; cleanupOpen.value = false; deleteOpen.value = true }
+function openDelete() {
+  orgConfirmation.value = ''
+  cleanupOpen.value = false
+  deleteOpen.value = true
+}
 async function deleteOrganization() {
   if (!cleanup.value || orgConfirmation.value !== cleanup.value.name) return
   busy.value = true
   try {
     await adminFetch(`/api/admin/platform/organizations/${cleanup.value.organizationId}?confirmation=${encodeURIComponent(orgConfirmation.value)}&purgeHistory=true`, props.auth, { method: 'DELETE' })
-    deleteOpen.value = false; cleanup.value = null; await load(); message.value = '조직과 연결된 운영 데이터를 영구 삭제했습니다.'
-  } catch (error) { showError(error, '조직 영구 삭제에 실패했습니다.') }
-  finally { busy.value = false }
+    deleteOpen.value = false
+    cleanup.value = null
+    await load()
+    message.value = '조직과 연결된 운영 데이터를 영구 삭제했습니다.'
+  } catch (error) {
+    showError(error, '조직 영구 삭제에 실패했습니다.')
+  } finally {
+    busy.value = false
+  }
 }
 async function toggleUser(user: PlatformUser) {
   busy.value = true
   try {
-    await adminFetch(`/api/admin/platform/users/${user.id}`, props.auth, { method:'PATCH', body:JSON.stringify({ enabled: !user.enabled }) })
-    await load(); message.value = user.enabled ? '사용자 계정을 중지했습니다.' : '사용자 계정을 활성화했습니다.'
-  } catch (error) { showError(error, '사용자 상태 변경에 실패했습니다.') }
-  finally { busy.value = false }
+    await adminFetch(`/api/admin/platform/users/${user.id}`, props.auth, { method: 'PATCH', body: JSON.stringify({ enabled: !user.enabled }) })
+    await load()
+    message.value = user.enabled ? '사용자 계정을 중지했습니다.' : '사용자 계정을 활성화했습니다.'
+  } catch (error) {
+    showError(error, '사용자 상태 변경에 실패했습니다.')
+  } finally {
+    busy.value = false
+  }
 }
-function openUserDelete(user: PlatformUser) { selectedUser.value = user; userConfirmation.value = ''; userDeleteOpen.value = true }
+function openUserDelete(user: PlatformUser) {
+  selectedUser.value = user
+  userConfirmation.value = ''
+  userDeleteOpen.value = true
+}
 async function deleteUser() {
   if (!selectedUser.value || userConfirmation.value.trim().toLowerCase() !== selectedUser.value.email.toLowerCase()) return
   busy.value = true
   try {
-    await adminFetch(`/api/admin/platform/users/${selectedUser.value.id}?confirmation=${encodeURIComponent(userConfirmation.value.trim())}`, props.auth, { method:'DELETE' })
-    userDeleteOpen.value = false; selectedUser.value = null; await load(); message.value = '사용자와 조직·팀 멤버십을 삭제했습니다.'
-  } catch (error) { showError(error, '사용자 삭제에 실패했습니다.') }
-  finally { busy.value = false }
+    await adminFetch(`/api/admin/platform/users/${selectedUser.value.id}?confirmation=${encodeURIComponent(userConfirmation.value.trim())}`, props.auth, { method: 'DELETE' })
+    userDeleteOpen.value = false
+    selectedUser.value = null
+    await load()
+    message.value = '사용자와 조직·팀 멤버십을 삭제했습니다.'
+  } catch (error) {
+    showError(error, '사용자 삭제에 실패했습니다.')
+  } finally {
+    busy.value = false
+  }
 }
-function openTeamDelete(team: PlatformTeam) { selectedTeam.value = team; teamConfirmation.value = ''; teamDeleteOpen.value = true }
+function openTeamDelete(team: PlatformTeam) {
+  selectedTeam.value = team
+  teamConfirmation.value = ''
+  teamDeleteOpen.value = true
+}
 async function deleteTeam() {
   if (!selectedTeam.value || teamConfirmation.value !== selectedTeam.value.name) return
   busy.value = true
-  try { await adminFetch(`/api/admin/platform/teams/${selectedTeam.value.id}?confirmation=${encodeURIComponent(teamConfirmation.value)}`, props.auth, { method:'DELETE' }); teamDeleteOpen.value = false; selectedTeam.value = null; await load(); message.value = '팀과 연결된 자격 증명을 정리했습니다.' }
-  catch (error) { showError(error, '팀 삭제에 실패했습니다.') }
-  finally { busy.value = false }
+  try {
+    await adminFetch(`/api/admin/platform/teams/${selectedTeam.value.id}?confirmation=${encodeURIComponent(teamConfirmation.value)}`, props.auth, { method: 'DELETE' })
+    teamDeleteOpen.value = false
+    selectedTeam.value = null
+    await load()
+    message.value = '팀과 연결된 자격 증명을 정리했습니다.'
+  } catch (error) {
+    showError(error, '팀 삭제에 실패했습니다.')
+  } finally {
+    busy.value = false
+  }
 }
 
 async function deleteApiKey(key: PlatformApiKey) {
   if (!window.confirm(`API 키 '${key.name}' (${key.keyPrefix})를 영구 삭제할까요? 요청 이력은 별도로 보존될 수 있습니다.`)) return
   busy.value = true
-  try { await adminFetch(`/api/admin/platform/api-keys/${key.id}`, props.auth, { method:'DELETE' }); apiKeys.value = apiKeys.value.filter(item => item.id !== key.id); message.value = 'API 키를 영구 삭제했습니다.' }
-  catch (error) { showError(error, 'API 키 삭제에 실패했습니다.') }
-  finally { busy.value = false }
+  try {
+    await adminFetch(`/api/admin/platform/api-keys/${key.id}`, props.auth, { method: 'DELETE' })
+    apiKeys.value = apiKeys.value.filter(item => item.id !== key.id)
+    message.value = 'API 키를 영구 삭제했습니다.'
+  } catch (error) {
+    showError(error, 'API 키 삭제에 실패했습니다.')
+  } finally {
+    busy.value = false
+  }
 }
 onMounted(() => void load())
 </script>
 
 <template>
   <section class="page-stack platform-admin-page">
-    <div class="page-hero"><div><p class="eyebrow">PLATFORM ADMINISTRATION</p><h1>플랫폼 관리자</h1><p>모든 조직·사용자·API 키를 확인하고, 운영 중지와 정리 작업을 안전하게 실행합니다.</p></div><div class="hero-actions"><span class="status-chip healthy"><i></i>최종 권한</span><button class="secondary-button" :disabled="busy" @click="load">새로고침</button></div></div>
+    <ConnectionRequests :auth="auth" organization-id="" :platform-admin="true" />
+    <div class="page-hero">
+      <div>
+        <p class="eyebrow">PLATFORM ADMINISTRATION</p>
+        <h1>플랫폼 관리자</h1>
+        <p>모든 조직·사용자·계정 초대·TOTP 보안·API 키를 확인하고, 운영 중지와 정리 작업을 안전하게 실행합니다.</p>
+      </div>
+      <div class="hero-actions">
+        <span class="status-chip healthy"><i></i>시스템 관리자</span>
+        <button class="secondary-button" :disabled="busy" @click="load">새로고침</button>
+      </div>
+    </div>
     <p v-if="message" class="inline-alert">{{ message }}</p>
     <div v-if="overview" class="metric-grid platform-metrics">
       <article class="metric-card accent"><span>조직</span><strong>{{ metric(overview.organizationCount) }}</strong><small>워크스페이스 수</small></article>
@@ -129,20 +415,281 @@ onMounted(() => void load())
       <article class="metric-card warning"><span>요청 이력</span><strong>{{ metric(overview.requestCount) }}</strong><small>관측 원본 데이터</small></article>
     </div>
 
-    <article class="surface-card"><header class="card-header"><div><span class="card-kicker">ORGANIZATIONS</span><h2>조직·워크스페이스 관리</h2></div><span class="count-badge">{{ organizations.length }}</span></header><div class="data-table-wrap"><table class="data-table platform-table"><thead><tr><th>조직</th><th>상태</th><th>리소스</th><th>멤버</th><th>관리</th></tr></thead><tbody><tr v-for="item in organizations" :key="item.id"><td><strong>{{ item.name }}</strong><small>{{ item.id }}</small></td><td><span class="status-chip tiny" :class="item.status === 'ACTIVE' ? 'healthy' : 'draining'"><i></i>{{ item.status }}</span></td><td><small>프로젝트 {{ item.projectCount }} · Provider {{ item.providerCount }} · Node {{ item.nodeCount }}</small></td><td>{{ item.memberCount }}</td><td><div class="table-actions"><button class="text-button" @click="openCleanup(item)">정리 범위</button><button class="text-button" @click="setOrganizationStatus(item)">{{ item.status === 'SUSPENDED' ? '복구' : '중지' }}</button></div></td></tr><tr v-if="!organizations.length"><td colspan="5" class="table-empty">조직이 없습니다.</td></tr></tbody></table></div></article>
+    <article class="surface-card invite-issuer-card">
+      <header class="card-header">
+        <div>
+          <span class="card-kicker">3-TIER ACCOUNT INVITATIONS</span>
+          <h2>프로젝트 총괄 · 하위 계정 생성 코드/링크 발급</h2>
+          <p class="card-subtitle">발급된 1회용 코드/링크로 가입한 사용자는 첫 로그인 전 Google Authenticator 2차 인증을 필수로 등록합니다.</p>
+        </div>
+        <span class="count-badge">{{ accountInvitations.length }}</span>
+      </header>
+      <div class="invite-issuer-body">
+        <div class="invite-form-grid">
+          <label class="field">
+            부여 계층
+            <select v-model="inviteForm.targetTier" @change="onTargetTierChange">
+              <option value="PROJECT_DIRECTOR">프로젝트 총괄 (PROJECT_DIRECTOR)</option>
+              <option value="GENERAL_USER">기본 계정 (GENERAL_USER)</option>
+            </select>
+          </label>
+          <label class="field">
+            대상 조직
+            <select v-model="inviteForm.organizationId" @change="onInviteOrgChange">
+              <option value="">조직 선택</option>
+              <option v-for="org in organizations" :key="org.id" :value="org.id">{{ org.name }}</option>
+            </select>
+          </label>
+          <label class="field">
+            관리할 프로젝트
+            <select v-model="inviteForm.projectId">
+              <option value="">프로젝트 선택</option>
+              <option v-for="project in inviteProjects" :key="project.id" :value="project.id">{{ project.name }}</option>
+            </select>
+          </label>
+          <label v-if="!inviteForm.projectId" class="field">
+            소속 팀 (선택)
+            <select v-model="inviteForm.teamId" :disabled="!teamsForInviteOrg.length">
+              <option value="">팀 미지정</option>
+              <option v-for="team in teamsForInviteOrg" :key="team.id" :value="team.id">{{ team.name }}</option>
+            </select>
+          </label>
+          <label v-if="inviteForm.teamId" class="field">
+            팀 역할
+            <select v-model="inviteForm.teamRole">
+              <option value="TEAM_ADMIN">TEAM_ADMIN</option>
+              <option value="PROJECT_OWNER">PROJECT_OWNER</option>
+              <option value="DEVELOPER">DEVELOPER</option>
+              <option value="AUDITOR">AUDITOR</option>
+            </select>
+          </label>
+          <label class="field">
+            지정 이메일 (선택)
+            <input v-model.trim="inviteForm.expectedEmail" type="email" placeholder="director@company.com" />
+          </label>
+          <label v-if="inviteForm.targetTier === 'PROJECT_DIRECTOR'" class="field">
+            베타 서비스 ID (선택)
+            <input v-model.trim="inviteForm.betaServiceId" placeholder="연결할 베타 서비스 UUID" />
+          </label>
+          <label class="field">
+            만료 시간 (시간)
+            <input v-model.number="inviteForm.expiresInHours" type="number" min="1" max="720" />
+          </label>
+          <label v-if="inviteForm.targetTier === 'GENERAL_USER'" class="toggle-field">
+            <span>API 키 발급 권한 위임<small>체크하면 프로젝트에서 직접 키를 발급할 수 있습니다.</small></span>
+            <input v-model="inviteForm.canIssueApiKeys" type="checkbox" />
+          </label>
+        </div>
+        <div class="invite-issuer-actions">
+          <button
+            type="button"
+            class="primary-button"
+            :disabled="busy || !inviteForm.organizationId"
+            @click="issueAccountInvitation"
+          >
+            {{ accountTierLabel(inviteForm.targetTier) }} 초대 코드/링크 발급
+          </button>
+        </div>
 
-    <article class="surface-card"><header class="card-header"><div><span class="card-kicker">USERS</span><h2>전체 사용자 관리</h2></div><span class="count-badge">{{ users.length }}</span></header><div class="data-table-wrap"><table class="data-table platform-table"><thead><tr><th>사용자</th><th>권한</th><th>상태</th><th>소속·발급 키</th><th>관리</th></tr></thead><tbody><tr v-for="user in users" :key="user.id"><td><strong>{{ user.email }}</strong><small>{{ user.id }}</small></td><td>{{ user.platformAdmin ? 'Platform administrator' : '일반 사용자' }}</td><td><span class="status-chip tiny" :class="user.enabled ? 'healthy' : 'unhealthy'"><i></i>{{ user.enabled ? 'ENABLED' : 'DISABLED' }}</span></td><td>{{ user.organizationCount }}개 조직 · {{ user.issuedApiKeyCount }}개 발급 키</td><td><div class="table-actions"><button class="text-button" @click="toggleUser(user)">{{ user.enabled ? '중지' : '활성화' }}</button><button class="text-button danger-text" :disabled="user.platformAdmin" @click="openUserDelete(user)">삭제</button></div></td></tr><tr v-if="!users.length"><td colspan="5" class="table-empty">사용자가 없습니다.</td></tr></tbody></table></div></article>
+        <div class="invite-issuer-actions">
+          <label class="field">
+            기존 프로젝트 관리자 배정
+            <select v-model="existingDirectorId">
+              <option value="">기존 관리자 선택</option>
+              <option v-for="user in users.filter(item => userTier(item) === 'PROJECT_DIRECTOR' && item.enabled)" :key="user.id" :value="user.id">{{ user.email }}</option>
+            </select>
+          </label>
+          <button type="button" class="secondary-button" :disabled="busy || !inviteForm.projectId || !existingDirectorId" @click="assignExistingDirector">선택 프로젝트에 배정</button>
+        </div>
+
+        <div v-if="issuedInvitation" role="status" class="secret-reveal invite-reveal-box">
+          <span>1회용 초대 코드 및 가입 링크 (한 번만 표시 · 만료 {{ date(issuedInvitation.expiresAt) }})</span>
+          <div class="invite-reveal-row">
+            <div>
+              <small>초대 코드</small>
+              <code>{{ issuedInvitation.code }}</code>
+            </div>
+            <button type="button" class="secondary-button" @click="copyValue(issuedInvitation.code, '초대 코드')">코드 복사</button>
+          </div>
+          <div class="invite-reveal-row">
+            <div>
+              <small>가입 링크</small>
+              <code>{{ issuedLink }}</code>
+            </div>
+            <button type="button" class="secondary-button" @click="copyValue(issuedLink, '가입 링크')">링크 복사</button>
+          </div>
+          <div class="invite-reveal-foot">
+            <button type="button" class="ghost-button" @click="issuedInvitation = null">닫기</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="data-table-wrap">
+        <table class="data-table platform-table">
+          <thead>
+            <tr>
+              <th>계층</th>
+              <th>코드 접두어</th>
+              <th>대상 조직</th>
+              <th>지정 이메일</th>
+              <th>상태</th>
+              <th>만료 시각</th>
+              <th>관리</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in accountInvitations" :key="item.id">
+              <td><strong>{{ accountTierLabel(item.targetTier) }}</strong><small>{{ item.targetTier }}</small></td>
+              <td><code>{{ item.codePrefix ?? item.id.slice(0, 8) }}</code></td>
+              <td>{{ item.organizationName ?? orgNameById.get(item.organizationId) ?? item.organizationId }}</td>
+              <td>{{ item.expectedEmail || '미지정 (가입 시 입력)' }}</td>
+              <td>
+                <span
+                  class="status-chip tiny"
+                  :class="invitationStatus(item) === 'CONSUMED' ? 'healthy' : invitationStatus(item) === 'PENDING' ? 'connected' : 'draining'"
+                >
+                  <i></i>{{ invitationStatusLabel(invitationStatus(item)) }}
+                </span>
+              </td>
+              <td>{{ date(item.expiresAt) }}</td>
+              <td>
+                <button
+                  v-if="invitationStatus(item) === 'PENDING'"
+                  type="button"
+                  class="text-button danger-text"
+                  :disabled="busy"
+                  @click="revokeInvitation(item)"
+                >
+                  초대 회수
+                </button>
+                <span v-else class="muted-label">-</span>
+              </td>
+            </tr>
+            <tr v-if="!accountInvitations.length">
+              <td colspan="7" class="table-empty">발급된 계정 생성 초대가 없습니다.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </article>
+
+    <article class="surface-card">
+      <header class="card-header">
+        <div>
+          <span class="card-kicker">PROJECT MANAGERS</span>
+          <h2>프로젝트별 총괄 관리자 배정 · 회수</h2>
+          <p class="card-subtitle">프로젝트 관리자 권한을 회수하면 멤버십이 제거되고 해당 프로젝트에서 발급한 활성 API 키·대기 초대·리프레시 토큰이 즉시 무효화됩니다.</p>
+        </div>
+        <div class="hero-actions">
+          <select v-model="managedProjectId" aria-label="관리자 조회 프로젝트" :disabled="!inviteProjects.length || busy" @change="loadProjectManagers">
+            <option value="">프로젝트 선택</option>
+            <option v-for="project in inviteProjects" :key="project.id" :value="project.id">{{ project.name }}</option>
+          </select>
+          <span class="count-badge">{{ projectManagers.length }}</span>
+        </div>
+      </header>
+      <div class="data-table-wrap">
+        <table class="data-table platform-table">
+          <thead>
+            <tr>
+              <th>관리자 이메일</th>
+              <th>계층 · 역할</th>
+              <th>계정 상태</th>
+              <th>발급 활성 API 키</th>
+              <th>배정 시각</th>
+              <th>관리</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="manager in projectManagers" :key="manager.userId">
+              <td><strong>{{ manager.email }}</strong><small>{{ manager.userId }}</small></td>
+              <td><strong>{{ accountTierLabel(manager.accountTier) }}</strong><small>{{ manager.role ?? 'MANAGER' }}</small></td>
+              <td><span class="status-chip tiny" :class="manager.enabled === false ? 'unhealthy' : 'healthy'"><i></i>{{ manager.enabled === false ? 'DISABLED' : 'ENABLED' }}</span></td>
+              <td>{{ manager.activeApiKeyCount ?? 0 }}개</td>
+              <td>{{ date(manager.createdAt) }}</td>
+              <td>
+                <button type="button" class="text-button danger-text" :disabled="busy" @click="revokeManager(manager)">관리자 권한 회수</button>
+              </td>
+            </tr>
+            <tr v-if="!projectManagers.length">
+              <td colspan="6" class="table-empty">선택한 프로젝트에 배정된 프로젝트 관리자가 없습니다.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </article>
+
+    <article class="surface-card">
+      <header class="card-header"><div><span class="card-kicker">ORGANIZATIONS</span><h2>조직·워크스페이스 관리</h2></div><span class="count-badge">{{ organizations.length }}</span></header>
+      <div class="data-table-wrap">
+        <table class="data-table platform-table">
+          <thead><tr><th>조직</th><th>상태</th><th>리소스</th><th>멤버</th><th>관리</th></tr></thead>
+          <tbody>
+            <tr v-for="item in organizations" :key="item.id">
+              <td><strong>{{ item.name }}</strong><small>{{ item.id }}</small></td>
+              <td><span class="status-chip tiny" :class="item.status === 'ACTIVE' ? 'healthy' : 'draining'"><i></i>{{ item.status }}</span></td>
+              <td><small>프로젝트 {{ item.projectCount }} · Provider {{ item.providerCount }} · Node {{ item.nodeCount }}</small></td>
+              <td>{{ item.memberCount }}</td>
+              <td><div class="table-actions"><button class="text-button" @click="openCleanup(item)">정리 범위</button><button class="text-button" @click="setOrganizationStatus(item)">{{ item.status === 'SUSPENDED' ? '복구' : '중지' }}</button></div></td>
+            </tr>
+            <tr v-if="!organizations.length"><td colspan="5" class="table-empty">조직이 없습니다.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </article>
+
+    <article class="surface-card">
+      <header class="card-header"><div><span class="card-kicker">USERS</span><h2>전체 사용자 관리</h2></div><span class="count-badge">{{ users.length }}</span></header>
+      <div class="data-table-wrap">
+        <table class="data-table platform-table">
+          <thead><tr><th>사용자</th><th>계층</th><th>TOTP 2차 인증</th><th>상태</th><th>소속·발급 키</th><th>관리</th></tr></thead>
+          <tbody>
+            <tr v-for="user in users" :key="user.id">
+              <td><strong>{{ user.email }}</strong><small>{{ user.id }}</small></td>
+              <td><strong>{{ accountTierLabel(userTier(user), user.platformAdmin) }}</strong><small>{{ userTier(user) }}</small></td>
+              <td>
+                <span class="status-chip tiny" :class="user.totpEnabled ? 'healthy' : 'draining'">
+                  <i></i>{{ user.totpEnabled ? 'TOTP 활성' : '미등록' }}
+                </span>
+              </td>
+              <td><span class="status-chip tiny" :class="user.enabled ? 'healthy' : 'unhealthy'"><i></i>{{ user.enabled ? 'ENABLED' : 'DISABLED' }}</span></td>
+              <td>{{ user.organizationCount }}개 조직 · {{ user.issuedApiKeyCount }}개 발급 키</td>
+              <td>
+                <div class="table-actions">
+                  <button type="button" class="text-button" :disabled="busy" @click="toggleUser(user)">{{ user.enabled ? '중지' : '활성화' }}</button>
+                  <button type="button" class="text-button" :disabled="busy" @click="resetUserTotp(user)">TOTP 초기화</button>
+                  <button type="button" class="text-button danger-text" :disabled="user.platformAdmin" @click="openUserDelete(user)">삭제</button>
+                </div>
+              </td>
+            </tr>
+            <tr v-if="!users.length"><td colspan="6" class="table-empty">사용자가 없습니다.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </article>
 
     <article class="surface-card"><header class="card-header"><div><span class="card-kicker">TEAMS</span><h2>전체 팀·부서 관리</h2><p class="card-subtitle">팀을 삭제하면 연결 프로젝트는 중지되고 팀 프로젝트의 API 키가 폐기됩니다.</p></div><span class="count-badge">{{ teams.length }}</span></header><div class="data-table-wrap"><table class="data-table platform-table"><thead><tr><th>팀</th><th>조직</th><th>상태</th><th>연결 프로젝트</th><th>관리</th></tr></thead><tbody><tr v-for="team in teams" :key="team.id"><td><strong>{{ team.name }}</strong><small>{{ team.id }}</small></td><td>{{ team.organizationName }}</td><td><span class="status-chip tiny" :class="team.status === 'ACTIVE' ? 'healthy' : 'draining'"><i></i>{{ team.status }}</span></td><td>{{ team.projectCount }}</td><td><button class="text-button danger-text" @click="openTeamDelete(team)">팀 삭제</button></td></tr><tr v-if="!teams.length"><td colspan="5" class="table-empty">팀이 없습니다.</td></tr></tbody></table></div></article>
 
-<article class="surface-card"><header class="card-header"><div><span class="card-kicker">API KEYS</span><h2>전체 API 키 정리</h2><p class="card-subtitle">원문은 표시하지 않고 prefix·소속·상태만 관리합니다.</p></div><span class="count-badge">{{ apiKeys.length }}</span></header><div class="data-table-wrap"><table class="data-table platform-table"><thead><tr><th>키</th><th>조직·프로젝트</th><th>상태</th><th>최근 사용</th><th>관리</th></tr></thead><tbody><tr v-for="key in apiKeys" :key="key.id"><td><strong>{{ key.name }}</strong><small>{{ key.keyPrefix }} · 생성 {{ date(key.createdAt) }}</small></td><td><strong>{{ key.organizationName }}</strong><small>{{ key.projectName }}</small></td><td><span class="status-chip tiny" :class="key.status === 'ACTIVE' ? 'healthy' : 'draining'"><i></i>{{ key.status }}</span></td><td>{{ date(key.lastUsedAt) }}</td><td><button class="text-button danger-text" @click="deleteApiKey(key)">영구 삭제</button></td></tr><tr v-if="!apiKeys.length"><td colspan="5" class="table-empty">API 키가 없습니다.</td></tr></tbody></table></div></article>
+    <article class="surface-card"><header class="card-header"><div><span class="card-kicker">API KEYS</span><h2>전체 API 키 정리</h2><p class="card-subtitle">원문은 표시하지 않고 prefix·소속·상태만 관리합니다.</p></div><span class="count-badge">{{ apiKeys.length }}</span></header><div class="data-table-wrap"><table class="data-table platform-table"><thead><tr><th>키</th><th>조직·프로젝트</th><th>상태</th><th>최근 사용</th><th>관리</th></tr></thead><tbody><tr v-for="key in apiKeys" :key="key.id"><td><strong>{{ key.name }}</strong><small>{{ key.keyPrefix }} · 생성 {{ date(key.createdAt) }}</small></td><td><strong>{{ key.organizationName }}</strong><small>{{ key.projectName }}</small></td><td><span class="status-chip tiny" :class="key.status === 'ACTIVE' ? 'healthy' : 'draining'"><i></i>{{ key.status }}</span></td><td>{{ date(key.lastUsedAt) }}</td><td><button class="text-button danger-text" @click="deleteApiKey(key)">영구 삭제</button></td></tr><tr v-if="!apiKeys.length"><td colspan="5" class="table-empty">API 키가 없습니다.</td></tr></tbody></table></div></article>
 
-    <BaseModal :open="teamDeleteOpen" title="팀·부서 영구 삭제" description="팀 이름을 입력해야 삭제됩니다. 연결 프로젝트는 중지되고 해당 프로젝트 API 키가 폐기됩니다." size="sm" @close="teamDeleteOpen=false"><div v-if="selectedTeam" class="modal-form"><div class="delete-summary danger-alert"><strong>{{ selectedTeam.name }}</strong><p>{{ selectedTeam.organizationName }} · 연결 프로젝트 {{ selectedTeam.projectCount }}개</p></div><label class="field">확인 입력<input v-model.trim="teamConfirmation" :placeholder="selectedTeam.name" /></label></div><template #footer><button class="secondary-button" @click="teamDeleteOpen=false">취소</button><button class="danger-button primary-button" :disabled="busy || !selectedTeam || teamConfirmation !== selectedTeam.name" @click="deleteTeam">팀 삭제</button></template></BaseModal><BaseModal :open="cleanupOpen" title="조직 정리 범위" description="삭제 전 연결된 리소스와 요청 이력을 확인합니다." size="sm" @close="cleanupOpen=false"><div v-if="cleanup" class="platform-preview"><strong>{{ cleanup.name }}</strong><p>상태: {{ cleanup.status }}</p><div class="preview-grid"><span>프로젝트 <b>{{ cleanup.projectCount }}</b></span><span>Provider <b>{{ cleanup.providerCount }}</b></span><span>Node <b>{{ cleanup.nodeCount }}</b></span><span>Endpoint <b>{{ cleanup.endpointCount }}</b></span><span>멤버 <b>{{ cleanup.memberCount }}</b></span><span>요청 이력 <b>{{ cleanup.requestCount }}</b></span></div><p class="danger-alert">{{ cleanup.behavior }}</p></div><template #footer><button class="secondary-button" @click="cleanupOpen=false">닫기</button><button class="danger-button primary-button" @click="openDelete">영구 삭제</button></template></BaseModal>
+    <BaseModal :open="teamDeleteOpen" title="팀·부서 영구 삭제" description="팀 이름을 입력해야 삭제됩니다. 연결 프로젝트는 중지되고 해당 프로젝트 API 키가 폐기됩니다." size="sm" @close="teamDeleteOpen=false"><div v-if="selectedTeam" class="modal-form"><div class="delete-summary danger-alert"><strong>{{ selectedTeam.name }}</strong><p>{{ selectedTeam.organizationName }} · 연결 프로젝트 {{ selectedTeam.projectCount }}개</p></div><label class="field">확인 입력<input v-model.trim="teamConfirmation" :placeholder="selectedTeam.name" /></label></div><template #footer><button class="secondary-button" @click="teamDeleteOpen=false">취소</button><button class="danger-button primary-button" :disabled="busy || !selectedTeam || teamConfirmation !== selectedTeam.name" @click="deleteTeam">팀 삭제</button></template></BaseModal>
+    <BaseModal :open="cleanupOpen" title="조직 정리 범위" description="삭제 전 연결된 리소스와 요청 이력을 확인합니다." size="sm" @close="cleanupOpen=false"><div v-if="cleanup" class="platform-preview"><strong>{{ cleanup.name }}</strong><p>상태: {{ cleanup.status }}</p><div class="preview-grid"><span>프로젝트 <b>{{ cleanup.projectCount }}</b></span><span>Provider <b>{{ cleanup.providerCount }}</b></span><span>Node <b>{{ cleanup.nodeCount }}</b></span><span>Endpoint <b>{{ cleanup.endpointCount }}</b></span><span>멤버 <b>{{ cleanup.memberCount }}</b></span><span>요청 이력 <b>{{ cleanup.requestCount }}</b></span></div><p class="danger-alert">{{ cleanup.behavior }}</p></div><template #footer><button class="secondary-button" @click="cleanupOpen=false">닫기</button><button class="danger-button primary-button" @click="openDelete">영구 삭제</button></template></BaseModal>
     <BaseModal :open="deleteOpen" title="조직 영구 삭제" description="되돌릴 수 없습니다. 조직 이름을 정확히 입력해야 합니다." size="sm" @close="deleteOpen=false"><div v-if="cleanup" class="modal-form"><div class="delete-summary danger-alert"><strong>{{ cleanup.name }}</strong><p>프로젝트, Runtime, 외부 Provider, 팀·멤버십과 요청 이력을 모두 삭제합니다.</p></div><label class="field">확인 입력<input v-model.trim="orgConfirmation" :placeholder="cleanup.name" /></label></div><template #footer><button class="secondary-button" @click="deleteOpen=false">취소</button><button class="danger-button primary-button" :disabled="busy || !cleanup || orgConfirmation !== cleanup.name" @click="deleteOrganization">조직 삭제</button></template></BaseModal>
     <BaseModal :open="userDeleteOpen" title="사용자 영구 삭제" description="멤버십과 로그인 세션을 삭제합니다. 요청 이력의 감사 정보는 보존될 수 있습니다." size="sm" @close="userDeleteOpen=false"><div v-if="selectedUser" class="modal-form"><div class="delete-summary danger-alert"><strong>{{ selectedUser.email }}</strong><p>현재 로그인한 계정은 삭제할 수 없습니다.</p></div><label class="field">이메일 확인<input v-model.trim="userConfirmation" :placeholder="selectedUser.email" /></label></div><template #footer><button class="secondary-button" @click="userDeleteOpen=false">취소</button><button class="danger-button primary-button" :disabled="busy || !selectedUser || userConfirmation.toLowerCase() !== selectedUser.email.toLowerCase()" @click="deleteUser">사용자 삭제</button></template></BaseModal>
   </section>
 </template>
 
 <style scoped>
-.platform-admin-page{gap:18px}.platform-metrics{grid-template-columns:repeat(6,minmax(130px,1fr))}.platform-table{min-width:900px}.platform-table .table-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.platform-table .table-empty{text-align:center;padding:35px;color:var(--muted)}.card-subtitle{margin:6px 0 0;color:var(--muted);font-size:10px}.danger-text{color:var(--danger)!important}.platform-preview{display:grid;gap:12px}.platform-preview>strong{font-size:18px}.platform-preview>p{margin:0;color:var(--muted);font-size:11px;line-height:1.6}.preview-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.preview-grid span{padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2);color:var(--muted);font-size:10px}.preview-grid b{display:block;margin-top:3px;color:var(--text);font-size:15px}.platform-preview .danger-alert{padding:11px;border-radius:10px;border:1px solid color-mix(in srgb,var(--danger) 34%,transparent);background:var(--danger-dim);color:var(--danger)}.delete-summary{padding:12px;border-radius:10px}.delete-summary p{margin:6px 0 0;color:inherit;font-size:11px;line-height:1.55}@media(max-width:1200px){.platform-metrics{grid-template-columns:repeat(3,minmax(130px,1fr))}}@media(max-width:650px){.platform-metrics{grid-template-columns:repeat(2,minmax(120px,1fr))}.preview-grid{grid-template-columns:1fr}}
+.platform-admin-page{gap:18px}.platform-metrics{grid-template-columns:repeat(6,minmax(130px,1fr))}.platform-table{min-width:900px}.platform-table .table-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.platform-table .table-empty{text-align:center;padding:35px;color:var(--muted)}.card-subtitle{margin:6px 0 0;color:var(--muted);font-size:10px}.danger-text{color:var(--danger)!important}.platform-preview{display:grid;gap:12px}.platform-preview>strong{font-size:18px}.platform-preview>p{margin:0;color:var(--muted);font-size:11px;line-height:1.6}.preview-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.preview-grid span{padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2);color:var(--muted);font-size:10px}.preview-grid b{display:block;margin-top:3px;color:var(--text);font-size:15px}.platform-preview .danger-alert{padding:11px;border-radius:10px;border:1px solid color-mix(in srgb,var(--danger) 34%,transparent);background:var(--danger-dim);color:var(--danger)}.delete-summary{padding:12px;border-radius:10px}.delete-summary p{margin:6px 0 0;color:inherit;font-size:11px;line-height:1.55}
+.invite-issuer-body{padding:20px 22px;display:grid;gap:14px;border-bottom:1px solid var(--border)}
+.invite-form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+.invite-issuer-actions{display:flex;gap:10px;flex-wrap:wrap}
+.invite-reveal-box{grid-template-columns:1fr}
+.invite-reveal-row{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center}
+.invite-reveal-row>div{min-width:0;display:grid;gap:4px}
+.invite-reveal-row small{color:var(--muted);font-size:10px;font-weight:700}
+.invite-reveal-row code{word-break:break-all}
+.invite-reveal-foot{display:flex;justify-content:flex-end}
+.muted-label{color:var(--muted)}
+@media(max-width:1200px){.platform-metrics{grid-template-columns:repeat(3,minmax(130px,1fr))}}@media(max-width:650px){.platform-metrics{grid-template-columns:repeat(2,minmax(120px,1fr))}.preview-grid,.invite-reveal-row{grid-template-columns:1fr}}
 </style>

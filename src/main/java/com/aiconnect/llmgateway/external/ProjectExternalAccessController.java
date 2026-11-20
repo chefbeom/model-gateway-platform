@@ -1,5 +1,6 @@
 package com.aiconnect.llmgateway.external;
 
+import com.aiconnect.llmgateway.domain.Currency;
 import com.aiconnect.llmgateway.domain.ExternalAccessStatus;
 import com.aiconnect.llmgateway.identity.*;
 import com.aiconnect.llmgateway.team.TeamAccessService;
@@ -50,7 +51,8 @@ public class ProjectExternalAccessController {
                 && (organization == null || !access.isOrganizationAdmin(CurrentActor.principal().orElse(null), organization)))
             throw new ApiException(HttpStatus.FORBIDDEN, "ORGANIZATION_ADMIN_REQUIRED", "Only an organization administrator may approve external provider access.");
         return service.decide(projectId, providerId, request.status(), request.manualAllowed(),
-                request.autoFailoverEnabled(), request.monthlyCostLimit(), request.expiresAt(), CurrentActor.userIdOrNull());
+                request.autoFailoverEnabled(), request.monthlyCostLimit(), request.monthlyCostCurrency(),
+                request.expiresAt(), CurrentActor.userIdOrNull());
     }
 
     private AuthPrincipal actor() { return CurrentActor.principal().orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "AUTH_REQUIRED", "Login is required.")); }
@@ -58,5 +60,5 @@ public class ProjectExternalAccessController {
 
     public record RequestAccess(@NotNull UUID providerId, @NotBlank @Size(max = 1000) String reason) { }
     public record Decision(@NotNull ExternalAccessStatus status, boolean manualAllowed, boolean autoFailoverEnabled,
-                           @Positive BigDecimal monthlyCostLimit, Instant expiresAt) { }
+                           @Positive BigDecimal monthlyCostLimit, Currency monthlyCostCurrency, Instant expiresAt) { }
 }

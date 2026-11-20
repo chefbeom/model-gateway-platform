@@ -3,6 +3,7 @@ package com.aiconnect.llmgateway.service;
 import com.aiconnect.llmgateway.config.GatewayProperties;
 import com.aiconnect.llmgateway.domain.ApiKey;
 import com.aiconnect.llmgateway.domain.ApiKeyStatus;
+import com.aiconnect.llmgateway.domain.DataBoundaryPolicy;
 import com.aiconnect.llmgateway.domain.Project;
 import com.aiconnect.llmgateway.repository.ApiKeyRepository;
 import com.aiconnect.llmgateway.repository.ProjectRepository;
@@ -40,30 +41,50 @@ public class ApiKeyService {
 
     @Transactional
     public IssuedApiKey issue(UUID projectId, String name, Instant expiresAt) {
-        return issue(projectId, name, expiresAt, null);
+        return issue(projectId, name, expiresAt, null, null);
     }
 
     @Transactional
     public IssuedApiKey issue(UUID projectId, String name, Instant expiresAt, UUID issuedByUserId) {
+        return issue(projectId, name, expiresAt, issuedByUserId, null);
+    }
+
+    @Transactional
+    public IssuedApiKey issue(UUID projectId, String name, Instant expiresAt, UUID issuedByUserId,
+                              DataBoundaryPolicy requestedBoundary) {
         Project project = projects.findById(projectId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "PROJECT_NOT_FOUND", "The project does not exist."));
         if (!"ACTIVE".equalsIgnoreCase(project.getStatus())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "PROJECT_SUSPENDED",
                     "This project is suspended. Resume it before issuing a new API key.");
         }
+        DataBoundaryPolicy projectEffective = project.effectiveDataBoundaryPolicy();
+        DataBoundaryPolicy keyBoundary = requestedBoundary == null ? projectEffective : requestedBoundary;
+        if (keyBoundary.exceeds(projectEffective)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "DATA_BOUNDARY_RELAXATION_DENIED",
+                    "API key data boundary cannot exceed the project data boundary policy.");
+        }
         String publicId = randomHex(8);
         String raw = PREFIX + publicId + "." + randomHex(32);
-        ApiKey key = apiKeys.save(new ApiKey(projectId, issuedByUserId, name, PREFIX + publicId, hmac(raw), expiresAt));
+        ApiKey entity = new ApiKey(projectId, issuedByUserId, name, PREFIX + publicId, hmac(raw), expiresAt);
+        entity.configureDataBoundaryPolicy(keyBoundary);
+        ApiKey key = apiKeys.save(entity);
         return new IssuedApiKey(key.getId(), key.getName(), key.getKeyPrefix(), raw, key.getExpiresAt());
     }
 
     @Transactional
     public IssuedApiKey issueTemporary(UUID projectId, String name, long durationSeconds, UUID issuedByUserId) {
+        return issueTemporary(projectId, name, durationSeconds, issuedByUserId, null);
+    }
+
+    @Transactional
+    public IssuedApiKey issueTemporary(UUID projectId, String name, long durationSeconds, UUID issuedByUserId,
+                                       DataBoundaryPolicy requestedBoundary) {
         if (durationSeconds < MIN_TEMPORARY_KEY_SECONDS || durationSeconds > MAX_TEMPORARY_KEY_SECONDS) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "TEMPORARY_API_KEY_DURATION_INVALID",
                     "Temporary API key duration must be between 60 seconds and 24 hours.");
         }
-        return issue(projectId, name, Instant.now().plusSeconds(durationSeconds), issuedByUserId);
+        return issue(projectId, name, Instant.now().plusSeconds(durationSeconds), issuedByUserId, requestedBoundary);
     }
 
     @Transactional

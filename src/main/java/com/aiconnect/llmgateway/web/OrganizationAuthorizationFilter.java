@@ -4,6 +4,7 @@ import com.aiconnect.llmgateway.domain.InferenceNode;
 import com.aiconnect.llmgateway.domain.LlmService;
 import com.aiconnect.llmgateway.domain.Project;
 import com.aiconnect.llmgateway.identity.AuthPrincipal;
+import com.aiconnect.llmgateway.identity.AccountTier;
 import com.aiconnect.llmgateway.identity.CurrentActor;
 import com.aiconnect.llmgateway.repository.ApiKeyRepository;
 import com.aiconnect.llmgateway.repository.ExternalProviderRepository;
@@ -103,6 +104,18 @@ public class OrganizationAuthorizationFilter extends OncePerRequestFilter {
             filterChain.doFilter(new BufferedBodyRequest(request, body), response);
             return;
         }
+        // Invitation operations have their own project-scoped checks in the
+        // invitation service; do not grant access to other organization APIs.
+        if (actor.accountTier() == AccountTier.PROJECT_DIRECTOR
+                && uri.matches("/api/admin/organizations/[0-9a-fA-F-]+/account-invitations(/[0-9a-fA-F-]+/revoke)?")) {
+            filterChain.doFilter(new BufferedBodyRequest(request, body), response);
+            return;
+        }
+        if ((actor.accountTier() == AccountTier.PROJECT_DIRECTOR || access.hasExplicitProjectScope(actor))
+                && uri.matches("/api/admin/organizations/[0-9a-fA-F-]+/teams(/.*)?")) {
+            deny(response, "PROJECT_ACCESS_DENIED", "Project directors cannot access organization-wide team administration.");
+            return;
+        }
         if ("GET".equals(request.getMethod()) && isOrganizationDiscoveryPath(uri)) {
             filterChain.doFilter(new BufferedBodyRequest(request, body), response);
             return;
@@ -157,7 +170,8 @@ public class OrganizationAuthorizationFilter extends OncePerRequestFilter {
     }
 
     private boolean isOrganizationDiscoveryPath(String uri) {
-        return uri.matches("/api/admin/organizations/[0-9a-fA-F-]+/(projects|teams)(/[^/]+/members)?");
+        return uri.matches("/api/admin/organizations/[0-9a-fA-F-]+/projects")
+                || uri.matches("/api/admin/organizations/[0-9a-fA-F-]+/teams(/[-0-9a-fA-F]+/members)?");
     }
 
     private UUID organizationFor(String method, String uri, JsonNode body) {

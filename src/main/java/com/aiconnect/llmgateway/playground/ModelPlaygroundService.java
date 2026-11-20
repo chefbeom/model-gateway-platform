@@ -81,6 +81,8 @@ public class ModelPlaygroundService {
     private com.aiconnect.llmgateway.routing.ActiveRequestRegistry capacity;
     @org.springframework.beans.factory.annotation.Autowired
     private com.aiconnect.llmgateway.dataprotection.DataProtectionPolicyService dataProtection;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.aiconnect.llmgateway.security.RuntimeTrustPolicy runtimeTrust;
 
     public ModelPlaygroundService(InferenceNodeRepository nodes, RuntimeEndpointRepository endpoints,
                                   ExternalProviderRepository providers, ModelDeploymentRepository deployments,
@@ -176,6 +178,12 @@ public class ModelPlaygroundService {
         UUID targetId = parseUuid(body.path("targetId").asText(null), "PLAYGROUND_TARGET_REQUIRED", "테스트할 모델을 선택하세요.");
         Resolved resolved = resolve(organizationId, targetId);
         if (!resolved.enabled()) throw new ApiException(HttpStatus.CONFLICT, "PLAYGROUND_TARGET_DISABLED", "선택한 Runtime, Provider 또는 모델이 비활성화되어 있습니다.");
+        if (!resolved.external()) {
+            String denial = runtimeTrust == null ? "RUNTIME_TRUST_UNAVAILABLE"
+                    : runtimeTrust.denialReason(resolved.endpoint(), Instant.now());
+            if (denial != null) throw new ApiException(HttpStatus.FORBIDDEN, denial,
+                    "Runtime의 보안 분류 또는 사용 승인을 확인할 수 없어 모델 테스트가 차단되었습니다.");
+        }
         requireLlamaModelLoaded(resolved);
 
         boolean stream = body.path("stream").asBoolean(false);

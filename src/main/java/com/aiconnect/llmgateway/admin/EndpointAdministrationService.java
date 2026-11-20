@@ -12,6 +12,7 @@ import com.aiconnect.llmgateway.repository.ModelDeploymentRepository;
 import com.aiconnect.llmgateway.repository.RuntimeEndpointRepository;
 import com.aiconnect.llmgateway.repository.ServiceTargetRepository;
 import com.aiconnect.llmgateway.service.SecretCipher;
+import com.aiconnect.llmgateway.security.RuntimeTrustAttestationRepository;
 import com.aiconnect.llmgateway.web.ApiException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -19,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.net.URI;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -31,16 +33,18 @@ public class EndpointAdministrationService {
     private final ServiceTargetRepository targets;
     private final SecretCipher cipher;
     private final AuditService audit;
+    private final RuntimeTrustAttestationRepository trustAttestations;
 
     public EndpointAdministrationService(RuntimeEndpointRepository endpoints, InferenceNodeRepository nodes,
                                          ModelDeploymentRepository deployments, ServiceTargetRepository targets,
-                                         SecretCipher cipher, AuditService audit) {
+                                         SecretCipher cipher, AuditService audit, RuntimeTrustAttestationRepository trustAttestations) {
         this.endpoints = endpoints;
         this.nodes = nodes;
         this.deployments = deployments;
         this.targets = targets;
         this.cipher = cipher;
         this.audit = audit;
+        this.trustAttestations = trustAttestations;
     }
 
     @Transactional(readOnly = true)
@@ -61,6 +65,9 @@ public class EndpointAdministrationService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "RUNTIME_TOKEN_UPDATE_INVALID", "Set a new token or clear the existing token, not both.");
         }
         boolean replaceToken = command.apiToken() != null && !command.apiToken().isBlank();
+        boolean securityChanged = !baseUrl.equals(endpoint.getBaseUrl()) || replaceToken || command.clearApiToken()
+                || (command.runtimeType() != null && command.runtimeType() != endpoint.getRuntimeType());
+        if (securityChanged) trustAttestations.findById(endpointId).ifPresent(a -> a.revoke(Instant.now()));
         endpoint.configure(command.displayName(), baseUrl, command.runtimeType(), replaceToken ? cipher.encrypt(command.apiToken()) : null, replaceToken,
                 command.clearApiToken(), command.enabled(), command.clearPricing(), command.inputPricePerMillion(), command.outputPricePerMillion(), command.currency());
         RuntimeEndpoint saved = endpoints.save(endpoint);

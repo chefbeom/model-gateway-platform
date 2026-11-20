@@ -68,7 +68,24 @@ public class ControlPlaneService {
         requireOrganization(request.organizationId());
         if (request.teamId() != null) requireTeam(request.organizationId(), request.teamId());
         Project project = new Project(request.organizationId(), request.teamId(), request.name());
-        project.configureExternalAiBlocked(Boolean.TRUE.equals(request.externalAiBlocked()));
+        boolean legacyBlocked = Boolean.TRUE.equals(request.externalAiBlocked());
+        DataBoundaryPolicy ceiling = request.maxDataBoundaryPolicy() != null
+                ? request.maxDataBoundaryPolicy()
+                : (legacyBlocked ? DataBoundaryPolicy.INTERNAL_ONLY : DataBoundaryPolicy.EXTERNAL_ALLOWED);
+        DataBoundaryPolicy boundary = request.dataBoundaryPolicy() != null
+                ? request.dataBoundaryPolicy()
+                : (legacyBlocked ? DataBoundaryPolicy.INTERNAL_ONLY : ceiling);
+        if (legacyBlocked) {
+            boundary = DataBoundaryPolicy.INTERNAL_ONLY;
+            if (request.maxDataBoundaryPolicy() == null) {
+                ceiling = DataBoundaryPolicy.INTERNAL_ONLY;
+            }
+        }
+        if (boundary.exceeds(ceiling)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "DATA_BOUNDARY_RELAXATION_DENIED",
+                    "Project data boundary policy cannot exceed maxDataBoundaryPolicy.");
+        }
+        project.configureDataBoundaryPolicy(boundary, ceiling);
         return projects.save(project);
     }
 
@@ -115,6 +132,9 @@ public class ControlPlaneService {
                 request.currency() == null ? Currency.KRW : request.currency());
         configureTemperaturePolicy(service, request.temperaturePolicy(), request.temperatureValue());
         service.configureOpenAiRequestPolicy(request.reasoningEffort(), request.openAiFastMode());
+        if (request.dataBoundaryPolicy() != null) {
+            service.configureDataBoundaryPolicy(request.dataBoundaryPolicy());
+        }
         return services.save(service);
     }
 

@@ -1,6 +1,8 @@
 package com.aiconnect.llmgateway.quota;
 
 import com.aiconnect.llmgateway.billing.TokenPricingResolver;
+import com.aiconnect.llmgateway.dataprotection.DataProtectionDecision;
+import com.aiconnect.llmgateway.dataprotection.DataProtectionPolicyService;
 import com.aiconnect.llmgateway.domain.ApiKey;
 import com.aiconnect.llmgateway.domain.Currency;
 import com.aiconnect.llmgateway.domain.LlmService;
@@ -8,22 +10,28 @@ import com.aiconnect.llmgateway.domain.ModelDeployment;
 import com.aiconnect.llmgateway.domain.Project;
 import com.aiconnect.llmgateway.domain.RuntimeEndpoint;
 import com.aiconnect.llmgateway.domain.ServiceTarget;
+import com.aiconnect.llmgateway.gateway.RequestCapabilityDetector;
 import com.aiconnect.llmgateway.repository.ApiKeyRepository;
 import com.aiconnect.llmgateway.repository.LlmServiceRepository;
 import com.aiconnect.llmgateway.repository.ModelDeploymentRepository;
 import com.aiconnect.llmgateway.repository.ProjectRepository;
 import com.aiconnect.llmgateway.repository.RuntimeEndpointRepository;
 import com.aiconnect.llmgateway.repository.ServiceTargetRepository;
+import com.aiconnect.llmgateway.routing.ResolvedTarget;
+import com.aiconnect.llmgateway.routing.RoutingDecision;
+import com.aiconnect.llmgateway.routing.RoutingService;
 import com.aiconnect.llmgateway.service.ApiKeyCredentials;
 import com.aiconnect.llmgateway.service.ApiKeyService;
 import com.aiconnect.llmgateway.team.TeamRepository;
 import com.aiconnect.llmgateway.web.ApiException;
 import com.fasterxml.jackson.databind.JsonNode;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.*;
 import java.util.*;
 
@@ -31,6 +39,7 @@ import java.util.*;
 @Service
 public class SpendQuotaService {
     private static final int DEFAULT_OUTPUT_RESERVATION_TOKENS = 4096;
+    private static final Instant TOTAL_PERIOD_END = Instant.parse("2038-01-18T00:00:00Z");
     private final ApiKeyService apiKeys;
     private final SpendQuotaRepository quotas;
     private final SpendCostQuery costs;
@@ -44,6 +53,14 @@ public class SpendQuotaService {
     private final RuntimeEndpointRepository endpoints;
     @org.springframework.beans.factory.annotation.Autowired
     private com.aiconnect.llmgateway.external.ProjectExternalAccessService externalAccess;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.aiconnect.llmgateway.security.RuntimeTrustPolicy runtimeTrust;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private RoutingService routing;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private DataProtectionPolicyService dataProtection;
+    @Value("${aiconnect.quota.reservation-lease-seconds:600}")
+    private long leaseSeconds = 600;
 
     public SpendQuotaService(ApiKeyService apiKeys, SpendQuotaRepository quotas, SpendCostQuery costs,
                              ProjectRepository projects, TeamRepository teams, ApiKeyRepository keyRepository,
@@ -71,8 +88,8 @@ public class SpendQuotaService {
 
     /**
      * Atomically reserves the worst-case request cost against every applicable quota.
-     * The reservation is released by the servlet filter after the gateway has completed.
-     * Its expiry is also a crash-safety backstop for abandoned requests.
+     * The reservation transitions to SETTLED, RELEASED, or HELD_UNSETTLED when execution finishes.
+     * Its expiry is also a crash-safety backstop for abandoned ACTIVE leases.
      */
     @Transactional
     public Reservation reserve(String authorization, JsonNode body) {
@@ -83,7 +100,6 @@ public class SpendQuotaService {
     public Reservation reserve(ApiKeyCredentials credentials, JsonNode body) {
         Project project = credentials.project();
         Instant now = Instant.now();
-        reservations.deleteExpired(now);
 
         List<SpendQuota> applicable = quotas.findByOrganizationIdAndEnabledTrue(project.getOrganizationId()).stream()
                 .filter(quota -> applies(quota, project, credentials.apiKey()))
@@ -94,7 +110,7 @@ public class SpendQuotaService {
         LlmService service = body == null || !body.hasNonNull("model") ? null
                 : services.findByOrganizationIdAndServiceKeyAndEnabledTrue(
                         project.getOrganizationId(), body.get("model").asText()).orElse(null);
-        Map<Currency, BigDecimal> requestedByCurrency = estimateRequestCosts(body, service, project);
+        Map<Currency, BigDecimal> requestedByCurrency = estimateRequestCosts(body, service, project, credentials.apiKey());
         UUID reservationKey = UUID.randomUUID();
         List<SpendQuota> locked = new ArrayList<>();
         for (SpendQuota item : applicable) {
@@ -103,17 +119,27 @@ public class SpendQuotaService {
                 locked.add(quota);
             }
         }
+        if (locked.isEmpty()) return null;
 
-        Instant expiresAt = now.plusSeconds(3600);
+        requireCurrencyCoverage(locked, requestedByCurrency);
+
+        long effectiveLease = leaseSeconds > 0 ? leaseSeconds : 600;
+        Instant expiresAt = now.plusSeconds(effectiveLease);
         List<SpendQuotaReservation> created = new ArrayList<>();
         for (SpendQuota quota : locked) {
-            BigDecimal requested = requestedByCurrency.getOrDefault(quota.getCurrency(), BigDecimal.ZERO);
+            reservations.reclaimExpiredActiveForQuota(quota.getId(), now);
+            reservations.reclaimExpiredUnsettledForQuota(quota.getId(), now);
 
-            Instant from = periodStart(quota.getPeriod());
+            BigDecimal rawRequested = requestedByCurrency.getOrDefault(quota.getCurrency(), BigDecimal.ZERO);
+            BigDecimal requested = rawRequested.signum() <= 0
+                    ? BigDecimal.ZERO
+                    : rawRequested.setScale(6, RoundingMode.CEILING);
+
+            Instant from = periodStart(quota.getPeriod(), now);
             BigDecimal committed = quota.getScopeType() == SpendQuotaScope.API_KEY
                     ? costs.sumForApiKey(credentials.apiKey().getId(), quota.getCurrency(), from)
                     : costs.sumForProjects(scopeProjects(quota, project), quota.getCurrency(), from);
-            BigDecimal active = reservations.sumActiveAmountByQuotaId(quota.getId(), now);
+            BigDecimal active = reservations.sumActiveAmountByQuotaId(quota.getId(), from, now);
             BigDecimal used = committed.add(active == null ? BigDecimal.ZERO : active);
             if (requested.signum() <= 0) {
                 if (used.compareTo(quota.getLimitAmount()) >= 0) throw new ApiException(HttpStatus.TOO_MANY_REQUESTS, "QUOTA_EXCEEDED", "The spend quota has been exceeded.");
@@ -129,15 +155,86 @@ public class SpendQuotaService {
             created.add(new SpendQuotaReservation(
                     quota.getId(), reservationKey, requested, quota.getCurrency(), expiresAt));
         }
-        if (!created.isEmpty()) reservations.saveAll(created);
+        if (!created.isEmpty()) reservations.saveAllAndFlush(created);
         return new Reservation(reservationKey);
+    }
+
+    /** Each active scope/period budget must be able to account for every payable currency.
+     * We do not silently convert currencies or treat a missing budget as zero spend. */
+    static void requireCurrencyCoverage(List<SpendQuota> locked, Map<Currency, BigDecimal> estimates) {
+        record BudgetScope(SpendQuotaScope scope, UUID id, SpendQuotaPeriod period) { }
+        Map<BudgetScope, Set<Currency>> currenciesByScope = new HashMap<>();
+        for (SpendQuota quota : locked) {
+            var scope = new BudgetScope(quota.getScopeType(), quota.getScopeId(), quota.getPeriod());
+            currenciesByScope.computeIfAbsent(scope, ignored -> EnumSet.noneOf(Currency.class)).add(quota.getCurrency());
+        }
+        for (var group : currenciesByScope.entrySet()) {
+            for (var estimate : estimates.entrySet()) {
+                if (estimate.getValue() != null && estimate.getValue().signum() > 0 && !group.getValue().contains(estimate.getKey())) {
+                    throw new ApiException(HttpStatus.CONFLICT, "QUOTA_CURRENCY_UNCONFIGURED",
+                            "A " + estimate.getKey() + " spend quota is required for each applicable budget scope and period; no exchange rate is assumed.");
+                }
+            }
+        }
     }
 
     @Transactional
     public void release(Reservation reservation) {
+        releaseIfStillActive(reservation);
+    }
+
+    @Transactional
+    public void releaseIfStillActive(Reservation reservation) {
         if (reservation != null && reservation.key() != null) {
-            reservations.deleteByReservationKey(reservation.key());
+            reservations.transitionByKey(
+                    reservation.key(),
+                    SpendQuotaReservation.ReservationStatus.ACTIVE,
+                    SpendQuotaReservation.ReservationStatus.RELEASED,
+                    Instant.now(),
+                    "RELEASED");
         }
+    }
+
+    @Transactional
+    public void settle(Reservation reservation) {
+        settle(reservation, "COMMITTED");
+    }
+
+    @Transactional
+    public void settle(Reservation reservation, String reason) {
+        if (reservation != null && reservation.key() != null) {
+            reservations.settleByKey(reservation.key(), Instant.now(), truncateReason(reason));
+        }
+    }
+
+    @Transactional
+    public void holdUnsettled(Reservation reservation, String reason) {
+        if (reservation == null || reservation.key() == null) return;
+        Instant now = Instant.now();
+        String truncated = truncateReason(reason);
+        List<SpendQuotaReservation> rows = reservations.findByReservationKey(reservation.key());
+        for (SpendQuotaReservation row : rows) {
+            if (row.getStatus() != SpendQuotaReservation.ReservationStatus.ACTIVE) continue;
+            SpendQuotaPeriod period = quotas.findById(row.getQuotaId())
+                    .map(SpendQuota::getPeriod)
+                    .orElse(SpendQuotaPeriod.MONTHLY);
+            reservations.holdUnsettledById(row.getId(), periodEnd(period, now), truncated);
+        }
+    }
+
+    @Transactional
+    public int reclaimExpired() {
+        return reclaimExpired(Instant.now());
+    }
+
+    @Transactional
+    public int reclaimExpired(Instant now) {
+        return reservations.reclaimExpiredActive(now == null ? Instant.now() : now);
+    }
+
+    private static String truncateReason(String reason) {
+        if (reason == null || reason.isBlank()) return null;
+        return reason.length() <= 120 ? reason : reason.substring(0, 120);
     }
 
     private boolean applies(SpendQuota quota, Project project, ApiKey key) {
@@ -159,10 +256,10 @@ public class SpendQuotaService {
     }
 
     private Map<Currency, BigDecimal> estimateRequestCosts(JsonNode body, LlmService service) {
-        return estimateRequestCosts(body, service, null);
+        return estimateRequestCosts(body, service, null, null);
     }
 
-    private Map<Currency, BigDecimal> estimateRequestCosts(JsonNode body, LlmService service, Project project) {
+    private Map<Currency, BigDecimal> estimateRequestCosts(JsonNode body, LlmService service, Project project, ApiKey apiKey) {
         Map<Currency, BigDecimal> estimates = new EnumMap<>(Currency.class);
         if (service == null) return estimates;
 
@@ -174,6 +271,26 @@ public class SpendQuotaService {
         long totalOutput = (long) maxOutput * choices;
         addMax(estimates, service.getCurrency(),
                 quote(service.getInputPricePerMillion(), service.getOutputPricePerMillion(), inputTokens, totalOutput));
+
+        if (routing != null && dataProtection != null && project != null && apiKey != null) {
+            DataProtectionDecision protection = dataProtection.inspect(project, apiKey, service, body, null);
+            if (protection.blocked()) {
+                return estimates;
+            }
+            RoutingDecision decision = routing.evaluateForScheduling(
+                    service,
+                    body instanceof com.fasterxml.jackson.databind.node.ObjectNode obj
+                            ? RequestCapabilityDetector.detect(obj)
+                            : Set.of(),
+                    project.getId(),
+                    protection.routingConstraint());
+            for (ResolvedTarget target : decision.eligibleTargets()) {
+                boolean externalRuntime = target.externalDataBoundary() && !target.external();
+                evaluateTargetCost(body, service, target.deployment(), target.endpoint(), externalRuntime,
+                        inputTokens, totalOutput, estimates);
+            }
+            return estimates;
+        }
 
         List<ServiceTarget> serviceTargets =
                 targets.findByServiceIdAndEnabledTrueOrderByPriorityAsc(service.getId());
@@ -194,32 +311,47 @@ public class SpendQuotaService {
                         : externalAccess.allowsManual(project.getId(), deployment.getExternalProviderId()))) continue;
             }
             RuntimeEndpoint endpoint = deployment.isExternal() ? null : endpoints.findById(deployment.getRuntimeEndpointId()).orElse(null);
-            com.fasterxml.jackson.databind.node.ObjectNode effective = body instanceof com.fasterxml.jackson.databind.node.ObjectNode obj
-                    ? obj.deepCopy() : com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+            boolean externalRuntime = endpoint != null && runtimeTrust != null
+                    && runtimeTrust.isVerifiedExternal(endpoint, Instant.now());
+            if (externalRuntime && project != null && project.isExternalAiBlocked()) continue;
+            evaluateTargetCost(body, service, deployment, endpoint, externalRuntime, inputTokens, totalOutput, estimates);
+        }
+        return estimates;
+    }
+
+    private void evaluateTargetCost(JsonNode body, LlmService service, ModelDeployment deployment,
+                                    RuntimeEndpoint endpoint, boolean externalRuntime,
+                                    int inputTokens, long totalOutput, Map<Currency, BigDecimal> estimates) {
+        com.fasterxml.jackson.databind.node.ObjectNode effective = body instanceof com.fasterxml.jackson.databind.node.ObjectNode obj
+                ? obj.deepCopy() : com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+        if (deployment.isExternal() || externalRuntime) {
             if (deployment.isExternal()) {
                 service.applyOpenAiRequestPolicy(effective);
                 deployment.applyOpenAiDefaults(effective);
-                JsonNode output = effective.has("max_completion_tokens") ? effective.get("max_completion_tokens") : effective.get("max_tokens");
-                if (output == null || !output.isIntegralNumber() || !output.canConvertToInt() || output.asInt() <= 0) {
-                    throw new ApiException(HttpStatus.BAD_REQUEST, "QUOTA_OUTPUT_LIMIT_REQUIRED", "An explicit output token limit is required when a spend quota applies to an external target.");
-                }
-                JsonNode n = effective.get("n");
-                if (n != null && (!n.isIntegralNumber() || !n.canConvertToInt() || n.asInt() <= 0)) {
-                    throw new ApiException(HttpStatus.BAD_REQUEST, "QUOTA_CHOICE_COUNT_INVALID", "The number of choices must be a positive integer when a spend quota applies.");
-                }
-                if (deployment.getProviderInputPricePerMillion() == null || deployment.getProviderOutputPricePerMillion() == null) {
-                    throw new ApiException(HttpStatus.CONFLICT, "QUOTA_PRICE_UNAVAILABLE", "Configure external model input and output prices before using a spend quota.");
-                }
             }
-            String tier = effective.path("service_tier").asText("");
-            TokenPricingResolver.EffectivePricing pricing = TokenPricingResolver.forRequest(service, deployment, endpoint, null, tier);
-            if (deployment.isExternal() && (!pricing.rateConfigured() || pricing.inputPricePerMillion() == null || pricing.outputPricePerMillion() == null)) {
-                throw new ApiException(HttpStatus.CONFLICT, "QUOTA_PRICE_UNAVAILABLE", "Configure the selected external model tier prices before using a spend quota.");
+            JsonNode output = effective.has("max_completion_tokens") ? effective.get("max_completion_tokens") : effective.get("max_tokens");
+            if (output == null || !output.isIntegralNumber() || !output.canConvertToInt() || output.asInt() <= 0) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "QUOTA_OUTPUT_LIMIT_REQUIRED", "An explicit output token limit is required when a spend quota applies to an external target.");
             }
-            addMax(estimates, pricing.currency(), quote(pricing.inputPricePerMillion(), pricing.outputPricePerMillion(),
-                    inputTokens, totalOutput));
+            JsonNode n = effective.get("n");
+            if (n != null && (!n.isIntegralNumber() || !n.canConvertToInt() || n.asInt() <= 0)) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "QUOTA_CHOICE_COUNT_INVALID", "The number of choices must be a positive integer when a spend quota applies.");
+            }
+            boolean modelPrice = deployment.getProviderInputPricePerMillion() != null && deployment.getProviderOutputPricePerMillion() != null;
+            boolean runtimePrice = externalRuntime && endpoint != null
+                    && endpoint.getInputPricePerMillion() != null && endpoint.getOutputPricePerMillion() != null
+                    && endpoint.getCurrency() != null;
+            if (!modelPrice && !runtimePrice) {
+                throw new ApiException(HttpStatus.CONFLICT, "QUOTA_PRICE_UNAVAILABLE", "Configure external model input and output prices before using a spend quota.");
+            }
         }
-        return estimates;
+        String tier = effective.path("service_tier").asText("");
+        TokenPricingResolver.EffectivePricing pricing = TokenPricingResolver.forRequest(service, deployment, endpoint, null, tier);
+        if (deployment.isExternal() && (!pricing.rateConfigured() || pricing.inputPricePerMillion() == null || pricing.outputPricePerMillion() == null)) {
+            throw new ApiException(HttpStatus.CONFLICT, "QUOTA_PRICE_UNAVAILABLE", "Configure the selected external model tier prices before using a spend quota.");
+        }
+        addMax(estimates, pricing.currency(), quote(pricing.inputPricePerMillion(), pricing.outputPricePerMillion(),
+                inputTokens, totalOutput));
     }
 
     private BigDecimal quote(BigDecimal inputPrice, BigDecimal outputPrice, int inputTokens, long outputTokens) {
@@ -242,13 +374,26 @@ public class SpendQuotaService {
         if (messages == null || !messages.isArray()) return 0;
         return Math.max(0, (messages.toString().length() + 3) / 4);
     }
+
     public record Reservation(UUID key) { }
+
     static Instant periodStart(SpendQuotaPeriod period) {
-        Instant now = Instant.now();
+        return periodStart(period, Instant.now());
+    }
+
+    static Instant periodStart(SpendQuotaPeriod period, Instant now) {
         return switch (period) {
-            case DAILY -> LocalDate.now(ZoneOffset.UTC).atStartOfDay().toInstant(ZoneOffset.UTC);
-            case MONTHLY -> YearMonth.now(ZoneOffset.UTC).atDay(1).atStartOfDay().toInstant(ZoneOffset.UTC);
+            case DAILY -> LocalDate.ofInstant(now, ZoneOffset.UTC).atStartOfDay().toInstant(ZoneOffset.UTC);
+            case MONTHLY -> YearMonth.from(now.atZone(ZoneOffset.UTC)).atDay(1).atStartOfDay().toInstant(ZoneOffset.UTC);
             case TOTAL -> Instant.EPOCH;
+        };
+    }
+
+    static Instant periodEnd(SpendQuotaPeriod period, Instant now) {
+        return switch (period) {
+            case DAILY -> LocalDate.ofInstant(now, ZoneOffset.UTC).plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
+            case MONTHLY -> YearMonth.from(now.atZone(ZoneOffset.UTC)).plusMonths(1).atDay(1).atStartOfDay().toInstant(ZoneOffset.UTC);
+            case TOTAL -> TOTAL_PERIOD_END;
         };
     }
 }

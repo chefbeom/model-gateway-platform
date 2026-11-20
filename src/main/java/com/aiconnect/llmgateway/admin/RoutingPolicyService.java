@@ -37,12 +37,15 @@ public class RoutingPolicyService {
         LlmService service = requireService(serviceId);
         service.configure(request.displayName(), request.failoverPolicy(), request.retryPolicy(), request.allowDegraded(),
                 request.requiredCapabilitiesJson(), request.inputPricePerMillion(), request.outputPricePerMillion(),
-                request.currency() == null ? Currency.KRW : request.currency(), request.enabled());
+                request.currency(), request.enabled());
         if (request.temperaturePolicy() == TemperaturePolicy.FIXED && request.temperatureValue() == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "TEMPERATURE_VALUE_REQUIRED", "A temperature value is required for the FIXED policy.");
         }
         service.configureTemperaturePolicy(request.temperaturePolicy(), request.temperatureValue());
         service.configureOpenAiRequestPolicy(request.reasoningEffort(), request.openAiFastMode());
+        if (request.dataBoundaryPolicy() != null) {
+            service.configureDataBoundaryPolicy(request.dataBoundaryPolicy());
+        }
         return services.save(service);
     }
 

@@ -46,6 +46,8 @@ public class SpendQuotaFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws IOException, ServletException {
         SpendQuotaService.Reservation reservation = null;
+        SpendQuotaService.Reservation previousBinding = null;
+        boolean bound = false;
         try {
             var credentials = apiKeys.authenticate(request.getHeader(HttpHeaders.AUTHORIZATION));
             if (request.getContentLengthLong() > MAX_BODY_BYTES) throw new ApiException(org.springframework.http.HttpStatus.PAYLOAD_TOO_LARGE, "REQUEST_TOO_LARGE", "Request body exceeds the permitted size.");
@@ -53,6 +55,8 @@ public class SpendQuotaFilter extends OncePerRequestFilter {
             if (raw.length > MAX_BODY_BYTES) throw new ApiException(org.springframework.http.HttpStatus.PAYLOAD_TOO_LARGE, "REQUEST_TOO_LARGE", "Request body exceeds the permitted size.");
             JsonNode body = raw.length == 0 ? mapper.createObjectNode() : mapper.readTree(raw);
             reservation = quota.reserve(credentials, body);
+            previousBinding = SpendQuotaContext.bind(reservation);
+            bound = true;
             request.setAttribute("aiconnect.spendQuotaChecked", Boolean.TRUE);
             chain.doFilter(new BufferedBodyRequest(request, raw), response);
         } catch (com.fasterxml.jackson.core.JsonProcessingException exception) {
@@ -66,12 +70,19 @@ public class SpendQuotaFilter extends OncePerRequestFilter {
             mapper.writeValue(response.getOutputStream(), OpenAiError.of(exception.getMessage(),
                     "rate_limit_error", exception.getCode(), requestId));
         } finally {
+            if (bound) {
+                SpendQuotaContext.restore(previousBinding);
+            }
             if (reservation != null) {
-                SpendQuotaService.Reservation held=reservation;
-                AtomicBoolean released=new AtomicBoolean();
-                Runnable release=()->{if(released.compareAndSet(false,true))try{quota.release(held);}catch(RuntimeException ignored){} };
-                Object lifecycle=request.getAttribute("aiconnect.executionDone");
-                if(lifecycle instanceof CompletableFuture<?> done) done.whenComplete((value,error)->release.run());
+                SpendQuotaService.Reservation held = reservation;
+                AtomicBoolean released = new AtomicBoolean();
+                Runnable release = () -> {
+                    if (released.compareAndSet(false, true)) {
+                        try { quota.releaseIfStillActive(held); } catch (RuntimeException ignored) { }
+                    }
+                };
+                Object lifecycle = request.getAttribute("aiconnect.executionDone");
+                if (lifecycle instanceof CompletableFuture<?> done) done.whenComplete((value, error) -> release.run());
                 else release.run();
             }
         }

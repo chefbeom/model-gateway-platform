@@ -11,5 +11,9 @@ public record ResolvedTarget(ServiceTarget target, ModelDeployment deployment, R
         this(target, deployment, endpoint, null, maxConcurrency, "LOCAL");
     }
     public boolean external() { return externalProvider != null; }
-    public String providerType() { return external() ? externalProvider.getProviderType().name() : "LOCAL"; }
+    /** External data boundary is independent of which HTTP client calls the target. */
+    public boolean externalDataBoundary() {
+        return external() || (endpoint != null && ("MANUAL_EXTERNAL".equals(routingReason) || "AUTO_FAILOVER".equals(routingReason)));
+    }
+    public String providerType() { return external() ? externalProvider.getProviderType().name() : externalDataBoundary() ? "EXTERNAL_RUNTIME" : "LOCAL"; }
 }

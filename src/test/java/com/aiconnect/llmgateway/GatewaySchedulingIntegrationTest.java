@@ -24,7 +24,10 @@ import static org.assertj.core.api.Assertions.*;
 
 @SpringBootTest(webEnvironment=SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("integration")
-@TestPropertySource(properties="spring.datasource.url=jdbc:h2:mem:aiconnect_scheduling;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1")
+@TestPropertySource(properties = {
+        "spring.datasource.url=jdbc:h2:mem:aiconnect_scheduling;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
+        "aiconnect.security.external-url.allow-loopback-test-server=true"
+})
 class GatewaySchedulingIntegrationTest {
     @LocalServerPort int port;
     @Autowired OrganizationRepository organizations;
@@ -45,6 +48,8 @@ class GatewaySchedulingIntegrationTest {
     @Autowired ProjectExternalAccessRepository externalAccess;
     @Autowired com.aiconnect.llmgateway.service.SecretCipher cipher;
     @Autowired com.aiconnect.llmgateway.playground.ModelPlaygroundService playground;
+    @Autowired com.aiconnect.llmgateway.security.RuntimeTrustAttestationRepository runtimeTrust;
+    @Autowired com.aiconnect.llmgateway.security.ProjectRuntimeApprovalRepository runtimeApprovals;
     @Autowired com.aiconnect.llmgateway.dataprotection.DataProtectionPolicyService protection;
     @Autowired com.aiconnect.llmgateway.retention.RequestContentService retention;
     @Autowired com.aiconnect.llmgateway.beta.BetaServiceRepository betaServices;
@@ -79,6 +84,13 @@ class GatewaySchedulingIntegrationTest {
         targets.save(new ServiceTarget(service.getId(),model.getId(),1,100,false,null));access.save(new ProjectServiceAccess(project.getId(),service.getId()));
         policies.save(service.getId(),new SchedulingSettings(SchedulingMode.LOCAL_ONLY_QUEUE,0,5000,10,1024*1024,10));
         fixture=new Fixture(project,key,endpoint,model,service);
+        var internalDecision=java.time.Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        runtimeTrust.saveAndFlush(new com.aiconnect.llmgateway.security.RuntimeTrustAttestation(endpoint.getId(),
+                com.aiconnect.llmgateway.security.RuntimeTrustAttestation.Classification.INTERNAL,
+                endpoint.getBaseUrl(), "test internal runtime", null, null, internalDecision));
+        var internalApproval=new com.aiconnect.llmgateway.security.ProjectRuntimeApproval(project.getId(),endpoint.getId());
+        internalApproval.approve(internalDecision,true,false,internalDecision.plusSeconds(3600),null);
+        runtimeApprovals.saveAndFlush(internalApproval);
     }
     @AfterEach void stop(){runtime.stop(0);}
     private CompletableFuture<HttpResponse<String>> send(boolean stream) {
@@ -91,6 +103,12 @@ class GatewaySchedulingIntegrationTest {
         return HttpClient.newHttpClient().sendAsync(request,HttpResponse.BodyHandlers.ofString());
     }
     private void hold(){assertThat(active.tryAcquire(fixture.model.getId(),1,fixture.endpoint.getId(),1,null)).isTrue();}
+    private void approveInternal(Project project) {
+        var trust=runtimeTrust.findById(fixture.endpoint.getId()).orElseThrow();
+        var approval=new com.aiconnect.llmgateway.security.ProjectRuntimeApproval(project.getId(),fixture.endpoint.getId());
+        approval.approve(trust.getDecidedAt(),true,false,java.time.Instant.now().plusSeconds(3600),null);
+        runtimeApprovals.saveAndFlush(approval);
+    }
     private void release(){active.release(fixture.model.getId(),fixture.endpoint.getId());}
     private void awaitQueued() throws Exception {long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);while(active.snapshot(fixture.service.getId()).queuedRequests()==0&&System.nanoTime()<end)Thread.sleep(10);assertThat(active.snapshot(fixture.service.getId()).queuedRequests()).isEqualTo(1);}
     @Test void jsonRequestWaitsAsynchronouslyAndRecordsSeparateQueueAndExecutionTimes() throws Exception {
@@ -150,6 +168,7 @@ class GatewaySchedulingIntegrationTest {
         var betaProject=projects.save(new Project(fixture.project.getOrganizationId(),"beta-suspend-client"));
         betaProject.configureExternalAiBlocked(true);
         betaProject=projects.save(betaProject);
+        approveInternal(betaProject);
         access.save(new ProjectServiceAccess(betaProject.getId(),fixture.service.getId()));
         var betaKey=keys.issue(betaProject.getId(),"beta-suspend-key",null);
         var beta=new com.aiconnect.llmgateway.beta.BetaService(fixture.project.getOrganizationId(),fixture.service.getId());
@@ -192,6 +211,7 @@ class GatewaySchedulingIntegrationTest {
         var betaProject=projects.save(new Project(fixture.project.getOrganizationId(),"beta-pause-client"));
         betaProject.configureExternalAiBlocked(true);
         betaProject=projects.save(betaProject);
+        approveInternal(betaProject);
         access.save(new ProjectServiceAccess(betaProject.getId(),fixture.service.getId()));
         var betaKey=keys.issue(betaProject.getId(),"beta-pause-key",null);
         var beta=new com.aiconnect.llmgateway.beta.BetaService(fixture.project.getOrganizationId(),fixture.service.getId());
@@ -257,6 +277,58 @@ class GatewaySchedulingIntegrationTest {
                     .satisfies(e->assertThat(((com.aiconnect.llmgateway.web.ApiException)e).getCode()).isEqualTo("MODEL_AT_CAPACITY"));
             assertThat(calls).hasValue(0);assertThat(active.runtimeCount(fixture.endpoint.getId())).isEqualTo(1);
         }finally{release();}
+    }
+    @Test void directModelTestRejectsUnclassifiedRuntimeForJsonAndStreaming() {
+        runtimeTrust.deleteById(fixture.endpoint.getId());
+        runtimeTrust.flush();
+        for (boolean stream : new boolean[]{false, true}) {
+            var body=mapper.createObjectNode().put("targetId",fixture.model.getId().toString()).put("stream",stream);
+            body.putArray("messages").addObject().put("role","user").put("content","sensitive");
+            assertThatThrownBy(()->playground.chat(fixture.project.getOrganizationId(),body))
+                    .isInstanceOf(com.aiconnect.llmgateway.web.ApiException.class)
+                    .satisfies(e->assertThat(((com.aiconnect.llmgateway.web.ApiException)e).getCode()).isEqualTo("RUNTIME_TRUST_UNCLASSIFIED"));
+        }
+        assertThat(calls).hasValue(0);
+    }
+    @Test void externalRuntimeNeedsProjectApprovalAndRevocationPreventsNewGatewayCalls() throws Exception {
+        var now=java.time.Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        var trustPath="/api/admin/platform/runtime-trust/"+fixture.endpoint.getId();
+        var approvalPath="/api/admin/platform/projects/"+fixture.project.getId()+"/runtime-approvals/"+fixture.endpoint.getId();
+        assertThat(adminRequest("PUT",trustPath,"{\"classification\":\"EXTERNAL_NO_RETENTION\",\"evidence\":\"test agreement\",\"expiresAt\":\""+now.plusSeconds(600)+"\",\"vendorName\":\"External GPU Provider\",\"processingLocation\":\"Seoul, KR\",\"retentionPolicy\":\"ZERO_DATA_RETENTION\",\"approvalScope\":\"Test external inference\"}").statusCode()).isEqualTo(200);
+        policies.save(fixture.service.getId(),new SchedulingSettings(SchedulingMode.LOCAL_FIRST_WAIT,0,5000,10,1024*1024,10));
+        var denied=send(false).get(8,TimeUnit.SECONDS);
+        assertThat(denied.statusCode()).isEqualTo(503);
+        assertThat(calls).hasValue(0);
+        assertThat(adminRequest("PUT",approvalPath,"{\"manualAllowed\":true,\"failoverAllowed\":false,\"expiresAt\":\""+now.plusSeconds(300)+"\"}").statusCode()).isEqualTo(204);
+        var allowed=send(false).get(8,TimeUnit.SECONDS);
+        assertThat(allowed.statusCode()).as(allowed.body()).isEqualTo(200);
+        assertThat(calls).hasValue(1);
+        assertThat(adminRequest("DELETE",approvalPath,null).statusCode()).isEqualTo(204);
+        var revoked=send(false).get(8,TimeUnit.SECONDS);
+        assertThat(revoked.statusCode()).isEqualTo(503);
+        assertThat(calls).hasValue(1);
+    }
+    @Test void internalRuntimeRequiresExplicitApprovalForEachProject() throws Exception {
+        var other=projects.save(new Project(fixture.project.getOrganizationId(),"other client"));
+        var otherKey=keys.issue(other.getId(),"other client",null);
+        access.save(new ProjectServiceAccess(other.getId(),fixture.service.getId()));
+        var denied=send(otherKey.secret(),false).get(8,TimeUnit.SECONDS);
+        assertThat(denied.statusCode()).isEqualTo(503); assertThat(calls).hasValue(0);
+        String path="/api/admin/platform/projects/"+other.getId()+"/runtime-approvals/"+fixture.endpoint.getId();
+        String expiry=java.time.Instant.now().plusSeconds(300).toString();
+        assertThat(adminRequest("PUT",path,"{\"manualAllowed\":true,\"failoverAllowed\":false,\"expiresAt\":\""+expiry+"\"}").statusCode()).isEqualTo(204);
+        var allowed=send(otherKey.secret(),false).get(8,TimeUnit.SECONDS);
+        assertThat(allowed.statusCode()).as(allowed.body()).isEqualTo(200); assertThat(calls).hasValue(1);
+        assertThat(adminRequest("DELETE",path,null).statusCode()).isEqualTo(204);
+        assertThat(send(otherKey.secret(),false).get(8,TimeUnit.SECONDS).statusCode()).isEqualTo(503);
+        assertThat(calls).hasValue(1);
+    }
+    private HttpResponse<String> adminRequest(String method,String path,String body) throws Exception {
+        var builder=HttpRequest.newBuilder(URI.create("http://127.0.0.1:"+port+path))
+                .header("X-Admin-Token","integration-admin-token").header("Content-Type","application/json")
+                .timeout(java.time.Duration.ofSeconds(10));
+        builder.method(method,body==null?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofString(body));
+        return HttpClient.newHttpClient().send(builder.build(),HttpResponse.BodyHandlers.ofString());
     }
     @Test void playgroundHttpEnforcesOrganizationProtectionBeforeSendingExternalRequests() throws Exception {
         var provider=new ExternalProvider(fixture.project.getOrganizationId(),ExternalProviderType.OPENAI,"Protected Cloud",fixture.endpoint.getBaseUrl()+"/v1",cipher.encrypt("test-secret"));

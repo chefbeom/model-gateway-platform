@@ -36,7 +36,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("integration")
-@TestPropertySource(properties = "spring.datasource.url=jdbc:h2:mem:project_local_only;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1")
+@TestPropertySource(properties = {
+        "spring.datasource.url=jdbc:h2:mem:project_local_only;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
+        "aiconnect.security.external-url.allow-loopback-test-server=true"
+})
 class ProjectLocalOnlyIntegrationTest {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper mapper;
@@ -45,6 +48,10 @@ class ProjectLocalOnlyIntegrationTest {
     @Autowired ApiKeyService keys;
     @Autowired InferenceNodeRepository nodes;
     @Autowired RuntimeEndpointRepository endpoints;
+    @Autowired com.aiconnect.llmgateway.security.RuntimeTrustAttestationRepository runtimeTrustFixture;
+    @Autowired com.aiconnect.llmgateway.security.ProjectRuntimeApprovalRepository runtimeApprovalFixture;
+    @Autowired com.aiconnect.llmgateway.repository.ProjectRepository runtimeProjectsFixture;
+    @Autowired com.aiconnect.llmgateway.repository.InferenceNodeRepository runtimeNodesFixture;
     @Autowired ModelDeploymentRepository deployments;
     @Autowired LlmServiceRepository services;
     @Autowired ServiceTargetRepository targets;
@@ -232,7 +239,7 @@ class ProjectLocalOnlyIntegrationTest {
             RuntimeEndpoint endpoint = new RuntimeEndpoint(node.getId(), RuntimeType.LM_STUDIO,
                     "http://127.0.0.1:" + server.getAddress().getPort(), null);
             endpoint.recordHealth(true);
-            endpoint = endpoints.save(endpoint);
+            endpoint = RuntimeTestTrust.internal(endpoints, runtimeTrustFixture, runtimeApprovalFixture, runtimeProjectsFixture, runtimeNodesFixture, endpoint);
             ModelDeployment model = deployments.save(new ModelDeployment(endpoint.getId(), "local-" + priority, "local-compatible",
                     "Local", null, null, 8192, loaded, 4, capabilities));
             if (connectTarget) targets.save(new ServiceTarget(logical.getId(), model.getId(), priority++, 100, false, null));

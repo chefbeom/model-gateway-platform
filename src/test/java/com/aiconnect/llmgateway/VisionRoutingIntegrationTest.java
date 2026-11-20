@@ -25,6 +25,10 @@ class VisionRoutingIntegrationTest {
     @Autowired OrganizationRepository organizations;
     @Autowired InferenceNodeRepository nodes;
     @Autowired RuntimeEndpointRepository endpoints;
+    @Autowired com.aiconnect.llmgateway.security.RuntimeTrustAttestationRepository runtimeTrustFixture;
+    @Autowired com.aiconnect.llmgateway.security.ProjectRuntimeApprovalRepository runtimeApprovalFixture;
+    @Autowired com.aiconnect.llmgateway.repository.ProjectRepository runtimeProjectsFixture;
+    @Autowired com.aiconnect.llmgateway.repository.InferenceNodeRepository runtimeNodesFixture;
     @Autowired ModelDeploymentRepository deployments;
     @Autowired LlmServiceRepository services;
     @Autowired ServiceTargetRepository targets;
@@ -34,9 +38,10 @@ class VisionRoutingIntegrationTest {
     @Test
     void imageContentExcludesTextOnlyPrimaryAndSelectsVisionDeployment() throws Exception {
         Organization organization = organizations.save(new Organization("Vision Org"));
+        var project = runtimeProjectsFixture.save(new com.aiconnect.llmgateway.domain.Project(organization.getId(), "Vision project"));
         InferenceNode node = nodes.save(new InferenceNode(organization.getId(), "vision-node", null, "DIRECT", null));
         RuntimeEndpoint endpoint = new RuntimeEndpoint(node.getId(), RuntimeType.LM_STUDIO, "http://vision-node:1234", null);
-        endpoint.recordHealth(true); endpoint = endpoints.save(endpoint);
+        endpoint.recordHealth(true); endpoint = RuntimeTestTrust.internal(endpoints, runtimeTrustFixture, runtimeApprovalFixture, runtimeProjectsFixture, runtimeNodesFixture, endpoint);
         ModelDeployment text = deployments.save(new ModelDeployment(endpoint.getId(), "text-only", "Text", null, null, 8192, true, 2, "[\"CHAT_COMPLETION\"]"));
         ModelDeployment vision = deployments.save(new ModelDeployment(endpoint.getId(), "vision-model", "Vision", null, null, 8192, true, 2, "[\"CHAT_COMPLETION\",\"VISION\"]"));
         LlmService service = services.save(new LlmService(organization.getId(), "multimodal", "Multimodal",
@@ -47,7 +52,7 @@ class VisionRoutingIntegrationTest {
                 {"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}}]}]}
                 """);
 
-        List<ResolvedTarget> candidates = routing.candidates(service, RequestCapabilityDetector.detect(request));
+        List<ResolvedTarget> candidates = routing.candidates(service, RequestCapabilityDetector.detect(request), project.getId());
         assertThat(candidates).extracting(candidate -> candidate.deployment().getProviderModelId())
                 .containsExactly("vision-model");
     }

@@ -1,29 +1,33 @@
 package com.aiconnect.llmgateway.gateway;
 
 import com.aiconnect.llmgateway.billing.TokenPricingResolver;
-
+import com.aiconnect.llmgateway.dataprotection.DataProtectionDecision;
+import com.aiconnect.llmgateway.dataprotection.DataProtectionPolicyService;
+import com.aiconnect.llmgateway.diagnostic.RequestDiagnosticService;
 import com.aiconnect.llmgateway.domain.LlmRequest;
 import com.aiconnect.llmgateway.domain.LlmRequestAttempt;
 import com.aiconnect.llmgateway.domain.LlmService;
 import com.aiconnect.llmgateway.domain.TemperaturePolicy;
+import com.aiconnect.llmgateway.external.ProviderCapReservationService;
+import com.aiconnect.llmgateway.quota.SpendQuotaContext;
+import com.aiconnect.llmgateway.quota.SpendQuotaService;
+import com.aiconnect.llmgateway.repository.ExternalProviderRepository;
 import com.aiconnect.llmgateway.repository.LlmRequestAttemptRepository;
 import com.aiconnect.llmgateway.repository.LlmRequestRepository;
 import com.aiconnect.llmgateway.repository.LlmServiceRepository;
 import com.aiconnect.llmgateway.repository.ProjectServiceAccessRepository;
 import com.aiconnect.llmgateway.repository.RuntimeEndpointRepository;
-import com.aiconnect.llmgateway.repository.ExternalProviderRepository;
-import com.aiconnect.llmgateway.routing.RoutingDecision;
+import com.aiconnect.llmgateway.routing.ActiveRequestRegistry;
 import com.aiconnect.llmgateway.routing.ResolvedTarget;
+import com.aiconnect.llmgateway.routing.RoutingDecision;
 import com.aiconnect.llmgateway.routing.RoutingService;
 import com.aiconnect.llmgateway.runtime.RuntimeUnavailableException;
 import com.aiconnect.llmgateway.runtime.StreamingLmStudioRuntimeClient;
 import com.aiconnect.llmgateway.runtime.StreamingOpenAiRuntimeClient;
 import com.aiconnect.llmgateway.runtime.StreamingRuntimeResult;
+import com.aiconnect.llmgateway.scheduling.*;
 import com.aiconnect.llmgateway.service.ApiKeyCredentials;
 import com.aiconnect.llmgateway.service.ApiKeyService;
-import com.aiconnect.llmgateway.diagnostic.RequestDiagnosticService;
-import com.aiconnect.llmgateway.dataprotection.DataProtectionDecision;
-import com.aiconnect.llmgateway.dataprotection.DataProtectionPolicyService;
 import com.aiconnect.llmgateway.web.ApiException;
 import com.aiconnect.llmgateway.web.OpenAiError;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -31,6 +35,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -39,8 +44,6 @@ import java.time.Instant;
 import java.util.Arrays;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import com.aiconnect.llmgateway.scheduling.*;
-import com.aiconnect.llmgateway.routing.ActiveRequestRegistry;
 
 @Service
 public class StreamingChatCompletionGateway {
@@ -65,6 +68,10 @@ public class StreamingChatCompletionGateway {
     private com.aiconnect.llmgateway.beta.BetaAccessService betaAccess;
     @org.springframework.beans.factory.annotation.Autowired
     private GatewaySchedulingSupport scheduling;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ProviderCapReservationService providerCap;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private SpendQuotaService spendQuota;
 
     public StreamingChatCompletionGateway(ApiKeyService apiKeyService, LlmServiceRepository services, ProjectServiceAccessRepository access,
                                           RoutingService routing, StreamingLmStudioRuntimeClient runtimeClient,
@@ -79,11 +86,19 @@ public class StreamingChatCompletionGateway {
     }
 
     public StreamingGatewayResult open(String authorization, ObjectNode request) {
-        return openAsync(authorization,request).join();
+        return openAsync(authorization, request).join();
     }
-    public boolean queued(String authorization,ObjectNode request) { return scheduling!=null&&scheduling.enabled(authorization,request); }
-    public java.util.concurrent.Executor executor() { return scheduling.executor(); }
+
+    public boolean queued(String authorization, ObjectNode request) {
+        return scheduling != null && scheduling.enabled(authorization, request);
+    }
+
+    public java.util.concurrent.Executor executor() {
+        return scheduling.executor();
+    }
+
     public CompletableFuture<StreamingGatewayResult> openAsync(String authorization, ObjectNode request) {
+        final SpendQuotaService.Reservation spendReservation = SpendQuotaContext.current();
         ApiKeyCredentials credentials = apiKeyService.authenticate(authorization);
         String serviceKey = request.path("model").asText(null);
         if (serviceKey == null || serviceKey.isBlank()) throw new ApiException(HttpStatus.BAD_REQUEST, "MODEL_REQUIRED", "The model field is required.");
@@ -98,9 +113,10 @@ public class StreamingChatCompletionGateway {
         String requestId = UUID.randomUUID().toString();
         LlmRequest audit = requests.save(new LlmRequest(requestId, credentials.project().getId(), credentials.apiKey().getId(),
                 credentials.apiKey().getIssuedByUserId(), service, true, RequestCapabilityDetector.requestType(request)));
-        boolean queued=scheduling!=null&&scheduling.enabled(service);
-        RoutingDecision decision = queued?routing.evaluateForScheduling(service, RequestCapabilityDetector.detect(request), credentials.project().getId(), protection.routingConstraint())
-                :routing.evaluate(service, RequestCapabilityDetector.detect(request), credentials.project().getId(), protection.routingConstraint());
+        boolean queued = scheduling != null && scheduling.enabled(service);
+        RoutingDecision decision = queued
+                ? routing.evaluateForScheduling(service, RequestCapabilityDetector.detect(request), credentials.project().getId(), protection.routingConstraint())
+                : routing.evaluate(service, RequestCapabilityDetector.detect(request), credentials.project().getId(), protection.routingConstraint());
         audit.recordDataProtection(protection.policy().mode().name(), protection.policy().level().name(),
                 protection.action().name(), protection.classificationSummary(), protection.externalAllowed());
         requests.save(audit);
@@ -120,30 +136,71 @@ public class StreamingChatCompletionGateway {
                     protection.unavailableMessage(), null, false);
             return CompletableFuture.completedFuture(error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, code, protection.unavailableMessage()));
         }
-        if(queued) return scheduling.schedule(audit,authorization,request,
-                plan->openPrepared(request,service,audit,protection,plan),
-                failure->error(failure.getStatus().value(),requestId,failure.getCode(),failure.getMessage()));
-        return CompletableFuture.completedFuture(openPrepared(request,service,audit,protection,DispatchPlan.immediate(routing,decision)));
+        if (queued) return scheduling.schedule(audit, authorization, request,
+                plan -> openPrepared(request, service, audit, protection, plan, spendReservation),
+                failure -> error(failure.getStatus().value(), requestId, failure.getCode(), failure.getMessage()));
+        DispatchPlan immediatePlan = DispatchPlan.immediate(routing, decision);
+        immediatePlan.revalidateBeforeAttempt(() -> revalidateImmediate(authorization, audit, request));
+        return CompletableFuture.completedFuture(openPrepared(request, service, audit, protection, immediatePlan, spendReservation));
     }
-    private StreamingGatewayResult openPrepared(ObjectNode request,LlmService service,LlmRequest audit,DataProtectionDecision protection,DispatchPlan plan) {
-        String requestId=audit.getRequestId();
-        RoutingDecision decision=plan.decision();
+
+    private RoutingDecision revalidateImmediate(String authorization, LlmRequest audit, ObjectNode request) {
+        ApiKeyCredentials freshCredentials = apiKeyService.authenticate(authorization);
+        LlmService freshService = services.findById(audit.getServiceId())
+                .filter(s -> s.isEnabled() && !s.isDeleted())
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "MODEL_NOT_FOUND",
+                        "The requested logical model was disabled."));
+        betaAccess.checkProject(freshCredentials.project().getId(), freshService.getId());
+        if (!access.existsByIdProjectIdAndIdServiceId(freshCredentials.project().getId(), freshService.getId())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "MODEL_NOT_ALLOWED",
+                    "This API key is no longer allowed to use the requested model.");
+        }
+        DataProtectionDecision freshPolicy = dataProtection.inspect(
+                freshCredentials.project(), freshCredentials.apiKey(), freshService, request, null);
+        audit.recordDataProtection(freshPolicy.policy().mode().name(), freshPolicy.policy().level().name(),
+                freshPolicy.action().name(), freshPolicy.classificationSummary(), freshPolicy.externalAllowed());
+        requests.save(audit);
+        if (freshPolicy.blocked()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "DATA_POLICY_BLOCKED",
+                    "The request was blocked by the active data-protection policy (" + freshPolicy.classificationSummary() + ").");
+        }
+        return routing.evaluate(freshService, RequestCapabilityDetector.detect(request),
+                freshCredentials.project().getId(), freshPolicy.routingConstraint());
+    }
+
+    private StreamingGatewayResult openPrepared(ObjectNode request, LlmService service, LlmRequest audit,
+                                                DataProtectionDecision protection, DispatchPlan plan,
+                                                SpendQuotaService.Reservation spendReservation) {
+        String requestId = audit.getRequestId();
+        RoutingDecision decision = plan.decision();
         int failures = 0;
         int attemptedCount = 0;
         boolean sawCapacity = false;
         ProviderFailureClassifier.Analysis lastFailure = null;
         ProviderFailureClassifier.Analysis capacityFailure = null;
+        ApiException lastQuotaException = null;
         for (ResolvedTarget candidate : plan.candidates()) {
-            betaAccess.checkProject(audit.getProjectId(), audit.getServiceId());
-            if (candidate.external() && betaAccess.isBetaProject(audit.getProjectId())) continue;
-            ActiveRequestRegistry.Lease lease=plan.acquire(candidate);
-            if(lease==null) continue;
-            boolean transferred=false;
+            ActiveRequestRegistry.Lease lease;
+            try {
+                betaAccess.checkProject(audit.getProjectId(), audit.getServiceId());
+                if (candidate.externalDataBoundary() && betaAccess.isBetaProject(audit.getProjectId())) continue;
+                lease = plan.acquire(candidate);
+            } catch (ApiException revalidationFailure) {
+                audit.fail(revalidationFailure.getCode(), revalidationFailure.getStatus().value(), elapsed(audit.getStartedAt()), failures);
+                requests.save(audit);
+                diagnostics.recordFailure(audit.getId(), request, service, decision, revalidationFailure.getCode(),
+                        revalidationFailure.getStatus().value(), attemptedCount, revalidationFailure.getMessage(), null, false);
+                return error(revalidationFailure.getStatus().value(), requestId, revalidationFailure.getCode(), revalidationFailure.getMessage());
+            }
+            if (lease == null) continue;
+            boolean transferred = false;
+            boolean settleOrHoldDone = false;
+            ProviderCapReservationService.ProviderReservation provRes = null;
             Instant started = Instant.now();
             LlmRequestAttempt attempt = new LlmRequestAttempt(audit.getId(), candidate.deployment().getId(), failures + 1);
             attemptedCount++;
             try {
-                attempt=attempts.save(attempt);
+                attempt = attempts.save(attempt);
                 java.util.Optional<ProviderFailureClassifier.Analysis> preflight = ProviderFailureClassifier.preflight(request, candidate.deployment());
                 if (preflight.isPresent()) {
                     lastFailure = preflight.get();
@@ -157,27 +214,60 @@ public class StreamingChatCompletionGateway {
                 proxied.put("model", candidate.deployment().getProviderModelId());
                 service.applyTemperaturePolicy(proxied);
                 proxied.withObject("stream_options").put("include_usage", true);
-                StreamingRuntimeResult result;
                 if (candidate.external()) {
                     service.applyOpenAiRequestPolicy(proxied);
                     candidate.deployment().applyOpenAiDefaults(proxied);
                     audit.recordExecutionOptions(proxied);
+                    if (providerCap != null) {
+                        try {
+                            provRes = providerCap.reserveForAttempt(
+                                    audit.getProjectId(), candidate.externalProvider(), candidate.deployment(),
+                                    service, proxied, requestId);
+                        } catch (ApiException quotaEx) {
+                            lastQuotaException = quotaEx;
+                            attempt.fail(quotaEx.getCode(), quotaEx.getMessage(), 0, quotaEx.getStatus().value());
+                            attempts.save(attempt);
+                            failures++;
+                            continue;
+                        }
+                    }
+                } else {
+                    audit.recordExecutionOptions(null);
+                }
+
+                StreamingRuntimeResult result;
+                if (candidate.external()) {
                     result = openAiClient.chatCompletion(candidate.externalProvider(), proxied,
                             service.getTemperaturePolicy() == TemperaturePolicy.FIXED);
                 } else {
-                    audit.recordExecutionOptions(null);
                     result = runtimeClient.chatCompletion(candidate.endpoint(), proxied);
                 }
                 if (result.statusCode() >= 200 && result.statusCode() < 300) {
                     try {
                         InputStream prefetched = StreamingResponsePrefetcher.requireFirstByte(result.body());
                         attempt.markResponseStarted(); attempts.save(attempt);
-                        transferred=true;
+                        transferred = true;
+                        settleOrHoldDone = true;
                         return new StreamingGatewayResult(result.statusCode(), requestId,
-                                new AuditedStream(prefetched, request, audit, attempt, candidate, failures, service, started, result.statusCode(), decision,lease), null);
+                                new AuditedStream(prefetched, request, audit, attempt, candidate, failures, service, started,
+                                        result.statusCode(), decision, lease, provRes, spendReservation), null);
                     } catch (IOException failure) {
                         closeQuietly(result.body());
                         RuntimeUnavailableException unavailable = new RuntimeUnavailableException("The runtime stream ended before its first response byte.", failure);
+                        if (unavailable.isSafeToRetry()) {
+                            if (providerCap != null && provRes != null) {
+                                settleOrHoldDone = true;
+                                providerCap.release(provRes, "SAFE_PRE_SEND_FAILURE");
+                            }
+                        } else {
+                            if (providerCap != null && provRes != null) {
+                                settleOrHoldDone = true;
+                                providerCap.holdUnsettled(provRes, "STREAM_START_FAILED_UNSETTLED");
+                            }
+                            if (spendQuota != null) {
+                                spendQuota.holdUnsettled(spendReservation, "STREAM_START_FAILED_UNSETTLED");
+                            }
+                        }
                         recordStartFailure(candidate, attempt, started, unavailable);
                         if (!retryDecider.retryFailure(service.getRetryPolicy(), unavailable)) {
                             audit.fail("STREAM_START_FAILED", HttpStatus.BAD_GATEWAY.value(), elapsed(audit.getStartedAt()), failures); requests.save(audit);
@@ -198,6 +288,10 @@ public class StreamingChatCompletionGateway {
                 boolean capacity = analysis.code() == ProviderFailureClassifier.Code.MODEL_AT_CAPACITY;
                 if (capacity) { sawCapacity = true; if (capacityFailure == null) capacityFailure = analysis; }
                 String attemptCode = analysis.codeName();
+                if (providerCap != null && provRes != null) {
+                    settleOrHoldDone = true;
+                    providerCap.release(provRes, attemptCode);
+                }
                 attempt.fail(attemptCode, analysis.message(), elapsed(started), result.statusCode());
                 attempts.save(attempt);
                 lease.close();
@@ -214,6 +308,20 @@ public class StreamingChatCompletionGateway {
                 }
                 failures++;
             } catch (RuntimeUnavailableException exception) {
+                if (exception.isSafeToRetry()) {
+                    if (providerCap != null && provRes != null) {
+                        settleOrHoldDone = true;
+                        providerCap.release(provRes, "SAFE_PRE_SEND_FAILURE");
+                    }
+                } else {
+                    if (providerCap != null && provRes != null) {
+                        settleOrHoldDone = true;
+                        providerCap.holdUnsettled(provRes, "AMBIGUOUS_UPSTREAM_FAILURE");
+                    }
+                    if (spendQuota != null) {
+                        spendQuota.holdUnsettled(spendReservation, "AMBIGUOUS_UPSTREAM_FAILURE");
+                    }
+                }
                 recordStartFailure(candidate, attempt, started, exception);
                 if (!retryDecider.retryFailure(service.getRetryPolicy(), exception)) {
                     audit.fail("RUNTIME_UNAVAILABLE", HttpStatus.SERVICE_UNAVAILABLE.value(), elapsed(audit.getStartedAt()), failures); requests.save(audit);
@@ -222,7 +330,26 @@ public class StreamingChatCompletionGateway {
                     return error(HttpStatus.SERVICE_UNAVAILABLE.value(), requestId, "RUNTIME_UNAVAILABLE", "The runtime failed after the request may have started; SAFE policy did not retry it.");
                 }
                 failures++;
-            } finally { if(!transferred) lease.close(); }
+            } catch (ApiException apiException) {
+                if (providerCap != null && provRes != null) {
+                    settleOrHoldDone = true;
+                    providerCap.release(provRes, apiException.getCode());
+                }
+                attempt.fail(apiException.getCode(), apiException.getMessage(), elapsed(started), apiException.getStatus().value());
+                attempts.save(attempt);
+                audit.fail(apiException.getCode(), apiException.getStatus().value(), elapsed(audit.getStartedAt()), failures);
+                requests.save(audit);
+                diagnostics.recordFailure(audit.getId(), request, service, decision, apiException.getCode(),
+                        apiException.getStatus().value(), attemptedCount, apiException.getMessage(), null, false);
+                return error(apiException.getStatus().value(), requestId, apiException.getCode(), apiException.getMessage());
+            } finally {
+                if (!transferred) {
+                    if (!settleOrHoldDone && providerCap != null && provRes != null) {
+                        try { providerCap.release(provRes, "ATTEMPT_ABORTED"); } catch (RuntimeException ignored) { }
+                    }
+                    lease.close();
+                }
+            }
         }
         if (lastFailure != null && lastFailure.isModelSpecific()) {
             audit.fail(lastFailure.codeName(), lastFailure.httpStatus(), elapsed(audit.getStartedAt()), failures);
@@ -238,6 +365,13 @@ public class StreamingChatCompletionGateway {
             diagnostics.recordFailure(audit.getId(), request, service, decision, "MODEL_AT_CAPACITY", HttpStatus.TOO_MANY_REQUESTS.value(), attemptedCount,
                     capacityMessage, capacityFailure == null ? null : capacityFailure.providerMessage(), false);
             return error(HttpStatus.TOO_MANY_REQUESTS.value(), requestId, "MODEL_AT_CAPACITY", capacityMessage);
+        }
+        if (lastQuotaException != null) {
+            audit.fail(lastQuotaException.getCode(), lastQuotaException.getStatus().value(), elapsed(audit.getStartedAt()), failures);
+            requests.save(audit);
+            diagnostics.recordFailure(audit.getId(), request, service, decision, lastQuotaException.getCode(),
+                    lastQuotaException.getStatus().value(), attemptedCount, lastQuotaException.getMessage(), null, false);
+            return error(lastQuotaException.getStatus().value(), requestId, lastQuotaException.getCode(), lastQuotaException.getMessage());
         }
         String unavailableCode = protection.unavailableCode();
         audit.fail(unavailableCode, HttpStatus.SERVICE_UNAVAILABLE.value(), elapsed(audit.getStartedAt()), failures);
@@ -268,14 +402,24 @@ public class StreamingChatCompletionGateway {
         private final Instant started;
         private final int statusCode;
         private final UsageCollector usage;
-        private final java.util.concurrent.atomic.AtomicBoolean finalized=new java.util.concurrent.atomic.AtomicBoolean();
+        private final java.util.concurrent.atomic.AtomicBoolean finalized = new java.util.concurrent.atomic.AtomicBoolean();
         private final ActiveRequestRegistry.Lease lease;
+        private final ProviderCapReservationService.ProviderReservation provRes;
+        private final SpendQuotaService.Reservation spendReservation;
 
-        private AuditedStream(InputStream source, ObjectNode request, LlmRequest audit, LlmRequestAttempt attempt, ResolvedTarget target, int failures, LlmService service, Instant started, int statusCode, RoutingDecision decision, ActiveRequestRegistry.Lease lease) {
+        private AuditedStream(InputStream source, ObjectNode request, LlmRequest audit, LlmRequestAttempt attempt,
+                              ResolvedTarget target, int failures, LlmService service, Instant started,
+                              int statusCode, RoutingDecision decision, ActiveRequestRegistry.Lease lease,
+                              ProviderCapReservationService.ProviderReservation provRes,
+                              SpendQuotaService.Reservation spendReservation) {
             this.source = source; this.request = request; this.audit = audit; this.attempt = attempt; this.target = target;
-            this.failures = failures; this.service = service; this.decision = decision; this.started = started; this.statusCode = statusCode; this.usage = new UsageCollector(request);
-            this.lease=lease;
+            this.failures = failures; this.service = service; this.decision = decision; this.started = started;
+            this.statusCode = statusCode; this.usage = new UsageCollector(request);
+            this.lease = lease;
+            this.provRes = provRes;
+            this.spendReservation = spendReservation;
         }
+
         @Override public int read() throws IOException {
             try {
                 int value = source.read();
@@ -283,6 +427,7 @@ public class StreamingChatCompletionGateway {
                 return value;
             } catch (IOException exception) { finalizeFailure(exception); throw exception; }
         }
+
         @Override public int read(byte[] bytes, int offset, int length) throws IOException {
             try {
                 int count = source.read(bytes, offset, length);
@@ -290,44 +435,100 @@ public class StreamingChatCompletionGateway {
                 return count;
             } catch (IOException exception) { finalizeFailure(exception); throw exception; }
         }
+
         @Override public void close() throws IOException {
-            try { source.close(); if(!finalized.get()) finalizeFailure(new IOException("The client closed the stream before completion.")); }
+            try { source.close(); if (!finalized.get()) finalizeFailure(new IOException("The client closed the stream before completion.")); }
             catch (IOException exception) { finalizeFailure(exception); throw exception; }
         }
+
         private void finalizeSuccess() {
-            if (!finalized.compareAndSet(false,true)) return;
+            if (!finalized.compareAndSet(false, true)) return;
             try {
-            attempt.succeed(elapsed(started), statusCode); attempts.save(attempt);
-            int failoverCount = "AUTO_FAILOVER".equals(target.routingReason()) && failures == 0 ? 1 : failures;
-            String actualTier = target.external() ? usage.actualServiceTier() : "LOCAL";
-            TokenPricingResolver.EffectivePricing pricing = TokenPricingResolver.forRequest(service, target.deployment(), target.endpoint(), actualTier, audit.getRequestedServiceTier());
-            String costStatus = !target.external() ? "ESTIMATED"
-                    : "UNKNOWN".equals(pricing.pricingTier()) ? "SERVICE_TIER_UNKNOWN"
-                    : !pricing.rateConfigured() ? "FAST_PRICE_MISSING"
-                    : usage.cachedInputTokens() > 0 && !pricing.cachedInputRateConfigured() ? "CACHED_PRICE_FALLBACK"
-                    : actualTier == null || actualTier.isBlank() ? "REQUEST_TIER_FALLBACK" : "ESTIMATED";
-            audit.succeed(target.deployment().getId(), usage.inputTokens(), usage.outputTokens(),
-                    elapsed(audit.getStartedAt()), statusCode, failoverCount, target.providerType(), target.routingReason(),
-                    pricing.inputPricePerMillion(), pricing.outputPricePerMillion(), pricing.currency(),
-                    audit.getReasoningEffort(), audit.getRequestedServiceTier(), actualTier,
-                    usage.reasoningTokens() > 0 ? usage.reasoningTokens() : null,
-                    usage.cachedInputTokens() > 0 ? usage.cachedInputTokens() : null,
-                    pricing.cachedInputRateConfigured() ? pricing.cachedInputPricePerMillion() : null,
-                    pricing.pricingTier(), costStatus);
-            requests.save(audit);
-            if (target.external()) { target.externalProvider().recordHealth(true); providers.save(target.externalProvider()); }
-            if(scheduling!=null)scheduling.finishStream(audit);
-            } finally {lease.close();}
+                attempt.succeed(elapsed(started), statusCode); attempts.save(attempt);
+                int failoverCount = "AUTO_FAILOVER".equals(target.routingReason()) && failures == 0 ? 1 : failures;
+                String actualTier = target.external() ? usage.actualServiceTier() : "LOCAL";
+                TokenPricingResolver.EffectivePricing pricing = TokenPricingResolver.forRequest(service, target.deployment(), target.endpoint(), actualTier, audit.getRequestedServiceTier());
+                String costStatus = !target.external() ? "ESTIMATED"
+                        : "UNKNOWN".equals(pricing.pricingTier()) ? "SERVICE_TIER_UNKNOWN"
+                        : !pricing.rateConfigured() ? "FAST_PRICE_MISSING"
+                        : usage.cachedInputTokens() > 0 && !pricing.cachedInputRateConfigured() ? "CACHED_PRICE_FALLBACK"
+                        : actualTier == null || actualTier.isBlank() ? "REQUEST_TIER_FALLBACK" : "ESTIMATED";
+                audit.succeed(target.deployment().getId(), usage.inputTokens(), usage.outputTokens(),
+                        elapsed(audit.getStartedAt()), statusCode, failoverCount, target.providerType(), target.routingReason(),
+                        pricing.inputPricePerMillion(), pricing.outputPricePerMillion(), pricing.currency(),
+                        audit.getReasoningEffort(), audit.getRequestedServiceTier(), actualTier,
+                        usage.reasoningTokens() > 0 ? usage.reasoningTokens() : null,
+                        usage.cachedInputTokens() > 0 ? usage.cachedInputTokens() : null,
+                        pricing.cachedInputRateConfigured() ? pricing.cachedInputPricePerMillion() : null,
+                        pricing.pricingTier(), costStatus);
+                requests.save(audit);
+                if (audit.getEstimatedCost() != null) {
+                    if (providerCap != null) providerCap.settle(provRes, "COMMITTED");
+                    if (spendQuota != null) spendQuota.settle(spendReservation, "COMMITTED");
+                } else {
+                    if (providerCap != null) providerCap.holdUnsettled(provRes, costStatus);
+                    if (spendQuota != null) spendQuota.holdUnsettled(spendReservation, costStatus);
+                }
+                if (target.external()) { target.externalProvider().recordHealth(true); providers.save(target.externalProvider()); }
+                if (scheduling != null) scheduling.finishStream(audit);
+            } finally {
+                lease.close();
+            }
         }
+
         private void finalizeFailure(IOException exception) {
-            if (!finalized.compareAndSet(false,true)) return;
+            if (!finalized.compareAndSet(false, true)) return;
             try {
-            attempt.fail("STREAM_INTERRUPTED", exception.getMessage(), elapsed(started), null); attempts.save(attempt);
-            audit.fail("STREAM_INTERRUPTED", 502, elapsed(audit.getStartedAt()), failures); requests.save(audit);
-            diagnostics.recordFailure(audit.getId(), request, service, decision, "STREAM_INTERRUPTED", 502, failures + 1,
-                    exception.getMessage(), null, false);
-            if(scheduling!=null)scheduling.finishStream(audit);
-            } finally {lease.close();}
+                attempt.fail("STREAM_INTERRUPTED", exception.getMessage(), elapsed(started), null); attempts.save(attempt);
+                boolean pricedExternalRuntime = target.externalDataBoundary()
+                        && target.endpoint() != null
+                        && target.endpoint().getInputPricePerMillion() != null
+                        && target.endpoint().getOutputPricePerMillion() != null;
+                boolean chargeable = target.external() || pricedExternalRuntime;
+                if (chargeable && usage.hasUpstreamUsage()) {
+                    String actualTier = target.external() ? usage.actualServiceTier() : "LOCAL";
+                    TokenPricingResolver.EffectivePricing pricing = TokenPricingResolver.forRequest(
+                            service, target.deployment(), target.endpoint(), actualTier, audit.getRequestedServiceTier());
+                    String costStatus = !target.external() ? "ESTIMATED"
+                            : "UNKNOWN".equals(pricing.pricingTier()) ? "SERVICE_TIER_UNKNOWN"
+                            : !pricing.rateConfigured() ? "FAST_PRICE_MISSING"
+                            : usage.cachedInputTokens() > 0 && !pricing.cachedInputRateConfigured() ? "CACHED_PRICE_FALLBACK"
+                            : actualTier == null || actualTier.isBlank() ? "REQUEST_TIER_FALLBACK" : "ESTIMATED";
+                    int failoverCount = "AUTO_FAILOVER".equals(target.routingReason()) && failures == 0 ? 1 : failures;
+                    audit.succeed(target.deployment().getId(), usage.inputTokens(), usage.outputTokens(),
+                            elapsed(audit.getStartedAt()), statusCode, failoverCount, target.providerType(), target.routingReason(),
+                            pricing.inputPricePerMillion(), pricing.outputPricePerMillion(), pricing.currency(),
+                            audit.getReasoningEffort(), audit.getRequestedServiceTier(), actualTier,
+                            usage.reasoningTokens() > 0 ? usage.reasoningTokens() : null,
+                            usage.cachedInputTokens() > 0 ? usage.cachedInputTokens() : null,
+                            pricing.cachedInputRateConfigured() ? pricing.cachedInputPricePerMillion() : null,
+                            pricing.pricingTier(), costStatus);
+                    audit.fail("STREAM_INTERRUPTED", 502, elapsed(audit.getStartedAt()), failures);
+                    requests.save(audit);
+                    if (audit.getEstimatedCost() != null) {
+                        if (providerCap != null) providerCap.settle(provRes, "STREAM_INTERRUPTED_WITH_USAGE");
+                        if (spendQuota != null) spendQuota.settle(spendReservation, "STREAM_INTERRUPTED_WITH_USAGE");
+                    } else {
+                        if (providerCap != null) providerCap.holdUnsettled(provRes, "STREAM_INTERRUPTED_UNSETTLED");
+                        if (spendQuota != null) spendQuota.holdUnsettled(spendReservation, "STREAM_INTERRUPTED_UNSETTLED");
+                    }
+                } else if (chargeable) {
+                    audit.fail("STREAM_INTERRUPTED", 502, elapsed(audit.getStartedAt()), failures);
+                    requests.save(audit);
+                    if (providerCap != null) providerCap.holdUnsettled(provRes, "STREAM_INTERRUPTED_UNSETTLED");
+                    if (spendQuota != null) spendQuota.holdUnsettled(spendReservation, "STREAM_INTERRUPTED_UNSETTLED");
+                } else {
+                    audit.fail("STREAM_INTERRUPTED", 502, elapsed(audit.getStartedAt()), failures);
+                    requests.save(audit);
+                    if (providerCap != null) providerCap.release(provRes, "STREAM_INTERRUPTED_LOCAL");
+                    if (spendQuota != null) spendQuota.releaseIfStillActive(spendReservation);
+                }
+                diagnostics.recordFailure(audit.getId(), request, service, decision, "STREAM_INTERRUPTED", 502, failures + 1,
+                        exception.getMessage(), null, false);
+                if (scheduling != null) scheduling.finishStream(audit);
+            } finally {
+                lease.close();
+            }
         }
     }
 
@@ -340,6 +541,7 @@ public class StreamingChatCompletionGateway {
         private int reasoningTokens;
         private int cachedInputTokens;
         private String actualServiceTier;
+        private boolean upstreamUsageSeen;
 
         private UsageCollector(JsonNode request) {
             this.request = request;
@@ -368,6 +570,10 @@ public class StreamingChatCompletionGateway {
             try {
                 JsonNode payload = objectMapper.readTree(json);
                 JsonNode usage = payload.path("usage");
+                if (usage.isObject() && (usage.hasNonNull("prompt_tokens") || usage.hasNonNull("input_tokens")
+                        || usage.hasNonNull("completion_tokens") || usage.hasNonNull("output_tokens"))) {
+                    upstreamUsageSeen = true;
+                }
                 inputTokens = Math.max(inputTokens, usage.path("prompt_tokens").asInt(usage.path("input_tokens").asInt(0)));
                 outputTokens = Math.max(outputTokens, usage.path("completion_tokens").asInt(usage.path("output_tokens").asInt(0)));
                 reasoningTokens = Math.max(reasoningTokens, usage.path("completion_tokens_details").path("reasoning_tokens")
@@ -380,6 +586,8 @@ public class StreamingChatCompletionGateway {
             } catch (Exception ignored) { }
         }
 
+        boolean hasUpstreamUsage() { return upstreamUsageSeen; }
+
         int inputTokens() {
             return inputTokens > 0 ? inputTokens : TokenUsageEstimator.estimateInputTokens(request);
         }
@@ -390,8 +598,7 @@ public class StreamingChatCompletionGateway {
         int reasoningTokens() { return reasoningTokens; }
         int cachedInputTokens() { return cachedInputTokens; }
         String actualServiceTier() { return actualServiceTier; }
-        }
-
+    }
 
     private void recordUnhealthy(ResolvedTarget candidate) {
         if (candidate.external()) {
@@ -419,7 +626,8 @@ public class StreamingChatCompletionGateway {
     }
     private void closeQuietly(InputStream stream) { try { stream.close(); } catch (IOException ignored) { } }
     private String errorType(String code) {
-        if ("MODEL_AT_CAPACITY".equals(code) || "RATE_LIMITED".equals(code)) return "rate_limit_error";
+        if ("MODEL_AT_CAPACITY".equals(code) || "RATE_LIMITED".equals(code)
+                || "EXTERNAL_PROVIDER_CAP_EXCEEDED".equals(code) || "QUOTA_EXCEEDED".equals(code)) return "rate_limit_error";
         if ("REQUEST_TIMEOUT".equals(code) || "UPSTREAM_UNAVAILABLE".equals(code)) return "server_error";
         return "invalid_request_error";
     }

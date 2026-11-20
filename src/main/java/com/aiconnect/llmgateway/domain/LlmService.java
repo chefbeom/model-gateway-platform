@@ -24,6 +24,7 @@ public class LlmService {
     @Column(precision = 4, scale = 3) private BigDecimal temperatureValue;
     @Enumerated(EnumType.STRING) @Column(nullable = false, length = 24) private ReasoningEffort reasoningEffort = ReasoningEffort.REQUEST;
     @Column(nullable = false) private boolean openAiFastMode;
+    @Enumerated(EnumType.STRING) @Column(name = "data_boundary_policy", nullable = false, length = 40) private DataBoundaryPolicy dataBoundaryPolicy = DataBoundaryPolicy.EXTERNAL_ALLOWED;
     @Column(nullable = false) private boolean enabled = true;
     /** Tombstones keep the service identity available to request history and usage aggregation. */
     @Column private Instant deletedAt;
@@ -129,6 +130,8 @@ public class LlmService {
     public BigDecimal getTemperatureValue() { return temperatureValue; }
     public ReasoningEffort getReasoningEffort() { return reasoningEffort == null ? ReasoningEffort.REQUEST : reasoningEffort; }
     public boolean isOpenAiFastMode() { return openAiFastMode; }
+    public DataBoundaryPolicy getDataBoundaryPolicy() { return dataBoundaryPolicy == null ? DataBoundaryPolicy.EXTERNAL_ALLOWED : dataBoundaryPolicy; }
+    public void configureDataBoundaryPolicy(DataBoundaryPolicy policy) { if (policy != null) this.dataBoundaryPolicy = policy; }
     public boolean isEnabled() { return enabled; }
     public Instant getDeletedAt() { return deletedAt; }
     public boolean isDeleted() { return deletedAt != null; }

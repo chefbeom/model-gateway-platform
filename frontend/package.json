@@ -15,7 +15,9 @@
     "test:playground-response": "node --test tests/playgroundResponse.test.mjs",
     "test:external-model-deletion": "node --test tests/externalModelDeletion.test.mjs",
     "test:external-capabilities": "node --test tests/externalCapabilities.test.mjs",
-    "test:beta-operator": "node --test tests/betaOperator.test.mjs"
+    "test:beta-operator": "node --test tests/betaOperator.test.mjs",
+    "test:totp-hierarchy": "node --test tests/totpAndHierarchy.test.mjs",
+    "test:project-governance": "node --test tests/projectGovernance.test.mjs"
   },
   "dependencies": {
     "vue": "^3.5.13"

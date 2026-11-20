@@ -1,6 +1,7 @@
 package com.aiconnect.llmgateway.external;
 
 import com.aiconnect.llmgateway.domain.*;
+import com.aiconnect.llmgateway.domain.Currency;
 import com.aiconnect.llmgateway.identity.*;
 import com.aiconnect.llmgateway.repository.*;
 import com.aiconnect.llmgateway.web.ApiException;
@@ -72,20 +73,42 @@ public class ProjectExternalAccessService {
     public AdminAccessView decide(UUID projectId, UUID providerId, ExternalAccessStatus status,
                                   boolean manualAllowed, boolean autoFailoverEnabled,
                                   BigDecimal monthlyCostLimit, Instant expiresAt, UUID actorId) {
+        return decide(projectId, providerId, status, manualAllowed, autoFailoverEnabled,
+                monthlyCostLimit, null, expiresAt, actorId);
+    }
+
+    @Transactional
+    public AdminAccessView decide(UUID projectId, UUID providerId, ExternalAccessStatus status,
+                                  boolean manualAllowed, boolean autoFailoverEnabled,
+                                  BigDecimal monthlyCostLimit, Currency monthlyCostCurrency,
+                                  Instant expiresAt, UUID actorId) {
         Project project = requireProject(projectId);
         ExternalProvider provider = requireProvider(providerId);
         if (!project.getOrganizationId().equals(provider.getOrganizationId())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "EXTERNAL_PROVIDER_ORGANIZATION_MISMATCH",
                     "The provider belongs to another organization.");
         }
+        if (status == ExternalAccessStatus.APPROVED && monthlyCostLimit != null && monthlyCostCurrency == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "PROVIDER_CAP_CURRENCY_REQUIRED",
+                    "A currency (KRW or USD) is required when configuring a monthly provider cost limit.");
+        }
         ProjectExternalAccess item = access.findByProjectIdAndProviderId(projectId, providerId)
                 .orElseGet(() -> new ProjectExternalAccess(projectId, providerId, actorId,
                         "Granted directly by an administrator."));
-        item.decide(status, manualAllowed, autoFailoverEnabled, monthlyCostLimit, expiresAt, actorId);
+        item.decide(status, manualAllowed, autoFailoverEnabled, monthlyCostLimit, monthlyCostCurrency, expiresAt, actorId);
         access.save(item);
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("projectId", projectId);
+        details.put("providerId", providerId);
+        details.put("status", status.name());
+        details.put("manualAllowed", item.isManualAllowed());
+        details.put("autoFailoverEnabled", item.isAutoFailoverEnabled());
+        if (item.getMonthlyCostLimit() != null) {
+            details.put("monthlyCostLimit", item.getMonthlyCostLimit());
+            details.put("monthlyCostCurrency", item.getMonthlyCostCurrency() == null ? null : item.getMonthlyCostCurrency().name());
+        }
         audit.record(project.getOrganizationId(), actorId, "EXTERNAL_ACCESS_DECIDED", "PROJECT_EXTERNAL_ACCESS",
-                item.getId(), Map.of("projectId", projectId, "providerId", providerId, "status", status.name(),
-                        "manualAllowed", item.isManualAllowed(), "autoFailoverEnabled", item.isAutoFailoverEnabled()));
+                item.getId(), details);
         return AdminAccessView.from(item, project, provider, email(item.getRequestedByUserId()));
     }
 
@@ -103,12 +126,16 @@ public class ProjectExternalAccessService {
         ProjectExternalAccess item = access.findByProjectIdAndProviderId(projectId, providerId).orElse(null);
         if (item == null || !item.isActive()) return false;
         if (automatic ? !item.isAutoFailoverEnabled() : !item.isManualAllowed()) return false;
-        if (item.getMonthlyCostLimit() == null) return true;
-        List<UUID> deploymentIds = deployments.findByExternalProviderId(providerId).stream().map(ModelDeployment::getId).toList();
-        if (deploymentIds.isEmpty()) return false;
-        Instant monthStart = YearMonth.now(ZoneOffset.UTC).atDay(1).atStartOfDay().toInstant(ZoneOffset.UTC);
-        BigDecimal spent = requests.sumCostByProjectAndDeploymentsSince(projectId, deploymentIds, monthStart);
-        return spent == null || spent.compareTo(item.getMonthlyCostLimit()) < 0;
+        // Legacy rows with a monthly cost limit but no explicit currency must fail closed.
+        return item.getMonthlyCostLimit() == null || item.getMonthlyCostCurrency() != null;
+    }
+
+    @Transactional(readOnly = true)
+    public boolean hasUnenforcedMonthlyLimit(UUID projectId, UUID providerId) {
+        return access.findByProjectIdAndProviderId(projectId, providerId)
+                .filter(ProjectExternalAccess::isActive)
+                .map(item -> item.getMonthlyCostLimit() != null && item.getMonthlyCostCurrency() == null)
+                .orElse(false);
     }
 
     private String email(UUID userId) { return userId == null ? null : users.findById(userId).map(AppUser::getEmail).orElse("삭제된 사용자"); }
@@ -117,23 +144,25 @@ public class ProjectExternalAccessService {
 
     public record PortalAccessView(UUID providerId, String providerName, String providerType, String status,
                                    boolean manualAllowed, boolean autoFailoverEnabled, BigDecimal monthlyCostLimit,
-                                   Instant expiresAt, String requestedReason) {
+                                   Currency monthlyCostCurrency, Instant expiresAt, String requestedReason) {
         static PortalAccessView from(ExternalProvider provider, ProjectExternalAccess item) {
             return new PortalAccessView(provider.getId(), provider.getDisplayName(), provider.getProviderType().name(),
                     item == null ? "NOT_REQUESTED" : item.getStatus().name(), item != null && item.isManualAllowed(),
                     item != null && item.isAutoFailoverEnabled(), item == null ? null : item.getMonthlyCostLimit(),
+                    item == null ? null : item.getMonthlyCostCurrency(),
                     item == null ? null : item.getExpiresAt(), item == null ? null : item.getRequestedReason());
         }
     }
     public record AdminAccessView(UUID id, UUID projectId, String projectName, UUID providerId, String providerName,
                                   String status, String requestedBy, String requestedReason, boolean manualAllowed,
-                                  boolean autoFailoverEnabled, BigDecimal monthlyCostLimit, Instant expiresAt,
-                                  Instant createdAt) {
+                                  boolean autoFailoverEnabled, BigDecimal monthlyCostLimit, Currency monthlyCostCurrency,
+                                  Instant expiresAt, Instant createdAt) {
         static AdminAccessView from(ProjectExternalAccess item, Project project, ExternalProvider provider, String requester) {
             if (project == null || provider == null) return null;
             return new AdminAccessView(item.getId(), project.getId(), project.getName(), provider.getId(), provider.getDisplayName(),
                     item.getStatus().name(), requester, item.getRequestedReason(), item.isManualAllowed(),
-                    item.isAutoFailoverEnabled(), item.getMonthlyCostLimit(), item.getExpiresAt(), item.getCreatedAt());
+                    item.isAutoFailoverEnabled(), item.getMonthlyCostLimit(), item.getMonthlyCostCurrency(),
+                    item.getExpiresAt(), item.getCreatedAt());
         }
     }
 }

@@ -21,17 +21,27 @@ import ApiPlaygroundPage from './ApiPlaygroundPage.vue'
 import ModelPlaygroundPage from './ModelPlaygroundPage.vue'
 import PlatformAdminPage from './PlatformAdminPage.vue'
 import BetaOperatorPage from './BetaOperatorPage.vue'
-import { adminFetch, type AdminAuth, type User } from './api'
+import {
+  accountTierLabel,
+  adminFetch,
+  registrationUrl,
+  type AccountTier,
+  type AdminAuth,
+  type IssuedAccountInvitation,
+  type MfaState,
+  type User
+} from './api'
+import { copyText } from './clipboard'
+import { formatDateTime } from './dateTime'
 
 type Theme = 'dark' | 'light'
 type FontScale = '100' | '115' | '125' | '135'
 type PageKey = 'beta' | 'dashboard' | 'infrastructure' | 'system' | 'external' | 'services' | 'teams' | 'projects' | 'observability' | 'usage' | 'quotas' | 'data-protection' | 'notifications' | 'audit' | 'platform' | 'portal' | 'playground' | 'model-playground' | 'docs'
 type OrganizationRole = 'ORGANIZATION_ADMIN' | 'DEVELOPER'
-type TeamRole = 'TEAM_ADMIN' | 'PROJECT_OWNER' | 'DEVELOPER' | 'AUDITOR'
 type Organization = { id: string; name: string; status: string }
-type Team = { id: string; name: string; status: string }
+type AccessibleProject = { id: string; name: string; status: string }
 type Membership = { organizationId: string; role: OrganizationRole }
-type SessionContext = { platformAdmin: boolean; memberships: Membership[] }
+type SessionContext = { platformAdmin: boolean; accountTier?: AccountTier; totpEnabled?: boolean; mfaState?: MfaState; memberships: Membership[] }
 type NavItem = { id: Exclude<PageKey, 'docs'>; label: string; description: string; keywords: string; icon: string; group: string }
 
 const props = defineProps<{ user: User | null; platformTokenSession: boolean; theme: Theme; fontScale: FontScale }>()
@@ -55,6 +65,14 @@ const adminNavItems: NavItem[] = [
   { id: 'playground', label: 'API 테스트', description: '모델 연결·Chat Completions 테스트', keywords: 'playground api test chat completion models', icon: '▷', group: '개발자 도구' },
   { id: 'model-playground', label: '모델 테스트 콘솔', description: '등록된 Runtime·Provider 모델 직접 대화 테스트', keywords: 'model playground chat runtime provider streaming file test', icon: '◈', group: '개발자 도구' }
 ]
+const directorNavItems: NavItem[] = [
+  { id: 'projects', label: '프로젝트 & API 키', description: '프로젝트·멤버·권한·API 키', keywords: 'project key member delegation policy', icon: '⌘', group: '프로젝트 관리' },
+  { id: 'quotas', label: '요금·한도', description: '프로젝트 예산과 관리자 상한', keywords: 'budget quota limit spend cost ceiling', icon: '₩', group: '프로젝트 관리' },
+  { id: 'data-protection', label: '데이터 보호', description: '프로젝트·API 키 민감정보 정책', keywords: 'security privacy dlp pii secret local only', icon: '◇', group: '프로젝트 관리' },
+  { id: 'portal', label: '내 API', description: '프로젝트·사용 모델·API 키', keywords: 'my api project model key', icon: '⌘', group: '내 작업' },
+  { id: 'usage', label: 'API 사용량', description: '프로젝트·API 키 토큰·비용 이력', keywords: 'usage token cost request', icon: '◴', group: '내 작업' },
+  { id: 'playground', label: 'API 테스트', description: '모델 연결·Chat Completions 테스트', keywords: 'playground api test chat completion models', icon: '▷', group: '내 작업' }
+]
 const platformNavItem: NavItem = { id: 'platform', label: 'Platform Admin', description: '조직·사용자·키·데이터 정리', keywords: 'platform admin organization user api key cleanup purge', icon: '⚡', group: '시스템' }
 const developerNavItems: NavItem[] = [
   { id: 'portal', label: '내 API', description: '프로젝트·사용 모델·API 키', keywords: 'my api project model key', icon: '⌘', group: '내 작업' },
@@ -69,10 +87,12 @@ const fontScaleOptions: Array<{ value: FontScale; label: string; description: st
 
 const page = ref<PageKey>('portal')
 const organizations = ref<Organization[]>([])
-const teams = ref<Team[]>([])
+const accessibleProjects = ref<AccessibleProject[]>([])
 const organizationId = ref(sessionStorage.getItem('aiconnect.setup.organizationId') ?? '')
 const memberships = ref<Membership[]>([])
 const contextPlatformAdmin = ref(false)
+const contextAccountTier = ref<AccountTier | null>(null)
+const contextTotpEnabled = ref<boolean | null>(null)
 const betaOperator = ref(false)
 const sidebarOpen = ref(false)
 const settingsOpen = ref(false)
@@ -86,19 +106,59 @@ const accountOpen = ref(false)
 const busy = ref(false)
 const message = ref('')
 const profileLabel = ref(localStorage.getItem('aiconnect.profileLabel') ?? '')
-const accountForm = ref({ email: '', password: '', organizationRole: 'DEVELOPER' as OrganizationRole, teamId: '', teamRole: 'DEVELOPER' as TeamRole })
+const inviteForm = ref({
+  targetTier: 'GENERAL_USER' as 'PROJECT_DIRECTOR' | 'GENERAL_USER',
+  organizationId: '',
+  projectId: '',
+  canIssueApiKeys: false,
+  expectedEmail: '',
+  expiresInHours: 72
+})
+const inviteModalProjects = ref<AccessibleProject[]>([])
+const issuedAccountInvite = ref<IssuedAccountInvitation | null>(null)
 const playgroundInitialTargetId = ref('')
 
 const selectedMembership = computed(() => memberships.value.find(member => member.organizationId === organizationId.value) ?? null)
 const platformAdmin = computed(() => Boolean(props.user?.platformAdmin || props.platformTokenSession || contextPlatformAdmin.value))
-const isAdminConsole = computed(() => platformAdmin.value || selectedMembership.value?.role === 'ORGANIZATION_ADMIN')
-const navItems = computed(() => [...(isAdminConsole.value ? (platformAdmin.value ? [...adminNavItems, platformNavItem] : adminNavItems) : developerNavItems), ...(platformAdmin.value || betaOperator.value ? [{id:'beta' as const,label:'초대 서비스 운영',description:'초대·접근·운영 상태',keywords:'beta invitation invite',icon:'◇',group:'운영'}] : [])])
+const effectiveAccountTier = computed<AccountTier>(() => {
+  if (props.platformTokenSession || platformAdmin.value) return 'SYSTEM_ADMIN'
+  if (contextAccountTier.value) return contextAccountTier.value
+  if (props.user?.accountTier) return props.user.accountTier
+  return selectedMembership.value?.role === 'ORGANIZATION_ADMIN' ? 'PROJECT_DIRECTOR' : 'GENERAL_USER'
+})
+const isOrgOrPlatformAdmin = computed(() =>
+  platformAdmin.value
+  || (effectiveAccountTier.value !== 'PROJECT_DIRECTOR'
+    && effectiveAccountTier.value !== 'GENERAL_USER'
+    && selectedMembership.value?.role === 'ORGANIZATION_ADMIN')
+)
+const isProjectDirector = computed(() => !isOrgOrPlatformAdmin.value && effectiveAccountTier.value === 'PROJECT_DIRECTOR')
+const canInviteAccounts = computed(() => isOrgOrPlatformAdmin.value || isProjectDirector.value)
+const navItems = computed(() => [
+  ...(isOrgOrPlatformAdmin.value
+    ? (platformAdmin.value ? [...adminNavItems, platformNavItem] : adminNavItems)
+    : isProjectDirector.value
+      ? directorNavItems
+      : developerNavItems),
+  ...(platformAdmin.value || betaOperator.value ? [{id:'beta' as const,label:'초대 서비스 운영',description:'초대·접근·운영 상태',keywords:'beta invitation invite',icon:'◇',group:'운영'}] : [])
+])
 const groups = computed(() => [...new Set(navItems.value.map(item => item.group))])
 const allNavigation = computed(() => [...navItems.value, docsItem])
 const currentNav = computed(() => allNavigation.value.find(item => item.id === page.value) ?? navItems.value[0] ?? docsItem)
 const currentOrganization = computed(() => organizations.value.find(item => item.id === organizationId.value) ?? null)
 const profileName = computed(() => profileLabel.value.trim() || props.user?.email || 'Platform session')
-const profileRole = computed(() => platformAdmin.value ? 'Platform administrator' : isAdminConsole.value ? 'Organization administrator' : 'Developer portal')
+const profileRole = computed(() => {
+  if (props.platformTokenSession) return '시스템 관리자 (비상 토큰)'
+  return accountTierLabel(effectiveAccountTier.value, platformAdmin.value)
+})
+const totpActive = computed(() => !props.platformTokenSession && Boolean(contextTotpEnabled.value ?? props.user?.totpEnabled))
+const totpBadgeLabel = computed(() => {
+  if (props.platformTokenSession) return '비상 토큰'
+  return totpActive.value ? 'TOTP 활성' : 'TOTP 미등록'
+})
+const issuedInviteLink = computed(() =>
+  issuedAccountInvite.value ? registrationUrl(issuedAccountInvite.value.registrationPath) : ''
+)
 const searchResults = computed(() => {
   const query = search.value.trim().toLowerCase()
   return query ? allNavigation.value.filter(item => `${item.label} ${item.description} ${item.keywords}`.toLowerCase().includes(query)) : allNavigation.value
@@ -107,8 +167,8 @@ const searchResults = computed(() => {
 function knownPage(value: string): value is PageKey {
   return ['beta', 'dashboard', 'infrastructure', 'system', 'external', 'services', 'teams', 'projects', 'observability', 'usage', 'quotas', 'data-protection', 'notifications', 'audit', 'platform', 'portal', 'playground', 'model-playground', 'docs'].includes(value)
 }
-function isAllowedPage(target: PageKey) { if(target==='beta')return platformAdmin.value || betaOperator.value; return isAdminConsole.value || target === 'portal' || target === 'usage' || target === 'playground' || target === 'docs' }
-function fallbackPage(): PageKey { return isAdminConsole.value ? 'dashboard' : 'portal' }
+function isAllowedPage(target: PageKey) { if(target==='beta')return platformAdmin.value || betaOperator.value; if (isOrgOrPlatformAdmin.value) return target !== 'platform' || platformAdmin.value; if (isProjectDirector.value) return ['projects', 'quotas', 'data-protection', 'portal', 'usage', 'playground', 'docs'].includes(target); return target === 'portal' || target === 'usage' || target === 'playground' || target === 'docs' }
+function fallbackPage(): PageKey { return isOrgOrPlatformAdmin.value ? 'dashboard' : isProjectDirector.value ? 'projects' : 'portal' }
 function resolveHash(): PageKey {
   const candidate = window.location.hash.replace(/^#\/?/, '')
   const pageCandidate = candidate.split('/')[0]
@@ -137,7 +197,7 @@ function selectOrganization(id: string) {
   organizationId.value = id
   if (id) sessionStorage.setItem('aiconnect.setup.organizationId', id)
   else sessionStorage.removeItem('aiconnect.setup.organizationId')
-  loadTeams()
+  void loadAccessibleProjects()
   ensureAllowedPage()
 }
 async function loadSessionContext() {
@@ -146,6 +206,8 @@ async function loadSessionContext() {
     const context = await adminFetch<SessionContext>('/api/portal/session', auth.value)
     memberships.value = context.memberships
     contextPlatformAdmin.value = context.platformAdmin
+    contextAccountTier.value = context.accountTier ?? null
+    contextTotpEnabled.value = typeof context.totpEnabled === 'boolean' ? context.totpEnabled : null
   } catch (error) {
     message.value = error instanceof Error ? error.message : '사용자 권한 정보를 확인하지 못했습니다.'
   }
@@ -157,10 +219,10 @@ async function loadOrganizations(preferred?: string) {
     selectOrganization(organizations.value.some(item => item.id === requested) ? requested : organizations.value[0]?.id ?? '')
   } catch (error) { message.value = error instanceof Error ? error.message : '조직 목록을 불러오지 못했습니다.' }
 }
-async function loadTeams() {
-  if (!organizationId.value || !isAdminConsole.value) { teams.value = []; return }
-  try { teams.value = await adminFetch<Team[]>(`/api/admin/organizations/${organizationId.value}/teams`, auth.value) }
-  catch { teams.value = [] }
+async function loadAccessibleProjects() {
+  if (!organizationId.value || !canInviteAccounts.value) { accessibleProjects.value = []; return }
+  try { accessibleProjects.value = await adminFetch<AccessibleProject[]>(`/api/admin/organizations/${organizationId.value}/projects`, auth.value) }
+  catch { accessibleProjects.value = [] }
 }
 function openSearch() { settingsOpen.value = false; userMenuOpen.value = false; searchOpen.value = true; nextTick(() => searchInput.value?.focus()) }
 function saveProfile() {
@@ -168,26 +230,97 @@ function saveProfile() {
   else localStorage.removeItem('aiconnect.profileLabel')
   profileOpen.value = false
 }
+async function loadInviteModalProjects(orgId: string) {
+  if (!orgId) { inviteModalProjects.value = []; inviteForm.value.projectId = ''; return }
+  if (orgId === organizationId.value && accessibleProjects.value.length) {
+    inviteModalProjects.value = accessibleProjects.value
+    if (!inviteModalProjects.value.some(project => project.id === inviteForm.value.projectId)) {
+      inviteForm.value.projectId = inviteModalProjects.value[0]?.id ?? ''
+    }
+    return
+  }
+  try {
+    const loaded = await adminFetch<AccessibleProject[]>(`/api/admin/organizations/${orgId}/projects`, auth.value)
+    inviteModalProjects.value = loaded
+    inviteForm.value.projectId = loaded[0]?.id ?? ''
+  } catch {
+    inviteModalProjects.value = []
+    inviteForm.value.projectId = ''
+  }
+}
 function openAccount() {
-  if (!isAdminConsole.value) return
+  if (!canInviteAccounts.value) return
   settingsOpen.value = false
-  accountForm.value = { email: '', password: '', organizationRole: 'DEVELOPER', teamId: teams.value[0]?.id ?? '', teamRole: 'DEVELOPER' }
+  issuedAccountInvite.value = null
+  const defaultOrgId = organizationId.value || organizations.value[0]?.id || ''
+  inviteForm.value = {
+    targetTier: platformAdmin.value ? 'PROJECT_DIRECTOR' : 'GENERAL_USER',
+    organizationId: defaultOrgId,
+    projectId: defaultOrgId === organizationId.value ? (accessibleProjects.value[0]?.id ?? '') : '',
+    canIssueApiKeys: false,
+    expectedEmail: '',
+    expiresInHours: 72
+  }
+  inviteModalProjects.value = defaultOrgId === organizationId.value ? accessibleProjects.value : []
+  if (defaultOrgId && (defaultOrgId !== organizationId.value || !inviteModalProjects.value.length)) {
+    void loadInviteModalProjects(defaultOrgId)
+  }
   accountOpen.value = true
 }
-async function createAccount() {
-  if (!isAdminConsole.value || !accountForm.value.email || accountForm.value.password.length < 12) return
+function onInviteModalOrgChange() {
+  inviteForm.value.projectId = ''
+  void loadInviteModalProjects(inviteForm.value.organizationId)
+}
+async function issueQuickAccountInvitation() {
+  if (!canInviteAccounts.value) return
+  const targetOrgId = inviteForm.value.organizationId || organizationId.value
+  if (!targetOrgId) {
+    message.value = '초대할 조직을 먼저 선택하세요.'
+    return
+  }
+  if (!inviteForm.value.projectId) {
+    message.value = '초대할 프로젝트를 먼저 선택하세요.'
+    return
+  }
   busy.value = true
   try {
-    if (organizationId.value) {
-      await adminFetch(`/api/admin/organizations/${organizationId.value}/users`, auth.value, { method: 'POST', body: JSON.stringify({ email: accountForm.value.email, password: accountForm.value.password, organizationRole: accountForm.value.organizationRole, teamId: accountForm.value.teamId || null, teamRole: accountForm.value.teamId ? accountForm.value.teamRole : null }) })
-      message.value = '조직 사용자 계정을 생성하고 역할을 부여했습니다.'
-    } else if (platformAdmin.value) {
-      await adminFetch('/api/admin/users', auth.value, { method: 'POST', body: JSON.stringify({ email: accountForm.value.email, password: accountForm.value.password, platformAdmin: false }) })
-      message.value = '플랫폼 사용자 계정을 생성했습니다.'
+    const targetTier = platformAdmin.value ? inviteForm.value.targetTier : 'GENERAL_USER'
+    const endpoint = platformAdmin.value && targetTier === 'PROJECT_DIRECTOR'
+      ? '/api/admin/platform/account-invitations'
+      : `/api/admin/organizations/${targetOrgId}/account-invitations`
+    const payload = {
+      targetTier,
+      organizationId: targetOrgId,
+      projectId: inviteForm.value.projectId,
+      canIssueApiKeys: targetTier === 'PROJECT_DIRECTOR' ? true : Boolean(inviteForm.value.canIssueApiKeys),
+      expectedEmail: inviteForm.value.expectedEmail.trim() || null,
+      expiresInHours: Math.max(1, Math.min(720, Number(inviteForm.value.expiresInHours) || 72))
     }
-    accountOpen.value = false
-  } catch (error) { message.value = error instanceof Error ? error.message : '계정 생성에 실패했습니다.' }
-  finally { busy.value = false }
+    const created = await adminFetch<IssuedAccountInvitation>(endpoint, auth.value, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    })
+    issuedAccountInvite.value = created
+    inviteForm.value.expectedEmail = ''
+    message.value = `${accountTierLabel(created.targetTier)} 초대 코드와 가입 링크를 발급했습니다.`
+  } catch (error) {
+    message.value = error instanceof Error ? error.message : '계정 초대 발급에 실패했습니다.'
+  } finally {
+    busy.value = false
+  }
+}
+async function copyQuickInviteValue(value: string, label: string) {
+  if (!value) return
+  try {
+    await copyText(value)
+    message.value = `${label}를 클립보드에 복사했습니다.`
+  } catch {
+    message.value = `${label}를 복사하지 못했습니다. 표시된 값을 직접 선택해 복사하세요.`
+  }
+}
+function openInvitationManagementPage() {
+  accountOpen.value = false
+  navigate(platformAdmin.value ? 'platform' : isOrgOrPlatformAdmin.value ? 'teams' : 'projects')
 }
 function onHashChange() {
   page.value = resolveHash()
@@ -247,29 +380,47 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
         <div class="topbar-actions">
           <button class="feature-search" @click="openSearch"><span>⌕</span><em>기능 검색</em><kbd>⌘K</kbd></button>
           <button class="icon-button" :aria-label="theme === 'dark' ? '라이트 모드' : '다크 모드'" @click="emit('toggleTheme')">{{ theme === 'dark' ? '☀' : '◐' }}</button>
-          <div class="settings-wrap"><button class="icon-button settings-trigger" :class="{ active: settingsOpen }" aria-label="설정" @click="settingsOpen = !settingsOpen; userMenuOpen = false">⚙</button><div v-if="settingsOpen" class="settings-popover"><header><span>빠른 설정</span><small>프로필과 환경을 관리합니다.</small></header><button class="setting-action" @click="settingsOpen = false; profileOpen = true"><i>◉</i><span><strong>프로필 설정</strong><small>표시 이름과 현재 계정 확인</small></span><b>›</b></button><button class="setting-action" @click="settingsOpen = false; environmentOpen = true"><i>◐</i><span><strong>환경 설정</strong><small>테마·글자 크기·시각 표시 조절</small></span><b>›</b></button><button v-if="isAdminConsole" class="setting-action" @click="openAccount"><i>+</i><span><strong>계정 추가</strong><small>조직 사용자와 역할 생성</small></span><b>›</b></button></div></div>
-          <div class="user-menu-wrap"><button class="user-chip" @click="userMenuOpen = !userMenuOpen; settingsOpen = false"><span>{{ profileName.slice(0, 1).toUpperCase() }}</span><span><strong>{{ profileName }}</strong><small>{{ profileRole }}</small></span><i>⌄</i></button><div v-if="userMenuOpen" class="user-popover"><div><strong>{{ user?.email ?? 'Emergency session' }}</strong><small>{{ profileRole }}</small></div><button @click="userMenuOpen = false; profileOpen = true">프로필 설정</button><button @click="emit('logout')">로그아웃</button></div></div>
+          <div class="settings-wrap"><button class="icon-button settings-trigger" :class="{ active: settingsOpen }" aria-label="설정" @click="settingsOpen = !settingsOpen; userMenuOpen = false">⚙</button><div v-if="settingsOpen" class="settings-popover"><header><span>빠른 설정</span><small>프로필과 환경을 관리합니다.</small></header><button class="setting-action" @click="settingsOpen = false; profileOpen = true"><i>◉</i><span><strong>프로필 설정</strong><small>표시 이름과 현재 계정 확인</small></span><b>›</b></button><button class="setting-action" @click="settingsOpen = false; environmentOpen = true"><i>◐</i><span><strong>환경 설정</strong><small>테마·글자 크기·시각 표시 조절</small></span><b>›</b></button><button v-if="canInviteAccounts" class="setting-action" @click="openAccount"><i>+</i><span><strong>계정 추가</strong><small>초대 코드와 가입 링크 발급</small></span><b>›</b></button></div></div>
+          <div class="user-menu-wrap">
+            <button class="user-chip" @click="userMenuOpen = !userMenuOpen; settingsOpen = false">
+              <span>{{ profileName.slice(0, 1).toUpperCase() }}</span>
+              <span><strong>{{ profileName }}</strong><small>{{ profileRole }}</small></span>
+              <span class="totp-chip" :class="{ active: totpActive }">{{ totpBadgeLabel }}</span>
+              <i>⌄</i>
+            </button>
+            <div v-if="userMenuOpen" class="user-popover">
+              <div>
+                <strong>{{ user?.email ?? 'Emergency session' }}</strong>
+                <small>{{ profileRole }}</small>
+                <span class="status-chip tiny" :class="totpActive ? 'healthy' : 'draining'">
+                  <i></i>{{ platformTokenSession ? '비상 플랫폼 토큰 세션' : totpActive ? 'Google Authenticator TOTP 활성' : 'TOTP 미등록' }}
+                </span>
+              </div>
+              <button class="profile-shortcut" @click="userMenuOpen = false; profileOpen = true">프로필 설정</button>
+              <button @click="emit('logout')">로그아웃</button>
+            </div>
+          </div>
         </div>
       </header>
       <main class="console-content">
         <p v-if="message" class="inline-alert">{{ message }}</p>
-        <DashboardPage v-if="isAdminConsole && page === 'dashboard'" :organization-id="organizationId" :auth="auth" @navigate="navigate" />
-        <InfrastructurePage v-else-if="isAdminConsole && page === 'infrastructure'" :organization-id="organizationId" :auth="auth" @open-playground="openModelPlayground" />
-        <SystemStructurePage v-else-if="isAdminConsole && page === 'system'" :organization-id="organizationId" :auth="auth" />
-        <ExternalProvidersPage v-else-if="isAdminConsole && page === 'external'" :organization-id="organizationId" :auth="auth" @open-playground="openModelPlayground" />
-        <ServicesPage v-else-if="isAdminConsole && page === 'services'" :organization-id="organizationId" :auth="auth" />
-        <TeamsPage v-else-if="isAdminConsole && page === 'teams'" :organization-id="organizationId" :auth="auth" />
-        <ProjectsPage v-else-if="isAdminConsole && page === 'projects'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" @organizations-changed="loadOrganizations" @organization-selected="loadOrganizations($event)" />
-        <ObservabilityPage v-else-if="isAdminConsole && page === 'observability'" :organization-id="organizationId" :auth="auth" />
-        <NotificationsPage v-else-if="isAdminConsole && page === 'notifications'" :organization-id="organizationId" :auth="auth" />
-        <AuditLogPage v-else-if="isAdminConsole && page === 'audit'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" />
+        <DashboardPage v-if="isOrgOrPlatformAdmin && page === 'dashboard'" :organization-id="organizationId" :auth="auth" @navigate="navigate" />
+        <InfrastructurePage v-else-if="isOrgOrPlatformAdmin && page === 'infrastructure'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" @open-playground="openModelPlayground" />
+        <SystemStructurePage v-else-if="isOrgOrPlatformAdmin && page === 'system'" :organization-id="organizationId" :auth="auth" />
+        <ExternalProvidersPage v-else-if="isOrgOrPlatformAdmin && page === 'external'" :organization-id="organizationId" :auth="auth" @open-playground="openModelPlayground" />
+        <ServicesPage v-else-if="isOrgOrPlatformAdmin && page === 'services'" :organization-id="organizationId" :auth="auth" />
+        <TeamsPage v-else-if="isOrgOrPlatformAdmin && page === 'teams'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" />
+        <ProjectsPage v-else-if="(isOrgOrPlatformAdmin || isProjectDirector) && page === 'projects'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" :org-admin="isOrgOrPlatformAdmin" @organizations-changed="loadOrganizations" @organization-selected="loadOrganizations($event)" />
+        <ObservabilityPage v-else-if="isOrgOrPlatformAdmin && page === 'observability'" :organization-id="organizationId" :auth="auth" />
+        <NotificationsPage v-else-if="isOrgOrPlatformAdmin && page === 'notifications'" :organization-id="organizationId" :auth="auth" />
+        <AuditLogPage v-else-if="isOrgOrPlatformAdmin && page === 'audit'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" />
         <PlatformAdminPage v-else-if="platformAdmin && page === 'platform'" :auth="auth" />
         <BetaOperatorPage v-else-if="page === 'beta' && (platformAdmin || betaOperator)" :auth="auth" :platform-admin="platformAdmin" />
         <UsagePage v-else-if="page === 'usage'" :organization-id="organizationId" :auth="auth" />
-        <QuotaPage v-else-if="isAdminConsole && page === 'quotas'" :organization-id="organizationId" :auth="auth" />
-        <DataProtectionPage v-else-if="isAdminConsole && page === 'data-protection'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" />
+        <QuotaPage v-else-if="(isOrgOrPlatformAdmin || isProjectDirector) && page === 'quotas'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" :org-admin="isOrgOrPlatformAdmin" />
+        <DataProtectionPage v-else-if="(isOrgOrPlatformAdmin || isProjectDirector) && page === 'data-protection'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" :org-admin="isOrgOrPlatformAdmin" />
         <ApiPlaygroundPage v-else-if="page === 'playground'" :organization-id="organizationId" :auth="auth" />
-        <ModelPlaygroundPage v-else-if="isAdminConsole && page === 'model-playground'" :organization-id="organizationId" :auth="auth" :initial-target-id="playgroundInitialTargetId" />
+        <ModelPlaygroundPage v-else-if="isOrgOrPlatformAdmin && page === 'model-playground'" :organization-id="organizationId" :auth="auth" :initial-target-id="playgroundInitialTargetId" />
         <DevDocsPage v-else-if="page === 'docs'" @navigate="navigate" />
         <DeveloperPortalPage v-else :organization-id="organizationId" :auth="auth" />
       </main>
@@ -277,13 +428,163 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
 
     <div v-if="searchOpen" class="command-backdrop" @mousedown.self="searchOpen = false"><section class="command-palette" role="dialog" aria-modal="true" aria-label="기능 검색"><div class="command-input"><span>⌕</span><input ref="searchInput" v-model="search" placeholder="기능, 모델, API 키 검색" /><kbd>ESC</kbd></div><div class="command-results"><p>기능으로 이동</p><button v-for="item in searchResults" :key="item.id" @click="navigate(item.id)"><span class="nav-icon">{{ item.id === 'docs' ? '?' : ('icon' in item ? item.icon : '') }}</span><span><strong>{{ item.label }}</strong><small>{{ item.description }}</small></span><kbd>↵</kbd></button></div></section></div>
 
-    <BaseModal :open="profileOpen" title="프로필 설정" description="콘솔에 표시되는 이름만 이 브라우저에 저장됩니다." size="sm" @close="profileOpen = false"><div class="modal-form"><label class="field">표시 이름<input v-model.trim="profileLabel" maxlength="60" placeholder="AI 운영 관리자" /></label></div><template #footer><button class="secondary-button" @click="profileOpen = false">취소</button><button class="primary-button" @click="saveProfile">저장</button></template></BaseModal>
+    <BaseModal :open="profileOpen" title="프로필 설정" description="콘솔에 표시되는 이름만 이 브라우저에 저장됩니다." size="sm" @close="profileOpen = false">
+      <div class="modal-form">
+        <div class="settings-profile-summary">
+          <span>{{ profileName.slice(0, 1).toUpperCase() }}</span>
+          <div>
+            <strong>{{ user?.email ?? 'Emergency session' }}</strong>
+            <small>{{ profileRole }} · {{ totpBadgeLabel }}</small>
+          </div>
+        </div>
+        <label class="field">표시 이름<input v-model.trim="profileLabel" maxlength="60" placeholder="AI 운영 관리자" /></label>
+      </div>
+      <template #footer><button class="secondary-button" @click="profileOpen = false">취소</button><button class="primary-button" @click="saveProfile">저장</button></template>
+    </BaseModal>
+
     <BaseModal :open="environmentOpen" title="환경 설정" description="테마, 글자 크기와 시각 표시 형식은 즉시 적용됩니다." @close="environmentOpen = false">
       <div class="settings-section"><span class="settings-section-title">테마</span><div class="settings-choice-grid"><button :class="{ active: theme === 'light' }" @click="theme !== 'light' && emit('toggleTheme')"><strong>라이트 모드</strong><small>밝은 작업 환경</small></button><button :class="{ active: theme === 'dark' }" @click="theme !== 'dark' && emit('toggleTheme')"><strong>다크 모드</strong><small>어두운 작업 환경</small></button></div></div>
       <div class="settings-section"><span class="settings-section-title">글자 크기</span><div class="font-scale-grid"><button v-for="option in fontScaleOptions" :key="option.value" :class="{ active: fontScale === option.value }" @click="emit('fontScaleChanged', option.value)"><strong>{{ option.label }}</strong><small>{{ option.description }}</small></button></div></div>
       <DateTimePreferences />
       <template #footer><button class="primary-button" @click="environmentOpen = false">확인</button></template>
     </BaseModal>
-    <BaseModal v-if="isAdminConsole" :open="accountOpen" title="조직 사용자 추가" description="사용자는 조직 역할과 선택한 팀 역할에 따라 필요한 기능만 볼 수 있습니다." @close="accountOpen = false"><div class="modal-form"><label class="field">이메일<input v-model.trim="accountForm.email" type="email" placeholder="developer@company.com" /></label><label class="field">임시 비밀번호<input v-model="accountForm.password" type="password" minlength="12" placeholder="12자 이상" /></label><label class="field">조직 역할<select v-model="accountForm.organizationRole"><option value="DEVELOPER">Developer</option><option value="ORGANIZATION_ADMIN">Organization Admin</option></select></label><label v-if="organizationId" class="field">팀<select v-model="accountForm.teamId"><option value="">팀 미지정</option><option v-for="team in teams" :key="team.id" :value="team.id">{{ team.name }}</option></select></label><label v-if="accountForm.teamId" class="field">팀 역할<select v-model="accountForm.teamRole"><option value="TEAM_ADMIN">Team Admin</option><option value="PROJECT_OWNER">Project Owner</option><option value="DEVELOPER">Developer</option><option value="AUDITOR">Auditor</option></select></label></div><template #footer><button class="secondary-button" @click="accountOpen = false">취소</button><button class="primary-button" :disabled="busy || !accountForm.email || accountForm.password.length < 12" @click="createAccount">계정 생성</button></template></BaseModal>
+
+    <BaseModal v-if="canInviteAccounts" :open="accountOpen" title="계정 초대 코드·링크 발급" description="하위 계정을 직접 생성하지 않고 1회용 초대 코드와 가입 링크를 발급합니다. 가입자는 Google Authenticator 2차 인증을 필수로 등록합니다." @close="accountOpen = false">
+      <div class="modal-form">
+        <label v-if="platformAdmin" class="field">
+          부여 계층
+          <select v-model="inviteForm.targetTier">
+            <option value="PROJECT_DIRECTOR">프로젝트 총괄 (PROJECT_DIRECTOR)</option>
+            <option value="GENERAL_USER">기본 계정 (GENERAL_USER)</option>
+          </select>
+        </label>
+        <div v-else class="profile-tier-note">
+          <strong>부여 계층: 기본 계정 (GENERAL_USER)</strong>
+          <small>프로젝트 총괄 계정은 담당 프로젝트의 하위 기본 계정 초대 코드만 발급할 수 있습니다.</small>
+        </div>
+
+        <label v-if="platformAdmin" class="field">
+          대상 조직
+          <select v-model="inviteForm.organizationId" @change="onInviteModalOrgChange">
+            <option value="">조직 선택</option>
+            <option v-for="org in organizations" :key="org.id" :value="org.id">{{ org.name }}</option>
+          </select>
+        </label>
+
+        <label class="field">
+          대상 프로젝트
+          <select v-model="inviteForm.projectId">
+            <option value="">프로젝트 선택</option>
+            <option v-for="project in inviteModalProjects" :key="project.id" :value="project.id">{{ project.name }} · {{ project.status }}</option>
+          </select>
+        </label>
+
+        <label v-if="!platformAdmin || inviteForm.targetTier === 'GENERAL_USER'" class="toggle-field">
+          <span>
+            API 키 발급 권한 위임
+            <small>체크하면 가입자가 선택한 프로젝트에서 직접 API 키를 발급할 수 있습니다.</small>
+          </span>
+          <input v-model="inviteForm.canIssueApiKeys" type="checkbox" />
+        </label>
+
+        <label class="field">
+          지정 이메일 (선택)
+          <input v-model.trim="inviteForm.expectedEmail" type="email" placeholder="developer@company.com" />
+        </label>
+
+        <label class="field">
+          만료 시간 (시간)
+          <input v-model.number="inviteForm.expiresInHours" type="number" min="1" max="720" />
+        </label>
+
+        <div v-if="issuedAccountInvite" role="status" class="secret-reveal quick-invite-reveal">
+          <span>1회용 초대 코드 및 가입 링크 (한 번만 표시 · 만료 {{ formatDateTime(issuedAccountInvite.expiresAt) }})</span>
+          <div class="quick-invite-row">
+            <div>
+              <small>초대 코드</small>
+              <code>{{ issuedAccountInvite.code }}</code>
+            </div>
+            <button type="button" class="secondary-button" @click="copyQuickInviteValue(issuedAccountInvite.code, '초대 코드')">코드 복사</button>
+          </div>
+          <div class="quick-invite-row">
+            <div>
+              <small>가입 링크</small>
+              <code>{{ issuedInviteLink }}</code>
+            </div>
+            <button type="button" class="secondary-button" @click="copyQuickInviteValue(issuedInviteLink, '가입 링크')">링크 복사</button>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <button class="ghost-button" type="button" @click="openInvitationManagementPage">초대 이력·사용자 관리</button>
+        <button class="secondary-button" type="button" @click="accountOpen = false">닫기</button>
+        <button class="primary-button" type="button" :disabled="busy || (!inviteForm.organizationId && !organizationId) || !inviteForm.projectId" @click="issueQuickAccountInvitation">초대 코드/링크 발급</button>
+      </template>
+    </BaseModal>
   </div>
 </template>
+
+<style scoped>
+.totp-chip {
+  padding: 3px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.totp-chip.active {
+  border-color: var(--accent-border);
+  background: var(--accent-dim);
+  color: var(--accent-strong);
+}
+.profile-tier-note {
+  padding: 12px 13px;
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.profile-tier-note strong {
+  font-size: 12px;
+}
+.profile-tier-note small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.quick-invite-reveal {
+  grid-template-columns: 1fr;
+}
+.quick-invite-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+}
+.quick-invite-row > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.quick-invite-row small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+.quick-invite-row code {
+  word-break: break-all;
+}
+@media (max-width: 760px) {
+  .totp-chip {
+    display: none;
+  }
+}
+@media (max-width: 620px) {
+  .quick-invite-row {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

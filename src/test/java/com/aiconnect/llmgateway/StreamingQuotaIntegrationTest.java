@@ -36,6 +36,10 @@ class StreamingQuotaIntegrationTest {
     @Autowired ApiKeyService apiKeyService;
     @Autowired InferenceNodeRepository nodes;
     @Autowired RuntimeEndpointRepository endpoints;
+    @Autowired com.aiconnect.llmgateway.security.RuntimeTrustAttestationRepository runtimeTrustFixture;
+    @Autowired com.aiconnect.llmgateway.security.ProjectRuntimeApprovalRepository runtimeApprovalFixture;
+    @Autowired com.aiconnect.llmgateway.repository.ProjectRepository runtimeProjectsFixture;
+    @Autowired com.aiconnect.llmgateway.repository.InferenceNodeRepository runtimeNodesFixture;
     @Autowired ModelDeploymentRepository deployments;
     @Autowired LlmServiceRepository services;
     @Autowired ServiceTargetRepository targets;
@@ -53,7 +57,7 @@ class StreamingQuotaIntegrationTest {
             quotas.save(new ProjectQuota(project.getId(), 1, null));
             InferenceNode node = nodes.save(new InferenceNode(organization.getId(), "quota-runtime", null, "DIRECT", null));
             RuntimeEndpoint endpoint = new RuntimeEndpoint(node.getId(), RuntimeType.LM_STUDIO, "http://127.0.0.1:" + runtime.getAddress().getPort(), null);
-            endpoint.recordHealth(true); endpoint = endpoints.save(endpoint);
+            endpoint.recordHealth(true); endpoint = RuntimeTestTrust.internal(endpoints, runtimeTrustFixture, runtimeApprovalFixture, runtimeProjectsFixture, runtimeNodesFixture, endpoint);
             ModelDeployment deployment = deployments.save(new ModelDeployment(endpoint.getId(), "quota-model", "Quota", null, null, 8192, true, 1, "[]"));
             LlmService service = services.save(new LlmService(organization.getId(), "quota-stream", "Quota Stream",
                     FailoverPolicy.STRICT, RetryPolicy.SAFE, false, "[]", java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO));

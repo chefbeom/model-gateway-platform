@@ -64,7 +64,7 @@ public class SpendQuotaAdminController {
         UUID scopeId = request.scopeId() == null && scope == SpendQuotaScope.ORGANIZATION ? organizationId : request.scopeId();
         validateScope(organizationId, scope, scopeId);
         SpendQuota quota = quotas.save(new SpendQuota(organizationId, scope, scopeId, request.name(),
-                request.currency(), request.limitAmount(), request.period(), request.enabled() == null || request.enabled()));
+                request.currency(), request.limitAmount(), request.period(), request.enabled() == null || request.enabled(), true));
         return QuotaView.from(quota);
     }
 
@@ -247,19 +247,25 @@ public class SpendQuotaAdminController {
                               @DecimalMin("0.0") BigDecimal limitAmount, SpendQuotaPeriod period, Boolean enabled) { }
     public record QuotaView(UUID id, UUID organizationId, SpendQuotaScope scopeType, UUID scopeId, String name,
                             Currency currency, BigDecimal limitAmount, SpendQuotaPeriod period, boolean enabled,
-                            Instant createdAt, Instant updatedAt, BigDecimal usedAmount, BigDecimal usagePercent,
-                            boolean exceeded, String scopeLabel, LocalDate periodFrom, LocalDate periodTo) {
-        static QuotaView from(SpendQuota quota) {
+                            boolean adminCeiling, Instant createdAt, Instant updatedAt, BigDecimal usedAmount,
+                            BigDecimal usagePercent, boolean exceeded, String scopeLabel, LocalDate periodFrom,
+                            LocalDate periodTo) {
+        public static QuotaView from(SpendQuota quota) {
             return from(quota, new UsageBucket(), quota.getScopeType().name());
         }
-        static QuotaView from(SpendQuota quota, UsageBucket usage, String scopeLabel) {
-            BigDecimal used = usage.costByCurrency.getOrDefault(quota.getCurrency().name(), BigDecimal.ZERO);
+        public static QuotaView from(SpendQuota quota, BigDecimal usedAmount, String scopeLabel) {
+            BigDecimal used = usedAmount == null ? BigDecimal.ZERO : usedAmount;
             BigDecimal percent = quota.getLimitAmount().signum() == 0 ? BigDecimal.ZERO
                     : used.multiply(BigDecimal.valueOf(100)).divide(quota.getLimitAmount(), 4, java.math.RoundingMode.HALF_UP);
             boolean over = used.compareTo(quota.getLimitAmount()) >= 0;
             return new QuotaView(quota.getId(), quota.getOrganizationId(), quota.getScopeType(), quota.getScopeId(), quota.getName(),
-                    quota.getCurrency(), quota.getLimitAmount(), quota.getPeriod(), quota.isEnabled(), quota.getCreatedAt(), quota.getUpdatedAt(),
-                    used, percent, over, scopeLabel, quotaPeriodFrom(quota.getPeriod()), quotaPeriodTo());
+                    quota.getCurrency(), quota.getLimitAmount(), quota.getPeriod(), quota.isEnabled(), quota.isAdminCeiling(),
+                    quota.getCreatedAt(), quota.getUpdatedAt(), used, percent, over, scopeLabel,
+                    quotaPeriodFrom(quota.getPeriod()), quotaPeriodTo());
+        }
+        static QuotaView from(SpendQuota quota, UsageBucket usage, String scopeLabel) {
+            BigDecimal used = usage.costByCurrency.getOrDefault(quota.getCurrency().name(), BigDecimal.ZERO);
+            return from(quota, used, scopeLabel);
         }
     }
 

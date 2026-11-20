@@ -3,12 +3,17 @@ package com.aiconnect.llmgateway.dataprotection;
 import com.aiconnect.llmgateway.domain.ApiKey;
 import com.aiconnect.llmgateway.domain.LlmService;
 import com.aiconnect.llmgateway.domain.Project;
+import com.aiconnect.llmgateway.identity.AuthPrincipal;
+import com.aiconnect.llmgateway.identity.CurrentActor;
 import com.aiconnect.llmgateway.repository.ApiKeyRepository;
 import com.aiconnect.llmgateway.repository.LlmServiceRepository;
 import com.aiconnect.llmgateway.repository.ProjectRepository;
+import com.aiconnect.llmgateway.team.TeamAccessService;
 import com.aiconnect.llmgateway.web.ApiException;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Size;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -17,6 +22,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -29,6 +35,8 @@ public class DataProtectionPolicyController {
     private final ProjectRepository projects;
     private final ApiKeyRepository apiKeys;
     private final LlmServiceRepository services;
+    @Autowired(required = false)
+    private TeamAccessService access;
 
     public DataProtectionPolicyController(DataProtectionPolicyService policyService,
                                           ProjectRepository projects, ApiKeyRepository apiKeys,
@@ -58,10 +66,14 @@ public class DataProtectionPolicyController {
     }
 
     @PutMapping("/projects/{projectId}/data-protection")
-    public PolicyView setProject(@PathVariable UUID projectId, @Valid @RequestBody PolicyRequest request) {
+    public PolicyView setProject(@PathVariable UUID projectId, @Valid @RequestBody PolicyRequest request, HttpServletRequest http) {
         Project project = loadProject(projectId);
-        return PolicyView.from(policyService.save(project.getOrganizationId(), DataProtectionScopeType.PROJECT,
-                projectId, values(request, policyService.stored(project.getOrganizationId(), DataProtectionScopeType.PROJECT, projectId))));
+        DataProtectionPolicyService.PolicyValues next = values(request,
+                policyService.stored(project.getOrganizationId(), DataProtectionScopeType.PROJECT, projectId));
+        if (!isOrganizationOrPlatformAdmin(http, project.getOrganizationId())) {
+            policyService.assertNotRelaxingUpperPolicy(upperPolicies(project.getOrganizationId(), null), next);
+        }
+        return PolicyView.from(policyService.save(project.getOrganizationId(), DataProtectionScopeType.PROJECT, projectId, next));
     }
 
     @GetMapping("/projects/{projectId}/api-keys/{apiKeyId}/data-protection")
@@ -73,11 +85,15 @@ public class DataProtectionPolicyController {
 
     @PutMapping("/projects/{projectId}/api-keys/{apiKeyId}/data-protection")
     public PolicyView setApiKey(@PathVariable UUID projectId, @PathVariable UUID apiKeyId,
-                                @Valid @RequestBody PolicyRequest request) {
+                                @Valid @RequestBody PolicyRequest request, HttpServletRequest http) {
         ApiKey key = key(projectId, apiKeyId);
         Project project = loadProject(projectId);
-        return PolicyView.from(policyService.save(project.getOrganizationId(), DataProtectionScopeType.API_KEY,
-                key.getId(), values(request, policyService.stored(project.getOrganizationId(), DataProtectionScopeType.API_KEY, key.getId()))));
+        DataProtectionPolicyService.PolicyValues next = values(request,
+                policyService.stored(project.getOrganizationId(), DataProtectionScopeType.API_KEY, key.getId()));
+        if (!isOrganizationOrPlatformAdmin(http, project.getOrganizationId())) {
+            policyService.assertNotRelaxingUpperPolicy(upperPolicies(project.getOrganizationId(), projectId), next);
+        }
+        return PolicyView.from(policyService.save(project.getOrganizationId(), DataProtectionScopeType.API_KEY, key.getId(), next));
     }
 
     @GetMapping("/services/{serviceId}/data-protection")
@@ -103,6 +119,26 @@ public class DataProtectionPolicyController {
     public PolicyView setPlatform(@Valid @RequestBody PolicyRequest request) {
         return PolicyView.from(policyService.save(null, DataProtectionScopeType.PLATFORM, null,
                 values(request, policyService.stored(null, DataProtectionScopeType.PLATFORM, null))));
+    }
+
+    private boolean isOrganizationOrPlatformAdmin(HttpServletRequest http, UUID organizationId) {
+        if (http != null && Boolean.TRUE.equals(http.getAttribute("aiconnect.platform-admin"))) {
+            return true;
+        }
+        AuthPrincipal actor = CurrentActor.principal().orElse(null);
+        return actor != null && (actor.platformAdmin() || (access != null && access.isOrganizationAdmin(actor, organizationId)));
+    }
+
+    private List<DataProtectionPolicy> upperPolicies(UUID organizationId, UUID projectId) {
+        List<DataProtectionPolicy> applicable = new ArrayList<>();
+        policyService.stored(null, DataProtectionScopeType.PLATFORM, null).ifPresent(applicable::add);
+        if (organizationId != null) {
+            policyService.stored(organizationId, DataProtectionScopeType.ORGANIZATION, organizationId).ifPresent(applicable::add);
+            if (projectId != null) {
+                policyService.stored(organizationId, DataProtectionScopeType.PROJECT, projectId).ifPresent(applicable::add);
+            }
+        }
+        return applicable;
     }
 
     private EffectiveDataProtectionPolicy effective(UUID organizationId) {

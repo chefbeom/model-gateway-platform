@@ -1,6 +1,7 @@
 package com.aiconnect.llmgateway.admin;
 
 import com.aiconnect.llmgateway.domain.ApiKey;
+import com.aiconnect.llmgateway.domain.DataBoundaryPolicy;
 import com.aiconnect.llmgateway.domain.LlmService;
 import com.aiconnect.llmgateway.domain.Project;
 import com.aiconnect.llmgateway.domain.ProjectServiceAccess;
@@ -51,29 +52,81 @@ public class ProjectLifecycleService {
 
     @Transactional
     public ProjectView update(UUID projectId, String name, UUID teamId, Boolean externalAiBlocked) {
-        return update(projectId, name, teamId, externalAiBlocked, true);
+        return update(projectId, name, teamId, externalAiBlocked, null, null, true);
     }
 
     @Transactional
     public ProjectView update(UUID projectId, String name, UUID teamId, Boolean externalAiBlocked, boolean mayClearBoundary) {
+        return update(projectId, name, teamId, externalAiBlocked, null, null, mayClearBoundary);
+    }
+
+    @Transactional
+    public ProjectView update(UUID projectId, String name, UUID teamId, Boolean externalAiBlocked,
+                              DataBoundaryPolicy dataBoundaryPolicy, DataBoundaryPolicy maxDataBoundaryPolicy,
+                              boolean mayClearBoundary) {
         Project project = entityManager.find(Project.class, projectId, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
         if (project == null) throw new ApiException(HttpStatus.NOT_FOUND, "PROJECT_NOT_FOUND", "The project does not exist.");
-        if (!mayClearBoundary && project.isExternalAiBlocked() && Boolean.FALSE.equals(externalAiBlocked))
-            throw new ApiException(HttpStatus.FORBIDDEN, "ORGANIZATION_ADMIN_REQUIRED", "Only an organization administrator may disable the external AI boundary.");
+
+        DataBoundaryPolicy currentCeiling = project.getMaxDataBoundaryPolicy();
+        DataBoundaryPolicy currentEffective = project.effectiveDataBoundaryPolicy();
+
+        if (!mayClearBoundary) {
+            if (maxDataBoundaryPolicy != null && maxDataBoundaryPolicy != currentCeiling) {
+                throw new ApiException(HttpStatus.FORBIDDEN, "DATA_BOUNDARY_RELAXATION_DENIED",
+                        "Only an organization or platform administrator may change the project maximum data boundary ceiling.");
+            }
+            if (dataBoundaryPolicy != null && dataBoundaryPolicy.exceeds(currentCeiling)) {
+                throw new ApiException(HttpStatus.FORBIDDEN, "DATA_BOUNDARY_RELAXATION_DENIED",
+                        "Project data boundary cannot exceed the administrator ceiling.");
+            }
+            if (project.isExternalAiBlocked()
+                    && ((dataBoundaryPolicy == null && Boolean.FALSE.equals(externalAiBlocked))
+                    || (dataBoundaryPolicy != null && dataBoundaryPolicy != DataBoundaryPolicy.INTERNAL_ONLY))) {
+                throw new ApiException(HttpStatus.FORBIDDEN, "DATA_BOUNDARY_RELAXATION_DENIED",
+                        "Only an organization administrator may disable the external AI boundary.");
+            }
+        }
+
+        DataBoundaryPolicy nextCeiling = currentCeiling;
+        DataBoundaryPolicy nextPolicy = currentEffective;
+
+        if (maxDataBoundaryPolicy != null) {
+            nextCeiling = maxDataBoundaryPolicy;
+        } else if (mayClearBoundary && Boolean.FALSE.equals(externalAiBlocked) && dataBoundaryPolicy == null
+                && currentCeiling == DataBoundaryPolicy.INTERNAL_ONLY) {
+            nextCeiling = DataBoundaryPolicy.EXTERNAL_ALLOWED;
+        } else if (mayClearBoundary && dataBoundaryPolicy != null && dataBoundaryPolicy.exceeds(nextCeiling)) {
+            nextCeiling = dataBoundaryPolicy;
+        } else if (mayClearBoundary && Boolean.TRUE.equals(externalAiBlocked) && dataBoundaryPolicy == null) {
+            nextCeiling = DataBoundaryPolicy.INTERNAL_ONLY;
+        }
+
+        if (dataBoundaryPolicy != null) {
+            if (dataBoundaryPolicy.exceeds(nextCeiling)) {
+                throw new ApiException(HttpStatus.FORBIDDEN, "DATA_BOUNDARY_RELAXATION_DENIED",
+                        "Project data boundary cannot exceed maxDataBoundaryPolicy.");
+            }
+            nextPolicy = dataBoundaryPolicy;
+        } else if (Boolean.TRUE.equals(externalAiBlocked)) {
+            nextPolicy = DataBoundaryPolicy.INTERNAL_ONLY;
+        } else if (Boolean.FALSE.equals(externalAiBlocked)) {
+            nextPolicy = nextCeiling;
+        }
+
+        if (nextPolicy.exceeds(nextCeiling)) {
+            nextPolicy = nextCeiling;
+        }
+
         String normalizedName = name.trim();
         if (teamId != null) requireTeam(project.getOrganizationId(), teamId);
-        // An older client omitting the new field must never clear a security boundary.
-        boolean blocked = externalAiBlocked == null ? project.isExternalAiBlocked() : externalAiBlocked;
-        entityManager.createQuery("update Project p set p.name = :name, p.teamId = :teamId, p.externalAiBlocked = :blocked where p.id = :projectId")
-                .setParameter("name", normalizedName)
-                .setParameter("teamId", teamId)
-                .setParameter("blocked", blocked)
-                .setParameter("projectId", projectId)
-                .executeUpdate();
-        entityManager.clear();
-        Project updated = requireProject(projectId);
+        project.updateMetadata(normalizedName, teamId);
+        project.configureDataBoundaryPolicy(nextPolicy, nextCeiling);
+        Project updated = projects.saveAndFlush(project);
         audit.record(updated.getOrganizationId(), CurrentActor.userIdOrNull(), "PROJECT_UPDATED", "PROJECT", projectId,
-                Map.of("name", normalizedName, "teamId", String.valueOf(teamId), "externalAiBlocked", blocked));
+                Map.of("name", normalizedName, "teamId", String.valueOf(teamId),
+                        "externalAiBlocked", updated.isExternalAiBlocked(),
+                        "dataBoundaryPolicy", updated.getDataBoundaryPolicy().name(),
+                        "maxDataBoundaryPolicy", updated.getMaxDataBoundaryPolicy().name()));
         return ProjectView.from(updated);
     }
 
@@ -138,8 +191,14 @@ public class ProjectLifecycleService {
         }
     }
 
-    public record ProjectView(UUID id, UUID organizationId, UUID teamId, String name, String status, boolean externalAiBlocked) {
-        static ProjectView from(Project project) { return new ProjectView(project.getId(), project.getOrganizationId(), project.getTeamId(), project.getName(), project.getStatus(), project.isExternalAiBlocked()); }
+    public record ProjectView(UUID id, UUID organizationId, UUID teamId, String name, String status,
+                              boolean externalAiBlocked, DataBoundaryPolicy dataBoundaryPolicy,
+                              DataBoundaryPolicy maxDataBoundaryPolicy) {
+        static ProjectView from(Project project) {
+            return new ProjectView(project.getId(), project.getOrganizationId(), project.getTeamId(),
+                    project.getName(), project.getStatus(), project.isExternalAiBlocked(),
+                    project.getDataBoundaryPolicy(), project.getMaxDataBoundaryPolicy());
+        }
     }
     public record ApiKeyReference(UUID id, String name, String keyPrefix, String status) {
         static ApiKeyReference from(ApiKey key) { return new ApiKeyReference(key.getId(), key.getName(), key.getKeyPrefix(), key.getStatus().name()); }

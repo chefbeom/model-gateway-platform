@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
 import jakarta.servlet.http.HttpServletRequest;
+import com.aiconnect.llmgateway.domain.DataBoundaryPolicy;
 import com.aiconnect.llmgateway.identity.CurrentActor;
 import com.aiconnect.llmgateway.team.TeamAccessService;
 import com.aiconnect.llmgateway.repository.ProjectRepository;
@@ -36,7 +37,8 @@ public class ProjectLifecycleController {
     public ProjectLifecycleService.ProjectView update(@PathVariable UUID projectId, @Valid @RequestBody UpdateProject request, HttpServletRequest http) {
         boolean platform = Boolean.TRUE.equals(http.getAttribute("aiconnect.platform-admin"));
         boolean orgAdmin = projects.findById(projectId).map(project -> access.isOrganizationAdmin(CurrentActor.principal().orElse(null), project.getOrganizationId())).orElse(false);
-        return lifecycle.update(projectId, request.name(), request.teamId(), request.externalAiBlocked(), platform || orgAdmin);
+        return lifecycle.update(projectId, request.name(), request.teamId(), request.externalAiBlocked(),
+                request.dataBoundaryPolicy(), request.maxDataBoundaryPolicy(), platform || orgAdmin);
     }
 
     /** POST intentionally requires project-management permission; it does not mutate data. */
@@ -51,5 +53,10 @@ public class ProjectLifecycleController {
         lifecycle.delete(projectId);
     }
 
-    public record UpdateProject(@NotBlank @Size(max = 120) String name, UUID teamId, Boolean externalAiBlocked) { }
+    public record UpdateProject(@NotBlank @Size(max = 120) String name, UUID teamId, Boolean externalAiBlocked,
+                                DataBoundaryPolicy dataBoundaryPolicy, DataBoundaryPolicy maxDataBoundaryPolicy) {
+        public UpdateProject(String name, UUID teamId, Boolean externalAiBlocked) {
+            this(name, teamId, externalAiBlocked, null, null);
+        }
+    }
 }
