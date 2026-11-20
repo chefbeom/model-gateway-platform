@@ -1,0 +1,19 @@
+# Temporary one-IP rehearsal only. The production public ingress requires a
+# separately reviewed service and full authentication and recovery testing.
+[Unit]
+Description=AIConnect IP-limited public HTTPS rehearsal
+Requires=docker.service aiconnect-public-firewall.service
+After=network-online.target docker.service aiconnect-public-firewall.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStartPre=/usr/sbin/nft list table inet aiconnect_public_guard
+ExecStart=/usr/bin/docker start --attach aiconnect-public-limited
+ExecStop=/usr/bin/docker stop --time 10 aiconnect-public-limited
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

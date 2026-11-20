@@ -110,6 +110,21 @@ jobs:
         run: docker compose -f docker-compose.yml -f docker-compose.tls.yml config -q
       - name: Validate HA Compose contract
         run: docker compose -f deploy/ha/docker-compose.yml config -q
+      - name: Test public ingress guard renderers
+        working-directory: deploy/ha
+        run: |
+          python3 -m unittest -v test_render_cloudflare_realip test_render_public_nft
+          bash -n public-firewall-refresh.sh
+          sudo apt-get update -qq
+          sudo apt-get install -y nftables iproute2
+          sudo bash test_public_firewall_netns.sh
+      - name: Validate loopback-only public staging overlay
+        env:
+          AICONNECT_CF_REALIP_CONF: ./public-nginx.conf
+          AICONNECT_ORIGIN_CERT: ./public-nginx.conf
+          AICONNECT_ORIGIN_KEY: ./public-nginx.conf
+          AICONNECT_AOP_CA_CERT: ./public-nginx.conf
+        run: docker compose -f deploy/ha/docker-compose.yml -f deploy/ha/docker-compose.public-staging.yml config -q
       - name: Validate opt-in beta ingress contract
         env:
           AICONNECT_BETA_INGRESS_TOKEN: ci-beta-ingress-config-test-only-00000000

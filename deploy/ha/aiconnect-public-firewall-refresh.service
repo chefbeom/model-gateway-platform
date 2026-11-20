@@ -1,0 +1,8 @@
+[Unit]
+Description=Refresh AIConnect Cloudflare HTTPS source ranges
+After=network-online.target aiconnect-public-firewall.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/aiconnect-public/public-firewall-refresh.sh

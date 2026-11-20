@@ -1,0 +1,13 @@
+[Unit]
+Description=AIConnect Cloudflare-only HTTPS firewall
+Wants=network-online.target
+After=network-online.target
+Before=aiconnect-public-ingress.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/aiconnect-public/public-firewall-refresh.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

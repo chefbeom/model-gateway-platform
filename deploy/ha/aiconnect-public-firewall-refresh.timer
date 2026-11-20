@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh AIConnect Cloudflare source ranges daily
+
+[Timer]
+OnBootSec=15min
+OnCalendar=daily
+Persistent=true
+Unit=aiconnect-public-firewall-refresh.service
+
+[Install]
+WantedBy=timers.target
