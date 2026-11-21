@@ -27,6 +27,7 @@ type PlatformApiKey = { id: string; projectId: string; projectName: string; orga
 type TeamRole = 'TEAM_ADMIN' | 'PROJECT_OWNER' | 'DEVELOPER' | 'AUDITOR'
 
 const props = defineProps<Props>()
+const emit = defineEmits<{ organizationsChanged: [preferred?: string] }>()
 const overview = ref<Overview | null>(null)
 const organizations = ref<Organization[]>([])
 const users = ref<PlatformUser[]>([])
@@ -49,6 +50,22 @@ const userConfirmation = ref('')
 const selectedUser = ref<PlatformUser | null>(null)
 const selectedTeam = ref<PlatformTeam | null>(null)
 const teamConfirmation = ref('')
+const orgCreateOpen = ref(false)
+const newOrgName = ref('')
+const organizationCard = ref<HTMLElement | null>(null)
+
+async function createOrganization() {
+  if (!newOrgName.value.trim()) return
+  busy.value = true
+  try {
+    const created = await adminFetch<{ id: string }>('/api/admin/organizations', props.auth, { method: 'POST', body: JSON.stringify({ name: newOrgName.value.trim() }) })
+    orgCreateOpen.value = false
+    newOrgName.value = ''
+    emit('organizationsChanged', created.id)
+    await load()
+    message.value = '조직을 생성했습니다.'
+  } catch (error) { showError(error, '조직 생성에 실패했습니다.') } finally { busy.value = false }
+}
 
 const inviteForm = ref({
   targetTier: 'PROJECT_DIRECTOR' as 'PROJECT_DIRECTOR' | 'GENERAL_USER',
@@ -283,6 +300,7 @@ async function setOrganizationStatus(item: Organization) {
   busy.value = true
   try {
     await adminFetch(`/api/admin/platform/organizations/${item.id}/${item.status === 'SUSPENDED' ? 'restore' : 'suspend'}`, props.auth, { method: 'POST' })
+    emit('organizationsChanged')
     await load()
     message.value = item.status === 'SUSPENDED' ? '조직을 복구했습니다.' : '조직을 일시 중지했습니다.'
   } catch (error) {
@@ -312,6 +330,7 @@ async function deleteOrganization() {
   busy.value = true
   try {
     await adminFetch(`/api/admin/platform/organizations/${cleanup.value.organizationId}?confirmation=${encodeURIComponent(orgConfirmation.value)}&purgeHistory=true`, props.auth, { method: 'DELETE' })
+    emit('organizationsChanged')
     deleteOpen.value = false
     cleanup.value = null
     await load()
@@ -402,6 +421,7 @@ onMounted(() => void load())
       </div>
       <div class="hero-actions">
         <span class="status-chip healthy"><i></i>시스템 관리자</span>
+        <button class="secondary-button" @click="organizationCard?.scrollIntoView({ behavior: 'smooth', block: 'start' })">조직 관리</button>
         <button class="secondary-button" :disabled="busy" @click="load">새로고침</button>
       </div>
     </div>
@@ -619,8 +639,8 @@ onMounted(() => void load())
       </div>
     </article>
 
-    <article class="surface-card">
-      <header class="card-header"><div><span class="card-kicker">ORGANIZATIONS</span><h2>조직·워크스페이스 관리</h2></div><span class="count-badge">{{ organizations.length }}</span></header>
+    <article ref="organizationCard" class="surface-card">
+      <header class="card-header"><div><span class="card-kicker">ORGANIZATIONS</span><h2>조직·워크스페이스 관리</h2></div><div class="hero-actions"><span class="count-badge">{{ organizations.length }}</span><button class="primary-button" @click="orgCreateOpen = true">+ 조직</button></div></header>
       <div class="data-table-wrap">
         <table class="data-table platform-table">
           <thead><tr><th>조직</th><th>상태</th><th>리소스</th><th>멤버</th><th>관리</th></tr></thead>
@@ -672,6 +692,7 @@ onMounted(() => void load())
 
     <article class="surface-card"><header class="card-header"><div><span class="card-kicker">API KEYS</span><h2>전체 API 키 정리</h2><p class="card-subtitle">원문은 표시하지 않고 prefix·소속·상태만 관리합니다.</p></div><span class="count-badge">{{ apiKeys.length }}</span></header><div class="data-table-wrap"><table class="data-table platform-table"><thead><tr><th>키</th><th>조직·프로젝트</th><th>상태</th><th>최근 사용</th><th>관리</th></tr></thead><tbody><tr v-for="key in apiKeys" :key="key.id"><td><strong>{{ key.name }}</strong><small>{{ key.keyPrefix }} · 생성 {{ date(key.createdAt) }}</small></td><td><strong>{{ key.organizationName }}</strong><small>{{ key.projectName }}</small></td><td><span class="status-chip tiny" :class="key.status === 'ACTIVE' ? 'healthy' : 'draining'"><i></i>{{ key.status }}</span></td><td>{{ date(key.lastUsedAt) }}</td><td><button class="text-button danger-text" @click="deleteApiKey(key)">영구 삭제</button></td></tr><tr v-if="!apiKeys.length"><td colspan="5" class="table-empty">API 키가 없습니다.</td></tr></tbody></table></div></article>
 
+    <BaseModal :open="orgCreateOpen" title="새 조직" description="회사 또는 독립 운영 단위를 만듭니다." size="sm" @close="orgCreateOpen = false"><label class="field">조직 이름<input v-model.trim="newOrgName" maxlength="120" /></label><template #footer><button class="secondary-button" @click="orgCreateOpen = false">취소</button><button class="primary-button" :disabled="busy || !newOrgName.trim()" @click="createOrganization">조직 생성</button></template></BaseModal>
     <BaseModal :open="teamDeleteOpen" title="팀·부서 영구 삭제" description="팀 이름을 입력해야 삭제됩니다. 연결 프로젝트는 중지되고 해당 프로젝트 API 키가 폐기됩니다." size="sm" @close="teamDeleteOpen=false"><div v-if="selectedTeam" class="modal-form"><div class="delete-summary danger-alert"><strong>{{ selectedTeam.name }}</strong><p>{{ selectedTeam.organizationName }} · 연결 프로젝트 {{ selectedTeam.projectCount }}개</p></div><label class="field">확인 입력<input v-model.trim="teamConfirmation" :placeholder="selectedTeam.name" /></label></div><template #footer><button class="secondary-button" @click="teamDeleteOpen=false">취소</button><button class="danger-button primary-button" :disabled="busy || !selectedTeam || teamConfirmation !== selectedTeam.name" @click="deleteTeam">팀 삭제</button></template></BaseModal>
     <BaseModal :open="cleanupOpen" title="조직 정리 범위" description="삭제 전 연결된 리소스와 요청 이력을 확인합니다." size="sm" @close="cleanupOpen=false"><div v-if="cleanup" class="platform-preview"><strong>{{ cleanup.name }}</strong><p>상태: {{ cleanup.status }}</p><div class="preview-grid"><span>프로젝트 <b>{{ cleanup.projectCount }}</b></span><span>Provider <b>{{ cleanup.providerCount }}</b></span><span>Node <b>{{ cleanup.nodeCount }}</b></span><span>Endpoint <b>{{ cleanup.endpointCount }}</b></span><span>멤버 <b>{{ cleanup.memberCount }}</b></span><span>요청 이력 <b>{{ cleanup.requestCount }}</b></span></div><p class="danger-alert">{{ cleanup.behavior }}</p></div><template #footer><button class="secondary-button" @click="cleanupOpen=false">닫기</button><button class="danger-button primary-button" @click="openDelete">영구 삭제</button></template></BaseModal>
     <BaseModal :open="deleteOpen" title="조직 영구 삭제" description="되돌릴 수 없습니다. 조직 이름을 정확히 입력해야 합니다." size="sm" @close="deleteOpen=false"><div v-if="cleanup" class="modal-form"><div class="delete-summary danger-alert"><strong>{{ cleanup.name }}</strong><p>프로젝트, Runtime, 외부 Provider, 팀·멤버십과 요청 이력을 모두 삭제합니다.</p></div><label class="field">확인 입력<input v-model.trim="orgConfirmation" :placeholder="cleanup.name" /></label></div><template #footer><button class="secondary-button" @click="deleteOpen=false">취소</button><button class="danger-button primary-button" :disabled="busy || !cleanup || orgConfirmation !== cleanup.name" @click="deleteOrganization">조직 삭제</button></template></BaseModal>

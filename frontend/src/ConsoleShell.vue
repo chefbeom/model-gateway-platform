@@ -54,8 +54,8 @@ const adminNavItems: NavItem[] = [
   { id: 'system', label: '시스템 구조', description: '요청 경로 · Target · 서버 연결 상태', keywords: '시스템 구조 연결도 상태 architecture structure topology infrastructure provider llm team project api key', icon: '~', group: 'Operations' },
   { id: 'external', label: '외부 AI', description: 'OpenAI·승인·수동·자동 Failover', keywords: 'openai external provider cloud approval failover', icon: '◎', group: '운영' },
   { id: 'services', label: 'LLM 서비스', description: '논리 모델과 라우팅 정책', keywords: 'service model failover routing', icon: '▣', group: '운영' },
-  { id: 'teams', label: '팀과 부서', description: '부서·역할·프로젝트 소유', keywords: 'team department role audit', icon: '⌘', group: '개발자 도구' },
-  { id: 'projects', label: '프로젝트 & API 키', description: '프로젝트·권한·API 키', keywords: 'project key quota credential', icon: '⌘', group: '개발자 도구' },
+  { id: 'teams', label: '팀과 부서', description: '부서·역할·프로젝트 소유', keywords: 'team department role audit', icon: '⌘', group: '워크스페이스 관리' },
+  { id: 'projects', label: '프로젝트', description: '프로젝트·권한·API 키', keywords: 'project key quota credential', icon: '⌘', group: '워크스페이스 관리' },
   { id: 'observability', label: '관측성', description: '요청·장애·Failover 추적', keywords: 'request incident failover monitor', icon: '◉', group: '관측' },
   { id: 'usage', label: '사용량', description: '토큰·비용·API 호출 이력', keywords: 'usage token cost billing', icon: '◴', group: '관측' },
   { id: 'notifications', label: '알림 채널', description: 'Discord와 Telegram 연동', keywords: 'notification discord telegram alert', icon: '◇', group: '시스템' },
@@ -66,9 +66,9 @@ const adminNavItems: NavItem[] = [
   { id: 'model-playground', label: '모델 테스트 콘솔', description: '등록된 Runtime·Provider 모델 직접 대화 테스트', keywords: 'model playground chat runtime provider streaming file test', icon: '◈', group: '개발자 도구' }
 ]
 const directorNavItems: NavItem[] = [
-  { id: 'projects', label: '프로젝트 & API 키', description: '프로젝트·멤버·권한·API 키', keywords: 'project key member delegation policy', icon: '⌘', group: '프로젝트 관리' },
-  { id: 'quotas', label: '요금·한도', description: '프로젝트 예산과 관리자 상한', keywords: 'budget quota limit spend cost ceiling', icon: '₩', group: '프로젝트 관리' },
-  { id: 'data-protection', label: '데이터 보호', description: '프로젝트·API 키 민감정보 정책', keywords: 'security privacy dlp pii secret local only', icon: '◇', group: '프로젝트 관리' },
+  { id: 'projects', label: '프로젝트', description: '프로젝트·멤버·권한·API 키', keywords: 'project key member delegation policy', icon: '⌘', group: '워크스페이스 관리' },
+  { id: 'quotas', label: '요금·한도', description: '프로젝트 예산과 관리자 상한', keywords: 'budget quota limit spend cost ceiling', icon: '₩', group: '내 작업' },
+  { id: 'data-protection', label: '데이터 보호', description: '프로젝트·API 키 민감정보 정책', keywords: 'security privacy dlp pii secret local only', icon: '◇', group: '내 작업' },
   { id: 'portal', label: '내 API', description: '프로젝트·사용 모델·API 키', keywords: 'my api project model key', icon: '⌘', group: '내 작업' },
   { id: 'usage', label: 'API 사용량', description: '프로젝트·API 키 토큰·비용 이력', keywords: 'usage token cost request', icon: '◴', group: '내 작업' },
   { id: 'playground', label: 'API 테스트', description: '모델 연결·Chat Completions 테스트', keywords: 'playground api test chat completion models', icon: '▷', group: '내 작업' }
@@ -116,6 +116,7 @@ const inviteForm = ref({
 })
 const inviteModalProjects = ref<AccessibleProject[]>([])
 const issuedAccountInvite = ref<IssuedAccountInvitation | null>(null)
+const lockedInviteProject = ref<{ organizationId: string; projectId: string; projectName: string } | null>(null)
 const playgroundInitialTargetId = ref('')
 
 const selectedMembership = computed(() => memberships.value.find(member => member.organizationId === organizationId.value) ?? null)
@@ -194,6 +195,7 @@ function openModelPlayground(targetId: string) {
   searchOpen.value = false
 }
 function selectOrganization(id: string) {
+  if (id !== organizationId.value && !busy.value) closeAccount()
   organizationId.value = id
   if (id) sessionStorage.setItem('aiconnect.setup.organizationId', id)
   else sessionStorage.removeItem('aiconnect.setup.organizationId')
@@ -221,8 +223,10 @@ async function loadOrganizations(preferred?: string) {
 }
 async function loadAccessibleProjects() {
   if (!organizationId.value || !canInviteAccounts.value) { accessibleProjects.value = []; return }
-  try { accessibleProjects.value = await adminFetch<AccessibleProject[]>(`/api/admin/organizations/${organizationId.value}/projects`, auth.value) }
-  catch { accessibleProjects.value = [] }
+  const orgId = organizationId.value
+  accessibleProjects.value = []
+  try { const items = await adminFetch<AccessibleProject[]>(`/api/admin/organizations/${orgId}/projects`, auth.value); if (orgId === organizationId.value) accessibleProjects.value = items }
+  catch { if (orgId === organizationId.value) accessibleProjects.value = [] }
 }
 function openSearch() { settingsOpen.value = false; userMenuOpen.value = false; searchOpen.value = true; nextTick(() => searchInput.value?.focus()) }
 function saveProfile() {
@@ -241,28 +245,32 @@ async function loadInviteModalProjects(orgId: string) {
   }
   try {
     const loaded = await adminFetch<AccessibleProject[]>(`/api/admin/organizations/${orgId}/projects`, auth.value)
+    if (orgId !== inviteForm.value.organizationId || lockedInviteProject.value) return
     inviteModalProjects.value = loaded
     inviteForm.value.projectId = loaded[0]?.id ?? ''
   } catch {
+    if (orgId !== inviteForm.value.organizationId || lockedInviteProject.value) return
     inviteModalProjects.value = []
     inviteForm.value.projectId = ''
   }
 }
-function openAccount() {
+function closeAccount() { if (busy.value) return; accountOpen.value = false; issuedAccountInvite.value = null; lockedInviteProject.value = null }
+function openAccount(project?: { id: string; name: string }) {
   if (!canInviteAccounts.value) return
   settingsOpen.value = false
   issuedAccountInvite.value = null
   const defaultOrgId = organizationId.value || organizations.value[0]?.id || ''
+  lockedInviteProject.value = project ? { organizationId: defaultOrgId, projectId: project.id, projectName: project.name } : null
   inviteForm.value = {
     targetTier: platformAdmin.value ? 'PROJECT_DIRECTOR' : 'GENERAL_USER',
     organizationId: defaultOrgId,
-    projectId: defaultOrgId === organizationId.value ? (accessibleProjects.value[0]?.id ?? '') : '',
+    projectId: project?.id ?? (defaultOrgId === organizationId.value ? (accessibleProjects.value[0]?.id ?? '') : ''),
     canIssueApiKeys: false,
     expectedEmail: '',
     expiresInHours: 72
   }
   inviteModalProjects.value = defaultOrgId === organizationId.value ? accessibleProjects.value : []
-  if (defaultOrgId && (defaultOrgId !== organizationId.value || !inviteModalProjects.value.length)) {
+  if (!project && defaultOrgId && (defaultOrgId !== organizationId.value || !inviteModalProjects.value.length)) {
     void loadInviteModalProjects(defaultOrgId)
   }
   accountOpen.value = true
@@ -273,7 +281,7 @@ function onInviteModalOrgChange() {
 }
 async function issueQuickAccountInvitation() {
   if (!canInviteAccounts.value) return
-  const targetOrgId = inviteForm.value.organizationId || organizationId.value
+  const targetOrgId = lockedInviteProject.value?.organizationId || inviteForm.value.organizationId || organizationId.value
   if (!targetOrgId) {
     message.value = '초대할 조직을 먼저 선택하세요.'
     return
@@ -291,7 +299,7 @@ async function issueQuickAccountInvitation() {
     const payload = {
       targetTier,
       organizationId: targetOrgId,
-      projectId: inviteForm.value.projectId,
+      projectId: lockedInviteProject.value?.projectId || inviteForm.value.projectId,
       canIssueApiKeys: targetTier === 'PROJECT_DIRECTOR' ? true : Boolean(inviteForm.value.canIssueApiKeys),
       expectedEmail: inviteForm.value.expectedEmail.trim() || null,
       expiresInHours: Math.max(1, Math.min(720, Number(inviteForm.value.expiresInHours) || 72))
@@ -361,7 +369,7 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
     <button v-if="sidebarOpen" class="sidebar-scrim" aria-label="메뉴 닫기" @click="sidebarOpen = false"></button>
     <aside class="sidebar" :class="{ open: sidebarOpen }">
       <div class="sidebar-brand"><span class="brand-mark"><i></i><i></i><i></i></span><span><strong>AICONNECT</strong><small>LLM CONTROL PLANE</small></span></div>
-      <div class="scope-card"><span>WORKSPACE</span><select :value="organizationId" @change="selectOrganization(($event.target as HTMLSelectElement).value)"><option value="">조직 선택</option><option v-for="organization in organizations" :key="organization.id" :value="organization.id">{{ organization.name }} · {{ organization.status }}</option></select><small>{{ currentOrganization?.name ?? '배정된 조직을 선택하세요.' }}</small></div>
+      <div class="scope-card"><span>WORKSPACE</span><select :value="organizationId" :disabled="busy" @change="selectOrganization(($event.target as HTMLSelectElement).value)"><option value="">조직 선택</option><option v-for="organization in organizations" :key="organization.id" :value="organization.id">{{ organization.name }} · {{ organization.status }}</option></select><small>{{ currentOrganization?.name ?? '배정된 조직을 선택하세요.' }}</small></div>
       <nav class="side-nav" aria-label="주요 기능"><section v-for="group in groups" :key="group" class="nav-group"><p>{{ group }}</p><button v-for="item in navItems.filter(nav => nav.group === group)" :key="item.id" :class="{ active: page === item.id }" @click="navigate(item.id)"><span class="nav-icon">{{ item.icon }}</span><span><strong>{{ item.label }}</strong><small>{{ item.description }}</small></span><i></i></button></section></nav>
       <div class="sidebar-support">
         <p>도움말</p>
@@ -380,7 +388,7 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
         <div class="topbar-actions">
           <button class="feature-search" @click="openSearch"><span>⌕</span><em>기능 검색</em><kbd>⌘K</kbd></button>
           <button class="icon-button" :aria-label="theme === 'dark' ? '라이트 모드' : '다크 모드'" @click="emit('toggleTheme')">{{ theme === 'dark' ? '☀' : '◐' }}</button>
-          <div class="settings-wrap"><button class="icon-button settings-trigger" :class="{ active: settingsOpen }" aria-label="설정" @click="settingsOpen = !settingsOpen; userMenuOpen = false">⚙</button><div v-if="settingsOpen" class="settings-popover"><header><span>빠른 설정</span><small>프로필과 환경을 관리합니다.</small></header><button class="setting-action" @click="settingsOpen = false; profileOpen = true"><i>◉</i><span><strong>프로필 설정</strong><small>표시 이름과 현재 계정 확인</small></span><b>›</b></button><button class="setting-action" @click="settingsOpen = false; environmentOpen = true"><i>◐</i><span><strong>환경 설정</strong><small>테마·글자 크기·시각 표시 조절</small></span><b>›</b></button><button v-if="canInviteAccounts" class="setting-action" @click="openAccount"><i>+</i><span><strong>계정 추가</strong><small>초대 코드와 가입 링크 발급</small></span><b>›</b></button></div></div>
+          <div class="settings-wrap"><button class="icon-button settings-trigger" :class="{ active: settingsOpen }" aria-label="설정" @click="settingsOpen = !settingsOpen; userMenuOpen = false">⚙</button><div v-if="settingsOpen" class="settings-popover"><header><span>빠른 설정</span><small>프로필과 환경을 관리합니다.</small></header><button class="setting-action" @click="settingsOpen = false; profileOpen = true"><i>◉</i><span><strong>프로필 설정</strong><small>표시 이름과 현재 계정 확인</small></span><b>›</b></button><button class="setting-action" @click="settingsOpen = false; environmentOpen = true"><i>◐</i><span><strong>환경 설정</strong><small>테마·글자 크기·시각 표시 조절</small></span><b>›</b></button><button v-if="canInviteAccounts" class="setting-action" @click="openAccount()"><i>+</i><span><strong>계정 추가</strong><small>초대 코드와 가입 링크 발급</small></span><b>›</b></button></div></div>
           <div class="user-menu-wrap">
             <button class="user-chip" @click="userMenuOpen = !userMenuOpen; settingsOpen = false">
               <span>{{ profileName.slice(0, 1).toUpperCase() }}</span>
@@ -410,11 +418,11 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
         <ExternalProvidersPage v-else-if="isOrgOrPlatformAdmin && page === 'external'" :organization-id="organizationId" :auth="auth" @open-playground="openModelPlayground" />
         <ServicesPage v-else-if="isOrgOrPlatformAdmin && page === 'services'" :organization-id="organizationId" :auth="auth" />
         <TeamsPage v-else-if="isOrgOrPlatformAdmin && page === 'teams'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" />
-        <ProjectsPage v-else-if="(isOrgOrPlatformAdmin || isProjectDirector) && page === 'projects'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" :org-admin="isOrgOrPlatformAdmin" @organizations-changed="loadOrganizations" @organization-selected="loadOrganizations($event)" />
+        <ProjectsPage v-else-if="(isOrgOrPlatformAdmin || isProjectDirector) && page === 'projects'" :organization-id="organizationId" :organization-name="currentOrganization?.name ?? ''" :current-user-id="user?.id" :auth="auth" :platform-admin="platformAdmin" :org-admin="isOrgOrPlatformAdmin" @invite="openAccount" @open-platform="navigate('platform')" />
         <ObservabilityPage v-else-if="isOrgOrPlatformAdmin && page === 'observability'" :organization-id="organizationId" :auth="auth" />
         <NotificationsPage v-else-if="isOrgOrPlatformAdmin && page === 'notifications'" :organization-id="organizationId" :auth="auth" />
         <AuditLogPage v-else-if="isOrgOrPlatformAdmin && page === 'audit'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" />
-        <PlatformAdminPage v-else-if="platformAdmin && page === 'platform'" :auth="auth" />
+        <PlatformAdminPage v-else-if="platformAdmin && page === 'platform'" :auth="auth" @organizations-changed="loadOrganizations($event)" />
         <BetaOperatorPage v-else-if="page === 'beta' && (platformAdmin || betaOperator)" :auth="auth" :platform-admin="platformAdmin" />
         <UsagePage v-else-if="page === 'usage'" :organization-id="organizationId" :auth="auth" />
         <QuotaPage v-else-if="(isOrgOrPlatformAdmin || isProjectDirector) && page === 'quotas'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" :org-admin="isOrgOrPlatformAdmin" />
@@ -449,7 +457,7 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
       <template #footer><button class="primary-button" @click="environmentOpen = false">확인</button></template>
     </BaseModal>
 
-    <BaseModal v-if="canInviteAccounts" :open="accountOpen" title="계정 초대 코드·링크 발급" description="하위 계정을 직접 생성하지 않고 1회용 초대 코드와 가입 링크를 발급합니다. 가입자는 Google Authenticator 2차 인증을 필수로 등록합니다." @close="accountOpen = false">
+    <BaseModal v-if="canInviteAccounts" :open="accountOpen" title="계정 초대 코드·링크 발급" description="하위 계정을 직접 생성하지 않고 1회용 초대 코드와 가입 링크를 발급합니다. 가입자는 Google Authenticator 2차 인증을 필수로 등록합니다." @close="closeAccount">
       <div class="modal-form">
         <label v-if="platformAdmin" class="field">
           부여 계층
@@ -465,7 +473,7 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
 
         <label v-if="platformAdmin" class="field">
           대상 조직
-          <select v-model="inviteForm.organizationId" @change="onInviteModalOrgChange">
+          <select v-model="inviteForm.organizationId" :disabled="!!lockedInviteProject" @change="onInviteModalOrgChange">
             <option value="">조직 선택</option>
             <option v-for="org in organizations" :key="org.id" :value="org.id">{{ org.name }}</option>
           </select>
@@ -473,9 +481,10 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
 
         <label class="field">
           대상 프로젝트
-          <select v-model="inviteForm.projectId">
+          <select v-model="inviteForm.projectId" :disabled="!!lockedInviteProject">
             <option value="">프로젝트 선택</option>
-            <option v-for="project in inviteModalProjects" :key="project.id" :value="project.id">{{ project.name }} · {{ project.status }}</option>
+            <option v-if="lockedInviteProject" :value="lockedInviteProject.projectId">{{ lockedInviteProject.projectName }}</option>
+            <option v-for="project in lockedInviteProject ? [] : inviteModalProjects" :key="project.id" :value="project.id">{{ project.name }} · {{ project.status }}</option>
           </select>
         </label>
 
@@ -517,7 +526,7 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
       </div>
       <template #footer>
         <button class="ghost-button" type="button" @click="openInvitationManagementPage">초대 이력·사용자 관리</button>
-        <button class="secondary-button" type="button" @click="accountOpen = false">닫기</button>
+        <button class="secondary-button" type="button" @click="closeAccount">닫기</button>
         <button class="primary-button" type="button" :disabled="busy || (!inviteForm.organizationId && !organizationId) || !inviteForm.projectId" @click="issueQuickAccountInvitation">초대 코드/링크 발급</button>
       </template>
     </BaseModal>

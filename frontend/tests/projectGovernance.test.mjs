@@ -267,7 +267,7 @@ test('ConsoleShell hides org-only nav from PROJECT_DIRECTOR/GENERAL_USER and qui
     '\\./SystemStructurePage\\.vue': emptyComponentStub('SystemStructurePage'),
     '\\./ExternalProvidersPage\\.vue': emptyComponentStub('ExternalProvidersPage'),
     '\\./ServicesPage\\.vue': emptyComponentStub('ServicesPage'),
-    '\\./ProjectsPage\\.vue': emptyComponentStub('ProjectsPage'),
+    '\\./ProjectsPage\\.vue': stubModuleUrl(`export default defineComponent({ name: 'ProjectsPage', emits: ['invite'], setup(_, { emit }) { return () => h('button', { 'data-context-invite': true, onClick: () => emit('invite', { id: 'p-2', name: 'Other Project' }) }, 'Context invite') } })`),
     '\\./TeamsPage\\.vue': emptyComponentStub('TeamsPage'),
     '\\./ObservabilityPage\\.vue': emptyComponentStub('ObservabilityPage'),
     '\\./NotificationsPage\\.vue': emptyComponentStub('NotificationsPage'),
@@ -293,7 +293,7 @@ test('ConsoleShell hides org-only nav from PROJECT_DIRECTOR/GENERAL_USER and qui
       }
       if (url === '/api/beta/operator/services') return okJson([])
       if (url === '/api/admin/organizations') return okJson([{ id: 'org-1', name: 'Calen', status: 'ACTIVE' }])
-      if (url === '/api/admin/organizations/org-1/projects') return okJson([{ id: 'p-1', name: 'Docs AI', status: 'ACTIVE' }])
+      if (url === '/api/admin/organizations/org-1/projects') return okJson([{ id: 'p-1', name: 'Docs AI', status: 'ACTIVE' }, { id: 'p-2', name: 'Other Project', status: 'ACTIVE' }])
       if (url === '/api/admin/organizations/org-1/account-invitations' && method === 'POST') {
         return okJson({ id: 'inv-1', code: 'CODE-1', registrationPath: '/#register?code=CODE-1', targetTier: 'GENERAL_USER', organizationId: 'org-1', projectId: body.projectId, canIssueApiKeys: body.canIssueApiKeys, expiresAt: '2026-11-30T00:00:00Z' })
       }
@@ -316,7 +316,7 @@ test('ConsoleShell hides org-only nav from PROJECT_DIRECTOR/GENERAL_USER and qui
       assert.equal(calls.some(c => c.url.includes('/teams')), false)
       const sideNav = walk(root, el => el.tag === 'nav')[0]
       const navText = textContent(sideNav)
-      for (const allowed of ['프로젝트 & API 키', '요금·한도', '데이터 보호', '내 API', 'API 사용량', 'API 테스트']) {
+      for (const allowed of ['프로젝트', '요금·한도', '데이터 보호', '내 API', 'API 사용량', 'API 테스트']) {
         assert.ok(navText.includes(allowed), `Missing allowed nav item: ${allowed}`)
       }
       for (const hidden of ['팀과 부서', 'LLM 서비스', '인프라스트럭처', '외부 AI', '모델 테스트 콘솔', 'Platform Admin', '대시보드', '관측성', '알림 채널', '감사 로그', '시스템 구조']) {
@@ -349,6 +349,17 @@ test('ConsoleShell hides org-only nav from PROJECT_DIRECTOR/GENERAL_USER and qui
         && c.body.canIssueApiKeys === true
         && c.body.teamId === undefined
       ))
+      walk(modal, el => el.tag === 'button' && textContent(el) === '닫기')[0].props.onClick()
+      await nextTick()
+      walk(root, el => el.props?.['data-context-invite'])[0].props.onClick()
+      await nextTick()
+      const contextModal = walk(root, el => el.props?.class === 'modal-stub')[0]
+      const contextSelects = walk(contextModal, el => el.tag === 'select')
+      assert.equal(contextSelects[0].props.disabled, true)
+      assert.match(textContent(contextModal), /Other Project/)
+      walk(contextModal, el => el.tag === 'button' && textContent(el).includes('초대 코드/링크 발급'))[0].props.onClick()
+      await flush()
+      assert.equal(calls.filter(c => c.url === '/api/admin/organizations/org-1/account-invitations' && c.method === 'POST').at(-1).body.projectId, 'p-2')
     } finally {
       app.unmount()
     }
@@ -375,7 +386,7 @@ test('ConsoleShell hides org-only nav from PROJECT_DIRECTOR/GENERAL_USER and qui
       app.mount(root)
       await flush()
       const navText = textContent(walk(root, el => el.tag === 'nav')[0])
-      assert.equal(navText.includes('프로젝트 & API 키'), false)
+      assert.equal(walk(walk(root, el => el.tag === 'nav')[0], el => el.tag === 'button' && textContent(el).startsWith('프로젝트')).length, 0)
       assert.equal(navText.includes('요금·한도'), false)
       assert.equal(navText.includes('데이터 보호'), false)
       assert.ok(navText.includes('내 API'))
@@ -385,9 +396,29 @@ test('ConsoleShell hides org-only nav from PROJECT_DIRECTOR/GENERAL_USER and qui
   }, { 'aiconnect.accessToken': 'gen-jwt' }, '#projects')
 })
 
+test('issued connection guide distinguishes SDK and separate-path client URLs', async () => {
+  const { default: Guide } = await compileVueComponent('../src/IssuedConnectionGuide.vue', 'issued-guide-test')
+  const { renderer, root, textContent } = createMemoryDom()
+  const app = renderer.createApp({ render: () => h(Guide, {
+    endpoints: [{ scope: 'EXTERNAL', label: 'External', url: 'https://api.example.test/v1' }],
+    models: [{ serviceKey: 'text-pro', displayName: 'Text Pro' }]
+  }) })
+  try {
+    app.mount(root)
+    const text = textContent(root)
+    assert.match(text, /text-pro/)
+    assert.match(text, /https:\/\/api\.example\.test\/v1/)
+    assert.match(text, /https:\/\/api\.example\.test/)
+    assert.match(text, /\/v1\/chat\/completions/)
+    assert.match(text, /\/v1\/models/)
+    assert.doesNotMatch(text, /\/v1\/v1/)
+  } finally { app.unmount() }
+})
+
 test('ProjectsPage avoids 403s for PROJECT_DIRECTOR, clamps DataBoundaryPolicy, manages members/delegation, and supports quota ceilings', async () => {
   const { default: ProjectsPage } = await compileVueComponent('../src/ProjectsPage.vue', 'projects-gov-test', {
-    '\\./BaseModal\\.vue': baseModalStubUrl
+    '\\./BaseModal\\.vue': baseModalStubUrl,
+    '\\./IssuedConnectionGuide\\.vue': emptyComponentStub('IssuedConnectionGuide')
   })
 
   // Director flow
@@ -434,20 +465,30 @@ test('ProjectsPage avoids 403s for PROJECT_DIRECTOR, clamps DataBoundaryPolicy, 
     }
 
     const { renderer, root, walk, textContent, setSelect, setInput } = createMemoryDom()
-    const app = renderer.createApp({ render: () => h(ProjectsPage, { organizationId: 'org-1', auth: { accessToken: 'dir-jwt' }, platformAdmin: false, orgAdmin: false }) })
+    let invitedProject = null
+    const app = renderer.createApp({ render: () => h(ProjectsPage, { organizationId: 'org-1', organizationName: 'Calen', currentUserId: 'u-dir', auth: { accessToken: 'dir-jwt' }, platformAdmin: false, orgAdmin: false, onInvite: project => { invitedProject = project } }) })
     try {
       app.mount(root)
       await flush()
 
       assert.equal(calls.some(c => c.url.endsWith('/teams') || c.url.endsWith('/services')), false)
+      walk(root, el => el.tag === 'button' && textContent(el) === '정책')[0].props.onClick()
+      await nextTick()
       assert.match(textContent(root), /관리자 상한: 60 RPM/)
 
       // Toggle member API key delegation
+      walk(root, el => el.tag === 'button' && textContent(el) === '구성원')[0].props.onClick()
+      await nextTick()
+      assert.match(textContent(root), /조직: Calen/)
+      walk(root, el => el.tag === 'button' && textContent(el) === '구성원 초대')[0].props.onClick()
+      assert.deepEqual(invitedProject, { id: 'p-1', name: 'Doc Analysis' })
       walk(root, el => el.tag === 'button' && textContent(el).includes('발급 권한 위임'))[0].props.onClick()
       await flush()
       assert.ok(calls.some(c => c.url === '/api/admin/projects/p-1/members/u-mem' && c.method === 'PATCH' && c.body.canIssueApiKeys === true))
 
       // Update API key boundary policy (verify EXTERNAL_ALLOWED is disabled)
+      walk(root, el => el.tag === 'button' && textContent(el) === 'API 키')[0].props.onClick()
+      await nextTick()
       const inlineBoundary = walk(root, el => el.tag === 'select' && el.props['aria-label'] === 'hr-key 데이터 경계')[0]
       assert.equal(inlineBoundary.options.find(opt => opt.value === 'EXTERNAL_ALLOWED').props.disabled, true)
       await setSelect(inlineBoundary, 'INTERNAL_ONLY')
@@ -455,6 +496,8 @@ test('ProjectsPage avoids 403s for PROJECT_DIRECTOR, clamps DataBoundaryPolicy, 
       assert.ok(calls.some(c => c.url === '/api/admin/projects/p-1/api-keys/k-1/policy' && c.method === 'PATCH' && c.body.dataBoundaryPolicy === 'INTERNAL_ONLY'))
 
       // Revoke member
+      walk(root, el => el.tag === 'button' && textContent(el) === '구성원')[0].props.onClick()
+      await nextTick()
       walk(root, el => el.tag === 'button' && textContent(el).includes('멤버 회수'))[0].props.onClick()
       await flush()
       assert.ok(calls.some(c => c.url === '/api/admin/projects/p-1/members/u-mem' && c.method === 'DELETE'))
@@ -475,6 +518,8 @@ test('ProjectsPage avoids 403s for PROJECT_DIRECTOR, clamps DataBoundaryPolicy, 
       assert.equal('maxDataBoundaryPolicy' in patchCall.body, false)
 
       // Issue new key modal enforces ceiling
+      walk(root, el => el.tag === 'button' && textContent(el) === 'API 키')[0].props.onClick()
+      await nextTick()
       walk(root, el => el.tag === 'button' && textContent(el).includes('API 키 발급'))[0].props.onClick()
       await nextTick()
       const keyModal = walk(root, el => el.props?.class === 'modal-stub')[0]
@@ -521,6 +566,8 @@ test('ProjectsPage avoids 403s for PROJECT_DIRECTOR, clamps DataBoundaryPolicy, 
     try {
       app.mount(root)
       await flush()
+      walk(root, el => el.tag === 'button' && textContent(el) === '정책')[0].props.onClick()
+      await nextTick()
       walk(root, el => el.tag === 'button' && textContent(el).includes('상한 설정'))[0].props.onClick()
       await nextTick()
       const ceilingModal = walk(root, el => el.props?.class === 'modal-stub')[0]
@@ -682,7 +729,8 @@ test('PlatformAdminPage lists and revokes project managers', async () => {
     ]
     globalThis.fetch = async (url, init = {}) => {
       const method = init.method ?? 'GET'
-      calls.push({ url, method })
+      calls.push({ url, method, body: init.body ? JSON.parse(init.body) : null })
+      if (url === '/api/admin/organizations' && method === 'POST') return okJson({ id: 'org-new' })
       if (url === '/api/admin/platform/overview') return okJson({ organizationCount: 1, userCount: 2, projectCount: 1, providerCount: 0, nodeCount: 0, endpointCount: 0, deploymentCount: 0, serviceCount: 0, apiKeyCount: 2, requestCount: 0 })
       if (url === '/api/admin/platform/organizations') return okJson([{ id: 'org-1', name: 'Calen', status: 'ACTIVE', projectCount: 1, providerCount: 0, nodeCount: 0, memberCount: 2 }])
       if (url === '/api/admin/platform/users') return okJson([])
@@ -698,11 +746,20 @@ test('PlatformAdminPage lists and revokes project managers', async () => {
       throw new Error(`Unexpected fetch: ${method} ${url}`)
     }
 
-    const { renderer, root, walk, textContent } = createMemoryDom()
-    const app = renderer.createApp({ render: () => h(PlatformAdminPage, { auth: { accessToken: 'sys-jwt' } }) })
+    const { renderer, root, walk, textContent, setInput } = createMemoryDom()
+    const changed = []
+    const app = renderer.createApp({ render: () => h(PlatformAdminPage, { auth: { accessToken: 'sys-jwt' }, onOrganizationsChanged: id => changed.push(id) }) })
     try {
       app.mount(root)
       await flush()
+      walk(root, el => el.tag === 'button' && textContent(el) === '+ 조직')[0].props.onClick()
+      await nextTick()
+      const createModal = walk(root, el => el.props?.['data-title'] === '새 조직')[0]
+      await setInput(walk(createModal, el => el.tag === 'input')[0], 'New Org')
+      walk(createModal, el => el.tag === 'button' && textContent(el) === '조직 생성')[0].props.onClick()
+      await flush()
+      assert.deepEqual(changed, ['org-new'])
+      assert.deepEqual(calls.filter(c => c.url === '/api/admin/organizations' && c.method === 'POST').map(c => c.body), [{ name: 'New Org' }])
       assert.match(textContent(root), /dir@org\.com/)
       walk(root, el => el.tag === 'button' && textContent(el).includes('관리자 권한 회수'))[0].props.onClick()
       await flush()
@@ -851,7 +908,8 @@ test('ServicesPage sets dataBoundaryPolicy and DeveloperPortalPage enforces canI
     '\\./ServiceSchedulingPanel\\.vue': emptyComponentStub('ServiceSchedulingPanel')
   })
   const { default: DeveloperPortalPage } = await compileVueComponent('../src/DeveloperPortalPage.vue', 'portal-gov-test', {
-    '\\./BaseModal\\.vue': baseModalStubUrl
+    '\\./BaseModal\\.vue': baseModalStubUrl,
+    '\\./IssuedConnectionGuide\\.vue': emptyComponentStub('IssuedConnectionGuide')
   })
 
   // 1. ServicesPage

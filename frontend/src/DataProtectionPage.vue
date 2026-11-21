@@ -213,7 +213,7 @@ onMounted(() => { void load() })
       <article class="surface-card protection-editor">
         <div v-if="(editorScope === 'PROJECT' || editorScope === 'API_KEY') && selectedProject" class="project-boundary-notice" role="status">
           <strong>적용 중인 데이터 경계 정책: {{ dataBoundaryLabel(activeBoundaryForEditor) }}</strong>
-          <p v-if="selectedProject.externalAiBlocked || activeBoundaryForEditor === 'INTERNAL_ONLY'">민감정보가 감지되지 않아도 사내 GPU Target만 사용합니다. 아래 DLP 설정을 OFF로 바꾸거나 외부 전송을 허용해도 상위 경계 제한은 해제되지 않습니다. 경계 정책 변경은 ‘프로젝트 & API 키’ 화면에서 설정할 수 있습니다.</p>
+          <p v-if="selectedProject.externalAiBlocked || activeBoundaryForEditor === 'INTERNAL_ONLY'">민감정보가 감지되지 않아도 사내 GPU Target만 사용합니다. 아래 DLP 설정을 OFF로 바꾸거나 외부 전송을 허용해도 상위 경계 제한은 해제되지 않습니다. 경계 정책 변경은 ‘프로젝트’ 화면에서 설정할 수 있습니다.</p>
           <p v-else>상위 계층(프로젝트 상한 {{ dataBoundaryLabel(selectedProject.maxDataBoundaryPolicy) }})과 교집합으로 평가됩니다. 하위 설정이 상위 경계를 완화할 수 없습니다.</p>
         </div>
         <header class="card-header"><div><span class="card-kicker">{{ policyTitle(editorScope).toUpperCase() }}</span><h2>{{ policyTitle(editorScope) }}</h2><p>하위 범위에서 더 엄격하게 덮어쓸 수 있습니다.</p></div><span class="status-chip" :class="editor.mode === 'ENFORCE' ? 'unhealthy' : editor.mode === 'MONITOR' ? 'unknown' : 'healthy'">{{ editor.mode }}</span></header>

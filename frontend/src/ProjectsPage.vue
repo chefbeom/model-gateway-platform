@@ -2,6 +2,7 @@
 import { formatDate, formatDateTime } from './dateTime'
 import { computed, onMounted, ref, watch } from 'vue'
 import BaseModal from './BaseModal.vue'
+import IssuedConnectionGuide from './IssuedConnectionGuide.vue'
 import {
   accountTierLabel,
   adminFetch,
@@ -24,8 +25,8 @@ import {
 } from './api'
 import { copyText } from './clipboard'
 
-const props = defineProps<{ organizationId: string; auth: AdminAuth; platformAdmin: boolean; orgAdmin?: boolean }>()
-const emit = defineEmits<{ organizationsChanged: []; organizationSelected: [id: string] }>()
+const props = defineProps<{ organizationId: string; organizationName?: string; currentUserId?: string; auth: AdminAuth; platformAdmin: boolean; orgAdmin?: boolean }>()
+const emit = defineEmits<{ invite: [project: { id: string; name: string }]; openPlatform: [] }>()
 const isOrgOrPlatformAdmin = computed(() => resolveOrgAdminAccess(props.auth, props.platformAdmin, props.orgAdmin))
 
 type Project = {
@@ -45,9 +46,13 @@ type AlertPolicy = { projectId: string; requestsPerMinuteThreshold: number | nul
 type ProjectControl = { projectId: string; projectName: string; status: string; activeApiKeyCount: number; revokedApiKeyCount: number }
 type ProjectDeletionPreview = { projectId: string; projectName: string; status: string; teamId?: string | null; apiKeys: { id: string; name: string; keyPrefix: string; status: string }[]; services: { id: string; serviceKey: string; displayName: string }[]; requestHistoryCount: number; deletable: boolean; reason: string }
 type GrantedService = { id: string; serviceKey: string; displayName: string; enabled: boolean }
+type ConnectionEndpoint = { scope: 'INTERNAL' | 'EXTERNAL'; label: string; url: string }
 
 const projects = ref<Project[]>([]); const teams = ref<Team[]>([]); const services = ref<Service[]>([]); const keys = ref<ApiKey[]>([]); const projectServices = ref<GrantedService[]>([]); const members = ref<ProjectMemberView[]>([])
 const selectedId = ref(sessionStorage.getItem('aiconnect.setup.projectId') ?? ''); const selected = computed(() => projects.value.find(item => item.id === selectedId.value))
+const activeTab = ref<'overview' | 'members' | 'services' | 'keys' | 'policies'>('overview')
+const tabs = [{ id: 'overview', label: '개요' }, { id: 'members', label: '구성원' }, { id: 'services', label: '서비스 권한' }, { id: 'keys', label: 'API 키' }, { id: 'policies', label: '정책' }] as const
+const canInvite = computed(() => isOrgOrPlatformAdmin.value || members.value.some(member => member.userId === props.currentUserId && member.role === 'MANAGER'))
 const effectiveProjectBoundary = computed<DataBoundaryPolicy>(() => {
   if (!selected.value) return 'EXTERNAL_ALLOWED'
   return strictestDataBoundary(
@@ -60,13 +65,19 @@ const selectedMaxBoundary = computed<DataBoundaryPolicy>(() =>
   selected.value?.maxDataBoundaryPolicy ?? (selected.value?.externalAiBlocked ? 'INTERNAL_ONLY' : 'EXTERNAL_ALLOWED')
 )
 const quota = ref<Quota | null>(null); const retention = ref<ContentPolicy | null>(null); const alert = ref<AlertPolicy | null>(null); const control = ref<ProjectControl | null>(null)
-const busy = ref(false); const message = ref(''); const projectOpen = ref(false); const orgOpen = ref(false); const keyOpen = ref(false); const serviceOpen = ref(false); const policyOpen = ref(false); const ceilingOpen = ref(false); const secretOpen = ref(false); const controlOpen = ref(false); const projectEditOpen = ref(false); const projectDeleteOpen = ref(false); const deletionPreview = ref<ProjectDeletionPreview | null>(null)
-const projectName = ref(''); const projectTeamId = ref(''); const orgName = ref(''); const keyName = ref(''); const expiresAt = ref(''); const keyBoundaryPolicy = ref<DataBoundaryPolicy>('EXTERNAL_ALLOWED'); const serviceId = ref(''); const issuedSecret = ref(''); const revokeActiveKeys = ref(false); const editProjectName = ref(''); const editProjectTeamId = ref('')
+const busy = ref(false); const message = ref(''); const projectOpen = ref(false); const keyOpen = ref(false); const serviceOpen = ref(false); const policyOpen = ref(false); const ceilingOpen = ref(false); const secretOpen = ref(false); const controlOpen = ref(false); const projectEditOpen = ref(false); const projectDeleteOpen = ref(false); const deletionPreview = ref<ProjectDeletionPreview | null>(null)
+const projectName = ref(''); const projectTeamId = ref(''); const keyName = ref(''); const expiresAt = ref(''); const keyBoundaryPolicy = ref<DataBoundaryPolicy>('EXTERNAL_ALLOWED'); const serviceId = ref(''); const issuedSecret = ref(''); const revokeActiveKeys = ref(false); const editProjectName = ref(''); const editProjectTeamId = ref('')
+const issuedConnections = ref<ConnectionEndpoint[]>([]); const issuedModels = ref<GrantedService[]>([])
+const issuedProjectName = ref('')
 const projectBoundaryPolicy = ref<DataBoundaryPolicy>('EXTERNAL_ALLOWED'); const editDataBoundaryPolicy = ref<DataBoundaryPolicy>('EXTERNAL_ALLOWED'); const editMaxDataBoundaryPolicy = ref<DataBoundaryPolicy>('EXTERNAL_ALLOWED')
 const ceilingForm = ref({ maxRequestsPerMinute: null as number | null, maxMonthlyTokenLimit: null as number | null })
 const form = ref({ requestsPerMinute: 60, monthlyTokenLimit: null as number | null, mode: 'METADATA_ONLY' as ContentPolicy['mode'], retentionDays: 30, requestsPerMinuteThreshold: null as number | null, errorRatePercentThreshold: null as number | null, monthlyTokenUsagePercentThreshold: null as number | null, cooldownSeconds: 900 })
+let loadGeneration = 0
+let selectionGeneration = 0
 
 async function load() {
+  const generation = ++loadGeneration
+  const orgId = props.organizationId
   if (!props.organizationId) { projects.value = []; teams.value = []; services.value = []; keys.value = []; members.value = []; control.value = null; return }
   busy.value = true
   try {
@@ -75,6 +86,7 @@ async function load() {
       isOrgOrPlatformAdmin.value ? adminFetch<Team[]>(`/api/admin/organizations/${props.organizationId}/teams`, props.auth) : Promise.resolve([] as Team[]),
       isOrgOrPlatformAdmin.value ? adminFetch<Service[]>(`/api/admin/organizations/${props.organizationId}/services`, props.auth) : Promise.resolve([] as Service[])
     ])
+    if (generation !== loadGeneration || orgId !== props.organizationId) return
     projects.value = projectItems; teams.value = teamItems; services.value = serviceItems
     if (!projects.value.some(item => item.id === selectedId.value)) selectedId.value = projects.value[0]?.id ?? ''
     if (selectedId.value) await selectProject(selectedId.value)
@@ -84,7 +96,12 @@ async function load() {
 }
 
 async function selectProject(id: string) {
+  const generation = ++selectionGeneration
+  const orgId = props.organizationId
+  if (id !== selectedId.value && !busy.value) { secretOpen.value = false; issuedSecret.value = ''; keyOpen.value = false }
+  members.value = []; keys.value = []; projectServices.value = []; quota.value = null; retention.value = null; alert.value = null; control.value = null
   selectedId.value = id; sessionStorage.setItem('aiconnect.setup.projectId', id)
+  if (!id) return
   const [keyItems, quotaValue, retentionValue, alertValue, controlValue, serviceAccessItems, memberItems] = await Promise.all([
     adminFetch<ApiKey[]>(`/api/admin/projects/${id}/api-keys`, props.auth),
     adminFetch<Quota>(`/api/admin/projects/${id}/quota`, props.auth),
@@ -94,10 +111,10 @@ async function selectProject(id: string) {
     adminFetch<GrantedService[]>(`/api/admin/projects/${id}/service-access`, props.auth),
     listProjectMembers(id, props.auth).catch(() => [] as ProjectMemberView[])
   ])
+  if (generation !== selectionGeneration || orgId !== props.organizationId || id !== selectedId.value) return
   keys.value = keyItems; quota.value = quotaValue; retention.value = retentionValue; alert.value = alertValue; control.value = controlValue; projectServices.value = serviceAccessItems; members.value = memberItems
 }
 
-async function createOrganization() { busy.value = true; try { const value = await adminFetch<{ id: string }>('/api/admin/organizations', props.auth, { method: 'POST', body: JSON.stringify({ name: orgName.value }) }); orgOpen.value = false; orgName.value = ''; emit('organizationsChanged'); emit('organizationSelected', value.id) } catch (error) { message.value = error instanceof Error ? error.message : '조직 생성 실패' } finally { busy.value = false } }
 async function createProject() {
   busy.value = true
   try {
@@ -206,13 +223,17 @@ function openKeyCreate() {
 }
 async function issueKey() {
   if (!selectedId.value) return
+  const issuingProjectId = selectedId.value
+  const issuingOrgId = props.organizationId
+  const issuingProjectName = selected.value?.name ?? issuingProjectId
+  const issuingModels = projectServices.value.filter(service => service.enabled)
   if (exceedsDataBoundary(keyBoundaryPolicy.value, effectiveProjectBoundary.value)) {
     message.value = '프로젝트 데이터 경계 상한을 초과하는 키 정책은 선택할 수 없습니다.'
     return
   }
   busy.value = true
   try {
-    const value = await adminFetch<{ secret: string }>(`/api/admin/projects/${selectedId.value}/api-keys`, props.auth, {
+    const value = await adminFetch<{ secret: string }>(`/api/admin/projects/${issuingProjectId}/api-keys`, props.auth, {
       method: 'POST',
       body: JSON.stringify({
         name: keyName.value,
@@ -220,8 +241,12 @@ async function issueKey() {
         dataBoundaryPolicy: keyBoundaryPolicy.value
       })
     })
-    issuedSecret.value = value.secret; keyName.value = ''; expiresAt.value = ''; keyOpen.value = false; secretOpen.value = true
-    await selectProject(selectedId.value)
+    issuedProjectName.value = issuingProjectName; issuedSecret.value = value.secret; issuedModels.value = issuingModels; issuedConnections.value = []
+    keyName.value = ''; expiresAt.value = ''; keyOpen.value = false; secretOpen.value = true
+    try { issuedConnections.value = (await adminFetch<{ endpoints: ConnectionEndpoint[] }>('/api/portal/connection', props.auth)).endpoints }
+    catch { message.value = 'API 키는 발급되었지만 연결 주소를 불러오지 못했습니다.' }
+    try { if (props.organizationId === issuingOrgId && selectedId.value === issuingProjectId) await selectProject(issuingProjectId) }
+    catch { message.value = 'API 키는 발급되었지만 프로젝트 정보를 새로 고치지 못했습니다.' }
   } catch (error) { message.value = error instanceof Error ? error.message : '키 발급 실패' } finally { busy.value = false }
 }
 async function changeKeyBoundary(key: ApiKey, nextPolicy: DataBoundaryPolicy) {
@@ -324,14 +349,15 @@ async function revoke(key: ApiKey) { if (!selectedId.value || !window.confirm(`$
 async function openControl() { if (!selectedId.value) return; busy.value = true; try { control.value = await adminFetch<ProjectControl>(`/api/admin/projects/${selectedId.value}/control`, props.auth); revokeActiveKeys.value = false; controlOpen.value = true } catch (error) { message.value = error instanceof Error ? error.message : '프로젝트 제어 정보를 불러오지 못했습니다.' } finally { busy.value = false } }
 async function changeProjectStatus() { if (!selectedId.value || !control.value) return; const nextStatus = control.value.status === 'SUSPENDED' ? 'ACTIVE' : 'SUSPENDED'; busy.value = true; try { const updated = await adminFetch<ProjectControl>(`/api/admin/projects/${selectedId.value}/status`, props.auth, { method: 'PATCH', body: JSON.stringify({ status: nextStatus, revokeActiveApiKeys: nextStatus === 'SUSPENDED' && revokeActiveKeys.value }) }); control.value = updated; projects.value = projects.value.map(project => project.id === selectedId.value ? { ...project, status: updated.status } : project); await selectProject(selectedId.value); controlOpen.value = false; message.value = nextStatus === 'SUSPENDED' ? `프로젝트를 강제 중지했습니다.${updated.revokedApiKeyCount ? ` 활성 키 ${updated.revokedApiKeyCount}개도 폐기했습니다.` : ''}` : '프로젝트를 재개했습니다. 폐기된 API 키는 자동으로 복구되지 않습니다.' } catch (error) { message.value = error instanceof Error ? error.message : '프로젝트 상태 변경에 실패했습니다.' } finally { busy.value = false } }
 async function copySecret() { try { await copyText(issuedSecret.value); message.value = 'API 키를 복사했습니다.' } catch { message.value = 'API 키를 복사하지 못했습니다. 값을 직접 선택해 복사해 주세요.' } }
-watch(() => [props.organizationId, isOrgOrPlatformAdmin.value], () => { selectedId.value = ''; void load() }); onMounted(() => { void load() })
+watch(selectedId, (id, previous) => { if (id !== previous && !busy.value) { secretOpen.value = false; issuedSecret.value = ''; keyOpen.value = false } })
+watch(() => [props.organizationId, isOrgOrPlatformAdmin.value], () => { ++selectionGeneration; if (!busy.value) { secretOpen.value = false; issuedSecret.value = ''; keyOpen.value = false }; selectedId.value = ''; projects.value = []; members.value = []; keys.value = []; projectServices.value = []; void load() }); onMounted(() => { void load() })
 </script>
 
 <template>
   <section class="page-stack">
-    <div class="page-hero"><div><p class="eyebrow">ACCESS PLANE</p><h1>프로젝트 & API 키</h1><p>프로젝트별로 데이터 경계 정책, 멤버 위임, API 키, 쿼터, 알림, 보관 정책을 관리합니다.</p></div><div class="hero-actions"><button v-if="platformAdmin" class="secondary-button" @click="orgOpen = true">+ 조직</button><button v-if="isOrgOrPlatformAdmin" class="primary-button" :disabled="!organizationId" @click="projectOpen = true">+ 프로젝트</button></div></div>
+    <div class="page-hero"><div><p class="eyebrow">WORKSPACE MANAGEMENT</p><h1>프로젝트</h1><p>프로젝트별 멤버, 서비스 권한, API 키와 정책을 관리합니다.</p></div><div class="hero-actions"><button v-if="isOrgOrPlatformAdmin" class="primary-button" :disabled="!organizationId" @click="projectOpen = true">+ 프로젝트</button></div></div>
     <p v-if="message" class="inline-alert">{{ message }}</p>
-    <article v-if="selected" class="surface-card project-local-boundary">
+    <article v-if="selected && activeTab === 'overview'" class="surface-card project-local-boundary">
       <span class="status-chip" :class="effectiveProjectBoundary === 'INTERNAL_ONLY' ? 'healthy' : effectiveProjectBoundary === 'APPROVED_EXTERNAL_NO_RETENTION' ? 'unknown' : 'draining'">
         {{ dataBoundaryShortLabel(effectiveProjectBoundary) }}
       </span>
@@ -342,8 +368,9 @@ watch(() => [props.organizationId, isOrgOrPlatformAdmin.value], () => { selected
       </div>
       <button class="secondary-button" :disabled="busy" @click="openProjectEdit">보안 설정</button>
     </article>
-    <div class="project-switcher surface-card"><div><span class="card-kicker">PROJECT SPACE</span><h2>{{ selected?.name ?? '프로젝트 선택' }}</h2><small>{{ selected?.teamId ? '팀 소유 프로젝트' : '조직 공용 프로젝트' }}</small></div><select v-model="selectedId" @change="selectProject(selectedId)"><option value="">프로젝트 선택</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }} · {{ project.status }}</option></select><div class="hero-actions"><span v-if="selected" class="status-chip" :class="selected.status === 'ACTIVE' ? 'healthy' : 'unhealthy'">{{ selected.status }}</span><button class="secondary-button" :disabled="!selectedId" @click="openPolicy">정책 설정</button><button class="secondary-button" :disabled="!selectedId" @click="serviceOpen = true">서비스 권한</button><button class="secondary-button" :disabled="!selectedId || busy" @click="openProjectEdit">프로젝트 수정</button><button class="primary-button" :disabled="!selectedId || selected?.status === 'SUSPENDED'" @click="openKeyCreate">API 키 발급</button></div></div>
-    <div v-if="selected" class="project-policy-grid">
+    <div class="project-switcher surface-card"><div><span class="card-kicker">PROJECT SPACE</span><h2>{{ selected?.name ?? '프로젝트 선택' }}</h2><small>조직: {{ organizationName || organizationId || '선택 안 됨' }} · {{ selected?.teamId ? `팀: ${teams.find(team => team.id === selected?.teamId)?.name ?? '팀 소유 프로젝트'}` : '조직 공용 프로젝트' }}</small></div><select v-model="selectedId" @change="selectProject(selectedId)"><option value="">프로젝트 선택</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }} · {{ project.status }}</option></select><div class="hero-actions"><span v-if="selected" class="status-chip" :class="selected.status === 'ACTIVE' ? 'healthy' : 'unhealthy'">{{ selected.status }}</span><button class="secondary-button" :disabled="!selectedId || busy" @click="openProjectEdit">프로젝트 수정</button></div></div>
+    <nav v-if="selected" class="project-tabs" aria-label="프로젝트 보기"><button v-for="tab in tabs" :key="tab.id" type="button" class="secondary-button" :aria-current="activeTab === tab.id ? 'page' : undefined" :class="{ active: activeTab === tab.id }" @click="activeTab = tab.id">{{ tab.label }}</button></nav>
+    <div v-if="selected && activeTab === 'policies'" class="project-policy-grid">
       <article class="surface-card policy-card">
         <span class="policy-icon">◔</span>
         <div>
@@ -363,13 +390,13 @@ watch(() => [props.organizationId, isOrgOrPlatformAdmin.value], () => { selected
       <article class="surface-card policy-card"><span class="policy-icon">⌁</span><div><span class="card-kicker">CONTENT RETENTION</span><h3>{{ retention?.mode === 'FULL_ENCRYPTED' ? `암호화 원문 ${retention.retentionDays}일` : '메타데이터만' }}</h3><p>감사·소유자 역할에만 원문 열람 허용</p></div><button class="text-button" @click="openPolicy">변경</button></article>
     </div>
 
-    <article v-if="selected" class="surface-card">
+    <article v-if="selected && activeTab === 'members'" class="surface-card">
       <header class="card-header">
         <div>
           <span class="card-kicker">PROJECT MEMBERS & DELEGATION</span>
           <h2>프로젝트 멤버 · API 키 발급 위임</h2>
         </div>
-        <span class="count-badge">{{ members.length }}</span>
+        <div class="hero-actions"><span class="count-badge">{{ members.length }}</span><button v-if="platformAdmin" class="secondary-button" @click="emit('openPlatform')">총괄 배정 관리</button><button v-if="canInvite" class="primary-button" :disabled="busy || selected.status === 'SUSPENDED'" @click="emit('invite', { id: selected.id, name: selected.name })">구성원 초대</button></div>
       </header>
       <div v-if="members.length" class="data-table-wrap">
         <table class="data-table">
@@ -398,11 +425,13 @@ watch(() => [props.organizationId, isOrgOrPlatformAdmin.value], () => { selected
           </tbody>
         </table>
       </div>
-      <div v-else class="empty-state compact"><span>⌘</span><p>배정된 프로젝트 멤버가 없습니다. 상단 ‘계정 추가’ 또는 팀 초대 메뉴로 프로젝트 멤버를 초대하세요.</p></div>
+      <div v-else class="empty-state compact"><span>⌘</span><p>배정된 프로젝트 멤버가 없습니다.</p></div>
     </article>
 
-    <article class="surface-card">
-      <header class="card-header"><div><span class="card-kicker">PROJECT CREDENTIALS</span><h2>API 키</h2></div><span class="count-badge">{{ keys.length }}</span></header>
+    <article v-if="selected && activeTab === 'services'" class="surface-card"><header class="card-header"><div><span class="card-kicker">SERVICE ACCESS</span><h2>서비스 권한</h2><p class="card-subtitle">이 프로젝트에서 사용할 수 있는 논리 서비스입니다.</p></div><button class="secondary-button" @click="serviceOpen = true">서비스 권한 관리</button></header><div class="project-service-access-list"><p v-for="service in projectServices" :key="service.id"><strong>{{ service.serviceKey }}</strong> · {{ service.displayName }} · {{ service.enabled ? 'ACTIVE' : 'DISABLED' }}</p><p v-if="!projectServices.length" class="muted-copy">연결된 논리 서비스가 없습니다.</p></div></article>
+
+    <article v-if="selected && activeTab === 'keys'" class="surface-card">
+      <header class="card-header"><div><span class="card-kicker">PROJECT CREDENTIALS</span><h2>API 키</h2></div><div class="hero-actions"><span class="count-badge">{{ keys.length }}</span><button class="primary-button" :disabled="selected.status === 'SUSPENDED'" @click="openKeyCreate">API 키 발급</button></div></header>
       <div v-if="keys.length" class="data-table-wrap">
         <table class="data-table">
           <thead><tr><th>이름</th><th>Prefix</th><th>데이터 경계</th><th>상태</th><th>마지막 사용</th><th>만료</th><th></th></tr></thead>
@@ -440,7 +469,6 @@ watch(() => [props.organizationId, isOrgOrPlatformAdmin.value], () => { selected
       <div v-else class="empty-state"><span>⌘</span><h3>발급된 API 키가 없습니다</h3><p>키 원문은 발급 직후 한 번만 표시됩니다.</p><button class="text-button" :disabled="selected?.status === 'SUSPENDED'" @click="openKeyCreate">첫 API 키 발급</button></div>
     </article>
 
-    <BaseModal :open="orgOpen" title="새 조직" description="회사 또는 독립 운영 단위를 만듭니다." size="sm" @close="orgOpen = false"><label class="field">조직 이름<input v-model.trim="orgName" /></label><template #footer><button class="secondary-button" @click="orgOpen = false">취소</button><button class="primary-button" :disabled="busy || !orgName" @click="createOrganization">조직 생성</button></template></BaseModal>
     <BaseModal :open="projectOpen" title="새 프로젝트" description="팀과 3단계 데이터 경계 정책을 설정합니다." size="sm" @close="projectOpen = false"><div class="modal-form"><label class="field">프로젝트 이름<input v-model.trim="projectName" placeholder="customer-support-api" maxlength="120" /></label><label v-if="isOrgOrPlatformAdmin" class="field">소유 팀<select v-model="projectTeamId"><option value="">조직 공용</option><option v-for="team in teams" :key="team.id" :value="team.id">{{ team.name }}</option></select></label><label class="field">데이터 경계 정책<select v-model="projectBoundaryPolicy"><option v-for="option in DATA_BOUNDARY_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option></select></label><small class="muted-copy">{{ DATA_BOUNDARY_OPTIONS.find(o => o.value === projectBoundaryPolicy)?.description }}</small></div><template #footer><button class="secondary-button" @click="projectOpen = false">취소</button><button class="primary-button" :disabled="busy || !projectName" @click="createProject">프로젝트 생성</button></template></BaseModal>
     <BaseModal :open="projectEditOpen" title="프로젝트 수정" description="이름·데이터 경계 정책을 변경합니다. 프로젝트 총괄은 관리자 상한보다 완화할 수 없습니다." size="sm" @close="projectEditOpen = false">
       <div class="modal-form">
@@ -486,11 +514,13 @@ watch(() => [props.organizationId, isOrgOrPlatformAdmin.value], () => { selected
       <template #footer><button class="secondary-button" @click="ceilingOpen = false">취소</button><button class="primary-button" :disabled="busy" @click="saveCeiling">상한 저장</button></template>
     </BaseModal>
     <BaseModal :open="controlOpen" :title="control?.status === 'SUSPENDED' ? '프로젝트 재개' : '프로젝트 강제 중지'" :description="control?.status === 'SUSPENDED' ? '프로젝트 요청 수신을 다시 허용합니다. 이미 폐기된 API 키는 자동으로 복구되지 않습니다.' : '중지 즉시 이 프로젝트의 모든 API 요청이 Gateway에서 차단됩니다.'" size="sm" @close="controlOpen = false"><div class="project-control-note"><span>{{ control?.status === 'SUSPENDED' ? '재개 대상' : '중지 대상' }}</span><strong>{{ control?.projectName }}</strong><p v-if="control?.status === 'SUSPENDED'">현재 프로젝트가 중지 상태입니다. 재개하면 ACTIVE 상태의 기존 API 키는 다시 호출할 수 있습니다.</p><template v-else><p>현재 활성 API 키: <b>{{ control?.activeApiKeyCount ?? 0 }}개</b>. 프로젝트 중지는 키를 삭제하지 않고 호출만 차단합니다.</p><label class="toggle-field"><span>활성 API 키도 모두 폐기<small>재개 후에도 기존 키를 사용하지 못하게 하는 긴급 대응입니다.</small></span><input v-model="revokeActiveKeys" type="checkbox" /></label></template></div><template #footer><button class="secondary-button" :disabled="busy" @click="controlOpen = false">취소</button><button class="secondary-button danger-text" :disabled="busy" @click="changeProjectStatus">{{ control?.status === 'SUSPENDED' ? '프로젝트 재개' : '강제 중지 실행' }}</button></template></BaseModal>
-    <BaseModal :open="secretOpen" title="API 키가 발급되었습니다" description="이 창을 닫으면 키 원문은 다시 표시되지 않습니다." @close="secretOpen = false"><div class="secret-reveal"><span>PROJECT API KEY</span><code>{{ issuedSecret }}</code><button class="secondary-button" @click="copySecret">복사</button></div><template #footer><button class="primary-button" @click="secretOpen = false">안전하게 보관했습니다</button></template></BaseModal>
+    <BaseModal :open="secretOpen" title="API 키가 발급되었습니다" description="이 창을 닫으면 키 원문은 다시 표시되지 않습니다." @close="secretOpen = false; issuedSecret = ''"><div class="secret-reveal"><span>PROJECT API KEY · {{ issuedProjectName }}</span><code>{{ issuedSecret }}</code><button class="secondary-button" @click="copySecret">복사</button></div><IssuedConnectionGuide :endpoints="issuedConnections" :models="issuedModels" /><template #footer><button class="primary-button" @click="secretOpen = false; issuedSecret = ''">안전하게 보관했습니다</button></template></BaseModal>
   </section>
 </template>
 
 <style scoped>
+.project-tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+.project-tabs .active { border-color: var(--accent); font-weight: 700; }
 .project-local-boundary { display: flex; align-items: flex-start; gap: 16px; padding: 20px; }
 .project-local-boundary > div { flex: 1; min-width: 0; }
 .project-local-boundary strong { font-size: 14px; }

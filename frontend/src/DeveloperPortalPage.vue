@@ -2,6 +2,7 @@
 import { formatDate, formatDateTime } from './dateTime'
 import { computed, onMounted, ref, watch } from 'vue'
 import BaseModal from './BaseModal.vue'
+import IssuedConnectionGuide from './IssuedConnectionGuide.vue'
 import {
   adminFetch,
   DATA_BOUNDARY_OPTIONS,
@@ -137,6 +138,7 @@ function openKeyModal() {
 
 async function issueKey() {
   if (!selected.value || !keyName.value.trim()) return
+  const project = selected.value
   if (!selected.value.canIssueApiKeys) {
     message.value = 'API 키 발급 권한이 위임되지 않았습니다.'
     return
@@ -147,7 +149,7 @@ async function issueKey() {
   }
   busy.value = true
   try {
-    const result = await adminFetch<{ secret: string }>(`/api/portal/projects/${selected.value.id}/api-keys`, props.auth, {
+    const result = await adminFetch<{ secret: string }>(`/api/portal/projects/${project.id}/api-keys`, props.auth, {
       method: 'POST',
       body: JSON.stringify({
         name: keyName.value.trim(),
@@ -155,14 +157,15 @@ async function issueKey() {
         dataBoundaryPolicy: keyBoundaryPolicy.value
       })
     })
-    await loadConnections()
     issuedSecret.value = result.secret
-    issuedModels.value = [...selected.value.services]
-    issuedConnections.value = [...connections.value]
+    issuedModels.value = [...project.services]
+    issuedConnections.value = []
     keyName.value = ''
     expiresAt.value = ''
     keyOpen.value = false
     secretOpen.value = true
+    await loadConnections()
+    issuedConnections.value = [...connections.value]
     await loadKeys()
   } catch (error) {
     message.value = error instanceof Error ? error.message : 'API 키 발급에 실패했습니다.'
@@ -346,11 +349,7 @@ onMounted(() => { void loadProjects(); void loadConnections() })
     <BaseModal :open="secretOpen" title="API 키와 연결 정보를 준비했습니다" description="API 키 원문은 이 창을 닫으면 다시 표시할 수 없습니다." @close="secretOpen = false">
       <div class="connection-reveal">
         <div class="connection-value"><span>PROJECT API KEY</span><code>{{ issuedSecret }}</code><button class="secondary-button" @click="copyValue(issuedSecret, 'API 키')">복사</button></div>
-        <template v-if="issuedConnections.length">
-          <div v-for="endpoint in issuedConnections" :key="endpoint.scope" class="connection-value"><span>{{ endpoint.scope === 'INTERNAL' ? 'INTERNAL NETWORK / VPN BASE URL' : 'EXTERNAL HTTPS BASE URL' }}</span><code>{{ endpoint.url }}</code><button class="secondary-button" @click="copyValue(endpoint.url, endpoint.label + ' Base URL')">복사</button><small>{{ endpoint.scope === 'INTERNAL' ? '사내망 또는 VPN/Tailscale에 연결된 개발 서버에서 사용하세요.' : '회사 외부 또는 인터넷에서 HTTPS로 접속할 때 사용하세요.' }}</small></div>
-        </template>
-        <div v-else class="connection-value unconfigured"><span>OPENAI BASE URL</span><small>관리자가 내부망/외부 Base URL을 설정하지 않았습니다. localhost는 API 호출자의 컴퓨터를 가리키므로 다른 서버나 외부 사용자에게 안내하면 안 됩니다.</small></div>
-        <div class="connection-value"><span>ALLOWED MODEL{{ issuedModels.length === 1 ? '' : 'S' }}</span><div v-if="issuedModels.length" class="issued-model-list"><div v-for="service in issuedModels" :key="service.serviceKey"><code>{{ service.serviceKey }}</code><button class="secondary-button" @click="copyValue(service.serviceKey, '모델명')">복사</button></div></div><small v-else>이 프로젝트에 연결된 모델이 없습니다. 관리자에게 모델 권한을 요청하세요.</small></div>
+        <IssuedConnectionGuide :endpoints="issuedConnections" :models="issuedModels" />
       </div>
       <template #footer><button class="primary-button" @click="secretOpen = false">안전하게 보관했습니다</button></template>
     </BaseModal>

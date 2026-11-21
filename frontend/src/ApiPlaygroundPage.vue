@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { formatDateTime } from './dateTime'
 import { adminFetch, type AdminAuth } from './api'
 import { copyText } from './clipboard'
+import IssuedConnectionGuide from './IssuedConnectionGuide.vue'
 
 type TargetMode = 'gateway' | 'local' | 'external'
 type KeyMode = 'temporary' | 'manual'
@@ -10,6 +11,7 @@ type ProbeStatus = 'idle' | 'loading' | 'ok' | 'failed'
 type ModelItem = { id: string; object?: string; owned_by?: string; [key: string]: unknown }
 type PortalProject = { id: string; name: string; status: string; canIssueApiKeys: boolean; services: Array<{ serviceKey: string; displayName: string }> }
 type IssuedApiKey = { id: string; name: string; keyPrefix: string; secret: string; expiresAt?: string | null }
+type ConnectionEndpoint = { scope: 'INTERNAL' | 'EXTERNAL'; label: string; url: string }
 type ChatResult = { status: number; elapsedMs: number; requestId: string; body: unknown; text: string; inputTokens: number; outputTokens: number; totalTokens: number }
 
 const props = defineProps<{ organizationId?: string; auth: AdminAuth }>()
@@ -30,6 +32,8 @@ const selectedProjectId = ref('')
 const tempDurationSeconds = ref(60 * 60)
 const issuedKey = ref<IssuedApiKey | null>(null)
 const issuedKeyProjectId = ref('')
+const issuedEndpoints = ref<ConnectionEndpoint[]>([])
+const issuedModels = ref<PortalProject['services']>([])
 const probeStatus = ref<ProbeStatus>('idle')
 const probeLatencyMs = ref(0)
 const lastProbeAt = ref('')
@@ -153,22 +157,27 @@ async function loadProjects() {
 }
 async function issueTemporaryKey() {
   if (!selectedProject.value || !canIssueTemporaryKey.value) return
+  const project = selectedProject.value
   keyLoading.value = true
   projectError.value = ''
   rawError.value = ''
   try {
-    const issued = await adminFetch<IssuedApiKey>('/api/portal/projects/' + selectedProject.value.id + '/api-keys/temporary', props.auth, {
+    const issued = await adminFetch<IssuedApiKey>('/api/portal/projects/' + project.id + '/api-keys/temporary', props.auth, {
       method: 'POST',
       body: JSON.stringify({ name: 'playground-temp-' + Date.now(), durationSeconds: tempDurationSeconds.value })
     })
     issuedKey.value = issued
-    issuedKeyProjectId.value = selectedProject.value.id
+    issuedKeyProjectId.value = project.id
+    issuedModels.value = [...project.services]
+    issuedEndpoints.value = []
     apiKey.value = issued.secret
     keyMode.value = 'temporary'
     showApiKey.value = true
     if (targetMode.value !== 'gateway') { targetMode.value = 'gateway'; baseUrl.value = defaultBaseUrl() }
     resetProbe()
     message.value = '임시 키가 발급되어 Gateway에 적용되었습니다. 원문은 이 화면 메모리에만 있습니다.'
+    try { issuedEndpoints.value = (await adminFetch<{ endpoints: ConnectionEndpoint[] }>('/api/portal/connection', props.auth)).endpoints }
+    catch { message.value = '임시 키는 발급되었지만 연결 주소를 불러오지 못했습니다.' }
   } catch (error) {
     rawError.value = error instanceof Error ? error.message : '임시 테스트 키 발급에 실패했습니다.'
     message.value = '임시 키를 발급하지 못했습니다. 조직·프로젝트 권한을 확인하세요.'
@@ -386,6 +395,8 @@ watch(() => [props.organizationId, props.auth.accessToken], () => { void loadPro
             <div><span class="card-kicker">TEMPORARY KEY</span><strong>{{ issuedProject?.name ?? '선택 프로젝트' }}</strong><small>{{ issuedKey.keyPrefix }} · {{ formatDate(issuedKey.expiresAt) }}</small></div>
             <div class="issued-key-actions"><button class="ghost-button" type="button" :disabled="!issuedKey.secret" @click="showApiKey = !showApiKey">{{ showApiKey ? '키 숨기기' : '키 보기' }}</button><button class="ghost-button" type="button" :disabled="!issuedKey.secret" @click="copyApiKey">{{ keyCopied ? '복사됨' : '키 복사' }}</button><button class="danger-button" type="button" :disabled="keyLoading" @click="revokeTemporaryKey">임시 키 폐기</button></div>
             <input class="issued-key-value" :type="showApiKey && issuedKey.secret ? 'text' : 'password'" :value="issuedKey.secret || '원문 키는 제거되었습니다. 재발급하세요.'" readonly />
+            <p class="field-hint">임시 키는 시험용이며 만료됩니다. 운영 연동에는 프로젝트에서 발급한 별도의 운영 키를 사용하세요.</p>
+            <IssuedConnectionGuide :endpoints="issuedEndpoints" :models="issuedModels" />
           </div>
 
           <div class="form-actions">

@@ -50,7 +50,7 @@ export const currentGuides: DocPage[] = [
     keywords: ['DLP', '데이터 보호', '보안', '민감정보', '개인정보', 'secret', '외부 전송', 'local only', 'redact'],
     sections: [
       { id: 'project-local-only', title: '프로젝트 전체의 외부 AI 전송 금지', blocks: [
-        { type: 'paragraph', text: '프로젝트 & API 키에서 생성·수정할 때 외부 AI 전송 금지를 켜면 모든 프로젝트 API 키의 Gateway 요청이 로컬 전용이 됩니다. 민감정보 탐지 여부와 관계없이 외부 Provider를 호출 전에 제외하며, 키·서비스의 보호 모드를 OFF로 바꿔도 제한을 풀 수 없습니다.' },
+        { type: 'paragraph', text: '워크스페이스 관리 → 프로젝트에서 생성·수정할 때 외부 AI 전송 금지를 켜면 모든 프로젝트 API 키의 Gateway 요청이 로컬 전용이 됩니다. 민감정보 탐지 여부와 관계없이 외부 Provider를 호출 전에 제외하며, 키·서비스의 보호 모드를 OFF로 바꿔도 제한을 풀 수 없습니다.' },
         { type: 'callout', tone: 'warning', title: '로컬 모델이 없으면 외부로 우회하지 않습니다', text: '요청한 논리 서비스에 정상·로드된 로컬 Target이 필요합니다. Vision 등 요청 기능을 지원하는 로컬 Target이 없으면 503 LOCAL_MODEL_UNAVAILABLE을 반환합니다. 로컬 사이의 전환은 기존 Retry/Failover 정책을 따르며, 외부 GPT가 정상이어도 호출하지 않습니다. 프로젝트 API 키를 사용하지 않는 관리자 직접 모델 테스트는 별도 경로입니다.' },
         { type: 'steps', items: [
           { title: '프로젝트 외부 전송 금지 설정', text: '프로젝트 생성·수정에서 체크하고 저장합니다. 체크 해제는 기존 민감정보 정책·Provider 승인까지 해제하는 동작이 아닙니다.', action: { label: '프로젝트 설정 열기', destination: 'projects' } },
