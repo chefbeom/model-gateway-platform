@@ -38,6 +38,7 @@ const selectedId = ref(sessionStorage.getItem('aiconnect.portal.projectId') ?? '
 const keys = ref<ApiKey[]>([])
 const connections = ref<ConnectionEndpoint[]>([])
 const issuedConnections = ref<ConnectionEndpoint[]>([])
+const connectionError = ref(false)
 const busy = ref(false)
 const message = ref('')
 const keyOpen = ref(false)
@@ -65,11 +66,13 @@ const effectiveProjectBoundary = computed<DataBoundaryPolicy>(() =>
 )
 
 async function loadConnections() {
+  connectionError.value = false
   try {
     const response = await adminFetch<{ endpoints: ConnectionEndpoint[] }>('/api/portal/connection', props.auth)
     connections.value = response.endpoints
   } catch (error) {
     connections.value = []
+    connectionError.value = true
     message.value = error instanceof Error ? error.message : '연결 주소를 불러오지 못했습니다.'
   }
 }
@@ -276,8 +279,7 @@ onMounted(() => { void loadProjects(); void loadConnections() })
         <article class="surface-card simple-card">
           <span class="card-kicker">CONNECT</span><h2>연결 정보</h2>
           <p>발급 후에는 접속 위치에 맞는 Base URL과 논리 모델명을 복사해 OpenAI SDK에 사용하세요.</p>
-          <div v-if="connections.length" class="quick-endpoints"><code v-for="endpoint in connections" :key="endpoint.scope">{{ endpoint.scope === 'INTERNAL' ? '내부망' : '외부' }}: {{ endpoint.url }}</code></div>
-          <small v-else class="configuration-warning">관리자가 내부망/외부 Base URL을 아직 설정하지 않았습니다.</small>
+          <IssuedConnectionGuide :endpoints="connections" :models="[]" :connection-error="connectionError" hide-models />
         </article>
       </div>
 
@@ -349,7 +351,7 @@ onMounted(() => { void loadProjects(); void loadConnections() })
     <BaseModal :open="secretOpen" title="API 키와 연결 정보를 준비했습니다" description="API 키 원문은 이 창을 닫으면 다시 표시할 수 없습니다." @close="secretOpen = false">
       <div class="connection-reveal">
         <div class="connection-value"><span>PROJECT API KEY</span><code>{{ issuedSecret }}</code><button class="secondary-button" @click="copyValue(issuedSecret, 'API 키')">복사</button></div>
-        <IssuedConnectionGuide :endpoints="issuedConnections" :models="issuedModels" />
+        <IssuedConnectionGuide :endpoints="issuedConnections" :models="issuedModels" :connection-error="connectionError" />
       </div>
       <template #footer><button class="primary-button" @click="secretOpen = false">안전하게 보관했습니다</button></template>
     </BaseModal>

@@ -422,8 +422,8 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
       </header>
       <main class="console-content">
         <p v-if="message" class="inline-alert">{{ message }}</p>
-        <DashboardPage v-if="isOrgOrPlatformAdmin && page === 'dashboard'" :organization-id="organizationId" :auth="auth" @navigate="navigate" />
-        <ScopedOverviewPage v-else-if="!isOrgOrPlatformAdmin && (page === 'dashboard' || page === 'observability' || (page === 'quotas' && !isProjectDirector))" :key="page" :mode="page" :organization-id="organizationId" :auth="auth" />
+        <DashboardPage v-if="isOrgOrPlatformAdmin && page === 'dashboard'" :organization-id="organizationId" :organization-name="currentOrganization?.name" :user-name="profileName" :role-label="profileRole" :auth="auth" :platform-admin="platformAdmin" @navigate="navigate" />
+        <ScopedOverviewPage v-else-if="!isOrgOrPlatformAdmin && (page === 'dashboard' || page === 'observability' || (page === 'quotas' && !isProjectDirector))" :key="page" :mode="page" :organization-id="organizationId" :organization-name="currentOrganization?.name" :user-name="profileName" :role-label="profileRole" :auth="auth" :is-director="isProjectDirector" @navigate="navigate" />
         <InfrastructurePage v-else-if="isOrgOrPlatformAdmin && page === 'infrastructure'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" @open-playground="openModelPlayground" />
         <SystemStructurePage v-else-if="isOrgOrPlatformAdmin && page === 'system'" :organization-id="organizationId" :auth="auth" />
         <ExternalProvidersPage v-else-if="isOrgOrPlatformAdmin && page === 'external'" :organization-id="organizationId" :auth="auth" @open-playground="openModelPlayground" />

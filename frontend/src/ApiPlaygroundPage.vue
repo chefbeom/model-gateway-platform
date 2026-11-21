@@ -33,6 +33,8 @@ const tempDurationSeconds = ref(60 * 60)
 const issuedKey = ref<IssuedApiKey | null>(null)
 const issuedKeyProjectId = ref('')
 const issuedEndpoints = ref<ConnectionEndpoint[]>([])
+const connectionError = ref(false)
+const selectedConnection = ref<'INTERNAL' | 'EXTERNAL'>('EXTERNAL')
 const issuedModels = ref<PortalProject['services']>([])
 const probeStatus = ref<ProbeStatus>('idle')
 const probeLatencyMs = ref(0)
@@ -63,13 +65,14 @@ const durationOptions = [
 const selectedTarget = computed(() => targetPresets.find(item => item.id === targetMode.value) ?? targetPresets[0])
 const selectedProject = computed(() => projects.value.find(item => item.id === selectedProjectId.value) ?? null)
 const issuedProject = computed(() => projects.value.find(item => item.id === issuedKeyProjectId.value) ?? null)
+const selectedConnectionUrl = computed(() => issuedEndpoints.value.find(item => item.scope === selectedConnection.value)?.url ?? '')
 const selectedModel = computed(() => models.value.find(item => item.id === model.value.trim()))
 const directTarget = computed(() => targetMode.value !== 'gateway')
 const keyReady = computed(() => Boolean(apiKey.value.trim()))
 const canIssueTemporaryKey = computed(() => Boolean(props.organizationId && props.auth.accessToken && selectedProject.value?.canIssueApiKeys && !keyLoading.value))
 const canRun = computed(() => Boolean(keyReady.value && model.value.trim() && prompt.value.trim() && !running.value && !(directTarget.value && keyMode.value === 'temporary')))
 const temporaryKeyLabel = computed(() => issuedKey.value ? issuedKey.value.keyPrefix + ' · ' + formatDate(issuedKey.value.expiresAt) : '아직 발급되지 않음')
-const curlExample = computed(() => 'curl "' + normalizedBaseUrl() + '/chat/completions" -H "Authorization: Bearer $AICONNECT_API_KEY" -H "Content-Type: application/json" --data @payload.json')
+const curlExample = computed(() => 'curl "' + (targetMode.value === 'gateway' ? (selectedConnectionUrl.value || '$AICONNECT_BASE_URL') : normalizedBaseUrl()) + '/chat/completions" -H "Authorization: Bearer $AICONNECT_API_KEY" -H "Content-Type: application/json" --data @payload.json')
 
 function defaultBaseUrl() {
   if (typeof window === 'undefined') return '/v1'
@@ -155,6 +158,18 @@ async function loadProjects() {
     projectError.value = error instanceof Error ? error.message : '프로젝트 목록을 불러오지 못했습니다.'
   } finally { projectLoading.value = false }
 }
+async function loadConnections() {
+  connectionError.value = false
+  try {
+    issuedEndpoints.value = (await adminFetch<{ endpoints: ConnectionEndpoint[] }>('/api/portal/connection', props.auth)).endpoints
+    if (!issuedEndpoints.value.some(item => item.scope === selectedConnection.value) && issuedEndpoints.value.length) selectedConnection.value = issuedEndpoints.value[0].scope
+  }
+  catch { issuedEndpoints.value = []; connectionError.value = true }
+}
+async function copyConnection() {
+  try { await copyText(selectedConnectionUrl.value); message.value = 'Gateway SDK 주소를 복사했습니다.' }
+  catch { message.value = '주소를 복사하지 못했습니다. 직접 선택해 복사해 주세요.' }
+}
 async function issueTemporaryKey() {
   if (!selectedProject.value || !canIssueTemporaryKey.value) return
   const project = selectedProject.value
@@ -169,15 +184,12 @@ async function issueTemporaryKey() {
     issuedKey.value = issued
     issuedKeyProjectId.value = project.id
     issuedModels.value = [...project.services]
-    issuedEndpoints.value = []
     apiKey.value = issued.secret
     keyMode.value = 'temporary'
     showApiKey.value = true
     if (targetMode.value !== 'gateway') { targetMode.value = 'gateway'; baseUrl.value = defaultBaseUrl() }
     resetProbe()
     message.value = '임시 키가 발급되어 Gateway에 적용되었습니다. 원문은 이 화면 메모리에만 있습니다.'
-    try { issuedEndpoints.value = (await adminFetch<{ endpoints: ConnectionEndpoint[] }>('/api/portal/connection', props.auth)).endpoints }
-    catch { message.value = '임시 키는 발급되었지만 연결 주소를 불러오지 못했습니다.' }
   } catch (error) {
     rawError.value = error instanceof Error ? error.message : '임시 테스트 키 발급에 실패했습니다.'
     message.value = '임시 키를 발급하지 못했습니다. 조직·프로젝트 권한을 확인하세요.'
@@ -316,7 +328,7 @@ async function copyCurl() {
     window.setTimeout(() => { curlCopied.value = false }, 1800)
   } catch { message.value = 'curl 명령을 복사하지 못했습니다.' }
 }
-watch(() => [props.organizationId, props.auth.accessToken], () => { void loadProjects() }, { immediate: true })
+watch(() => [props.organizationId, props.auth.accessToken], () => { void loadProjects(); if (props.auth.accessToken) void loadConnections() }, { immediate: true })
 </script>
 
 <template>
@@ -366,7 +378,14 @@ watch(() => [props.organizationId, props.auth.accessToken], () => { void loadPro
         </header>
 
         <div class="playground-form">
-          <label class="field">Base URL <small>{{ selectedTarget.label }} 요청 주소 · /v1 자동 보정</small><input v-model.trim="baseUrl" placeholder="https://ai.company.example/v1" /></label>
+          <label class="field">{{ targetMode === 'gateway' ? '브라우저 테스트 요청 주소' : '직접 호출 요청 주소' }} <small>{{ targetMode === 'gateway' ? '기본값은 현재 화면과 같은 출처의 테스트 경로이며 SDK 공지 주소가 아닙니다.' : selectedTarget.label + ' 요청 주소' }} · /v1 자동 보정</small><input v-model.trim="baseUrl" placeholder="https://example.com/v1" /></label>
+          <div v-if="targetMode === 'gateway'" class="temporary-key-panel">
+            <label class="field">설정된 SDK Gateway 주소 선택 <select v-model="selectedConnection"><option value="INTERNAL">내부 Gateway</option><option value="EXTERNAL">외부 Gateway · HTTPS</option></select></label>
+            <p v-if="connectionError" class="field-error" role="status">Gateway 주소 조회에 실패했습니다.</p>
+            <template v-else-if="selectedConnectionUrl"><code>{{ selectedConnectionUrl }}</code> <button type="button" class="secondary-button" @click="copyConnection">선택한 SDK 주소 복사</button></template>
+            <p v-else class="field-hint">선택한 주소가 설정되지 않았습니다. 관리자에게 문의하세요.</p>
+            <p class="field-hint">SDK용 주소는 브라우저 테스트 대상에 자동 적용되지 않습니다. 네트워크 허용과 브라우저 CORS는 별도로 확인하세요.</p>
+          </div>
 
           <div class="panel-heading"><span>인증 키 선택</span><small>원문은 현재 브라우저 메모리에만 보관됩니다.</small></div>
           <div class="key-mode-grid">
@@ -396,7 +415,7 @@ watch(() => [props.organizationId, props.auth.accessToken], () => { void loadPro
             <div class="issued-key-actions"><button class="ghost-button" type="button" :disabled="!issuedKey.secret" @click="showApiKey = !showApiKey">{{ showApiKey ? '키 숨기기' : '키 보기' }}</button><button class="ghost-button" type="button" :disabled="!issuedKey.secret" @click="copyApiKey">{{ keyCopied ? '복사됨' : '키 복사' }}</button><button class="danger-button" type="button" :disabled="keyLoading" @click="revokeTemporaryKey">임시 키 폐기</button></div>
             <input class="issued-key-value" :type="showApiKey && issuedKey.secret ? 'text' : 'password'" :value="issuedKey.secret || '원문 키는 제거되었습니다. 재발급하세요.'" readonly />
             <p class="field-hint">임시 키는 시험용이며 만료됩니다. 운영 연동에는 프로젝트에서 발급한 별도의 운영 키를 사용하세요.</p>
-            <IssuedConnectionGuide :endpoints="issuedEndpoints" :models="issuedModels" />
+            <IssuedConnectionGuide :endpoints="issuedEndpoints" :models="issuedModels" :connection-error="connectionError" />
           </div>
 
           <div class="form-actions">
@@ -422,7 +441,7 @@ watch(() => [props.organizationId, props.auth.accessToken], () => { void loadPro
           <button class="primary-button run-button" :disabled="!canRun" @click="runTest"><span>{{ running ? '요청 처리 중…' : '테스트 요청 실행' }}</span><b>↗</b></button>
           <p v-if="!keyReady" class="request-hint">먼저 2단계에서 API 키를 준비하세요.</p>
           <p v-else-if="directTarget && keyMode === 'temporary'" class="request-hint warning">직접 호출에는 임시 Gateway 키를 사용할 수 없습니다. 기존 키 사용으로 전환하세요.</p>
-          <details class="request-contract"><summary>요청용 curl 보기</summary><div class="contract-grid"><span><b>1</b> GET {{ normalizedBaseUrl() }}/models</span><span><b>2</b> POST {{ normalizedBaseUrl() }}/chat/completions</span><span><b>3</b> Bearer API Key 인증</span><span><b>4</b> {{ stream ? 'SSE event stream' : 'JSON response' }}</span></div><pre>{{ curlExample }}</pre><button class="ghost-button" type="button" @click="copyCurl">{{ curlCopied ? '복사됨' : 'curl 복사' }}</button></details>
+          <details class="request-contract"><summary>요청 경로와 curl 보기</summary><p>아래 경로는 브라우저의 현재 테스트 대상입니다. {{ targetMode === 'gateway' ? 'curl은 선택한 SDK 주소를 사용하며, 미설정 시 AICONNECT_BASE_URL을 직접 지정하세요.' : 'curl도 이 직접 호출 주소를 사용합니다.' }}</p><div class="contract-grid"><span><b>1</b> GET {{ normalizedBaseUrl() }}/models</span><span><b>2</b> POST {{ normalizedBaseUrl() }}/chat/completions</span><span><b>3</b> Bearer API Key 인증</span><span><b>4</b> {{ stream ? 'SSE event stream' : 'JSON response' }}</span></div><pre>{{ curlExample }}</pre><button class="ghost-button" type="button" @click="copyCurl">{{ curlCopied ? '복사됨' : 'curl 복사' }}</button></details>
         </div>
       </article>
     </div>

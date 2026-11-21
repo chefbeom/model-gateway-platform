@@ -68,6 +68,7 @@ const quota = ref<Quota | null>(null); const retention = ref<ContentPolicy | nul
 const busy = ref(false); const message = ref(''); const projectOpen = ref(false); const keyOpen = ref(false); const serviceOpen = ref(false); const policyOpen = ref(false); const ceilingOpen = ref(false); const secretOpen = ref(false); const controlOpen = ref(false); const projectEditOpen = ref(false); const projectDeleteOpen = ref(false); const deletionPreview = ref<ProjectDeletionPreview | null>(null)
 const projectName = ref(''); const projectTeamId = ref(''); const keyName = ref(''); const expiresAt = ref(''); const keyBoundaryPolicy = ref<DataBoundaryPolicy>('EXTERNAL_ALLOWED'); const serviceId = ref(''); const issuedSecret = ref(''); const revokeActiveKeys = ref(false); const editProjectName = ref(''); const editProjectTeamId = ref('')
 const issuedConnections = ref<ConnectionEndpoint[]>([]); const issuedModels = ref<GrantedService[]>([])
+const issuedConnectionError = ref(false)
 const issuedProjectName = ref('')
 const projectBoundaryPolicy = ref<DataBoundaryPolicy>('EXTERNAL_ALLOWED'); const editDataBoundaryPolicy = ref<DataBoundaryPolicy>('EXTERNAL_ALLOWED'); const editMaxDataBoundaryPolicy = ref<DataBoundaryPolicy>('EXTERNAL_ALLOWED')
 const ceilingForm = ref({ maxRequestsPerMinute: null as number | null, maxMonthlyTokenLimit: null as number | null })
@@ -243,8 +244,9 @@ async function issueKey() {
     })
     issuedProjectName.value = issuingProjectName; issuedSecret.value = value.secret; issuedModels.value = issuingModels; issuedConnections.value = []
     keyName.value = ''; expiresAt.value = ''; keyOpen.value = false; secretOpen.value = true
+    issuedConnectionError.value = false
     try { issuedConnections.value = (await adminFetch<{ endpoints: ConnectionEndpoint[] }>('/api/portal/connection', props.auth)).endpoints }
-    catch { message.value = 'API 키는 발급되었지만 연결 주소를 불러오지 못했습니다.' }
+    catch { issuedConnectionError.value = true; message.value = 'API 키는 발급되었지만 연결 주소를 불러오지 못했습니다.' }
     try { if (props.organizationId === issuingOrgId && selectedId.value === issuingProjectId) await selectProject(issuingProjectId) }
     catch { message.value = 'API 키는 발급되었지만 프로젝트 정보를 새로 고치지 못했습니다.' }
   } catch (error) { message.value = error instanceof Error ? error.message : '키 발급 실패' } finally { busy.value = false }
@@ -514,7 +516,7 @@ watch(() => [props.organizationId, isOrgOrPlatformAdmin.value], () => { ++select
       <template #footer><button class="secondary-button" @click="ceilingOpen = false">취소</button><button class="primary-button" :disabled="busy" @click="saveCeiling">상한 저장</button></template>
     </BaseModal>
     <BaseModal :open="controlOpen" :title="control?.status === 'SUSPENDED' ? '프로젝트 재개' : '프로젝트 강제 중지'" :description="control?.status === 'SUSPENDED' ? '프로젝트 요청 수신을 다시 허용합니다. 이미 폐기된 API 키는 자동으로 복구되지 않습니다.' : '중지 즉시 이 프로젝트의 모든 API 요청이 Gateway에서 차단됩니다.'" size="sm" @close="controlOpen = false"><div class="project-control-note"><span>{{ control?.status === 'SUSPENDED' ? '재개 대상' : '중지 대상' }}</span><strong>{{ control?.projectName }}</strong><p v-if="control?.status === 'SUSPENDED'">현재 프로젝트가 중지 상태입니다. 재개하면 ACTIVE 상태의 기존 API 키는 다시 호출할 수 있습니다.</p><template v-else><p>현재 활성 API 키: <b>{{ control?.activeApiKeyCount ?? 0 }}개</b>. 프로젝트 중지는 키를 삭제하지 않고 호출만 차단합니다.</p><label class="toggle-field"><span>활성 API 키도 모두 폐기<small>재개 후에도 기존 키를 사용하지 못하게 하는 긴급 대응입니다.</small></span><input v-model="revokeActiveKeys" type="checkbox" /></label></template></div><template #footer><button class="secondary-button" :disabled="busy" @click="controlOpen = false">취소</button><button class="secondary-button danger-text" :disabled="busy" @click="changeProjectStatus">{{ control?.status === 'SUSPENDED' ? '프로젝트 재개' : '강제 중지 실행' }}</button></template></BaseModal>
-    <BaseModal :open="secretOpen" title="API 키가 발급되었습니다" description="이 창을 닫으면 키 원문은 다시 표시되지 않습니다." @close="secretOpen = false; issuedSecret = ''"><div class="secret-reveal"><span>PROJECT API KEY · {{ issuedProjectName }}</span><code>{{ issuedSecret }}</code><button class="secondary-button" @click="copySecret">복사</button></div><IssuedConnectionGuide :endpoints="issuedConnections" :models="issuedModels" /><template #footer><button class="primary-button" @click="secretOpen = false; issuedSecret = ''">안전하게 보관했습니다</button></template></BaseModal>
+    <BaseModal :open="secretOpen" title="API 키가 발급되었습니다" description="이 창을 닫으면 키 원문은 다시 표시되지 않습니다." @close="secretOpen = false; issuedSecret = ''"><div class="secret-reveal"><span>PROJECT API KEY · {{ issuedProjectName }}</span><code>{{ issuedSecret }}</code><button class="secondary-button" @click="copySecret">복사</button></div><IssuedConnectionGuide :endpoints="issuedConnections" :models="issuedModels" :connection-error="issuedConnectionError" /><template #footer><button class="primary-button" @click="secretOpen = false; issuedSecret = ''">안전하게 보관했습니다</button></template></BaseModal>
   </section>
 </template>
 

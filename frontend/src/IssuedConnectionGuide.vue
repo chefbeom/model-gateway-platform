@@ -4,7 +4,7 @@ import { copyText } from './clipboard'
 
 type Endpoint = { scope: 'INTERNAL' | 'EXTERNAL'; label: string; url: string }
 type Model = { serviceKey: string; displayName: string }
-defineProps<{ endpoints: Endpoint[]; models: Model[] }>()
+defineProps<{ endpoints: Endpoint[]; models: Model[]; connectionError?: boolean; hideModels?: boolean }>()
 const notice = ref('')
 
 function hostBase(url: string) { return url.replace(/\/+$/, '').replace(/\/v1$/, '') }
@@ -17,20 +17,24 @@ async function copy(value: string) {
 <template>
   <section class="guide" aria-label="API 연결 정보">
     <h3>서비스 연결 정보</h3>
-    <p>프로젝트에 연결된 논리 모델명을 사용하세요. 실제 GPU 또는 외부 모델은 라우팅 정책에 따라 선택됩니다.</p>
+    <template v-if="!hideModels"><p>프로젝트에 연결된 논리 모델명을 사용하세요. 실제 GPU 또는 외부 모델은 라우팅 정책에 따라 선택됩니다.</p>
     <div v-if="models.length" class="items"><div v-for="model in models" :key="model.serviceKey" class="item"><span>서버 모델명 · {{ model.displayName }}</span><code>{{ model.serviceKey }}</code><button type="button" class="secondary-button" @click="copy(model.serviceKey)">복사</button></div></div>
     <p v-else class="warning">사용 가능한 연결 모델이 없거나 조회하지 못했습니다. 프로젝트의 서비스 권한을 확인하세요.</p>
-    <template v-if="endpoints.length">
-      <div v-for="endpoint in endpoints" :key="endpoint.scope" class="endpoint">
-        <strong>{{ endpoint.scope === 'INTERNAL' ? '내부망 · VPN' : '외부 HTTPS' }}</strong>
-        <div class="item"><span>OpenAI SDK Base URL</span><code>{{ endpoint.url }}</code><button type="button" class="secondary-button" @click="copy(endpoint.url)">복사</button></div>
-        <div class="item"><span>Calen OpenAI API 주소 (경로 별도 입력)</span><code>{{ hostBase(endpoint.url) }}</code><button type="button" class="secondary-button" @click="copy(hostBase(endpoint.url))">복사</button></div>
+    </template>
+    <p v-if="connectionError" class="warning" role="status">연결 주소 조회에 실패했습니다. 관리자에게 확인하거나 다시 시도하세요.</p>
+    <template v-else>
+      <div v-for="scope in (['INTERNAL', 'EXTERNAL'] as const)" :key="scope" class="endpoint">
+        <strong>{{ scope === 'INTERNAL' ? '내부 Gateway' : '외부 Gateway · HTTPS' }}</strong>
+        <template v-for="endpoint in endpoints.filter(item => item.scope === scope)" :key="endpoint.scope">
+        <div class="item"><span>OpenAI SDK Base URL</span><code>{{ endpoint.url }}</code><button type="button" class="secondary-button" :aria-label="`${scope === 'INTERNAL' ? '내부' : '외부'} SDK Base URL 복사`" @click="copy(endpoint.url)">복사</button></div>
+        <div class="item"><span>Calen OpenAI API 주소 (경로 별도 입력)</span><code>{{ hostBase(endpoint.url) }}</code><button type="button" class="secondary-button" :aria-label="`${scope === 'INTERNAL' ? '내부' : '외부'} Calen 주소 복사`" @click="copy(hostBase(endpoint.url))">복사</button></div>
+        </template>
+        <p v-if="!endpoints.some(item => item.scope === scope)" class="warning">설정되지 않았습니다. 관리자에게 문의하세요.</p>
       </div>
       <div class="item"><span>Chat Completions path</span><code>/v1/chat/completions</code><button type="button" class="secondary-button" @click="copy('/v1/chat/completions')">복사</button></div>
       <div class="item"><span>Models path</span><code>/v1/models</code><button type="button" class="secondary-button" @click="copy('/v1/models')">복사</button></div>
       <p>Calen에는 위 주소와 경로를 각각 입력합니다. SDK Base URL에 경로의 /v1을 다시 붙이지 마세요. 외부 주소는 네트워크 접근 허용 상태도 확인해야 합니다.</p>
     </template>
-    <p v-else class="warning">연결 주소가 설정되지 않았거나 조회하지 못했습니다. 관리자에게 Base URL을 확인하세요.</p>
     <small aria-live="polite">{{ notice }}</small>
   </section>
 </template>

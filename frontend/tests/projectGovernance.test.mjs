@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { parse, compileScript } from '@vue/compiler-sfc'
-import { createRenderer, defineComponent, h, nextTick } from 'vue'
+import { createRenderer, defineComponent, h, nextTick, ref } from 'vue'
 import ts from 'typescript'
 import { typeScriptModuleUrl } from './loadTypeScript.mjs'
 
@@ -402,9 +402,38 @@ test('ConsoleShell hides org-only nav from PROJECT_DIRECTOR/GENERAL_USER and qui
   }, { 'aiconnect.accessToken': 'gen-jwt' }, '#projects')
 })
 
+test('relationship displays only accessible project data and distinguishes lookup failure', async () => {
+  const { default: Relationship } = await compileVueComponent('../src/WorkspaceRelationship.vue', 'relationship-test')
+  await withDomGlobals(async () => {
+    const calls = []
+    globalThis.fetch = async url => {
+      calls.push(String(url))
+      if (String(url).includes('/org-error/')) return { ok: false, status: 403, text: async () => '{}' }
+      return okJson([{ id: 'p-1', name: '승인 프로젝트', status: 'ACTIVE', canIssueApiKeys: true }])
+    }
+    const { renderer, root, textContent } = createMemoryDom()
+    const app = renderer.createApp({ render: () => h(Relationship, { organizationId: 'org-1', organizationName: '우리 조직', userName: '나', roleLabel: '팀원', auth: { accessToken: 'token' } }) })
+    try {
+      app.mount(root); await flush()
+      assert.match(textContent(root), /우리 조직/)
+      assert.match(textContent(root), /승인 프로젝트/)
+      assert.match(textContent(root), /API 키 발급 가능/)
+      assert.equal(calls.some(url => url.startsWith('/api/admin/')), false)
+    } finally { app.unmount() }
+    const failed = createMemoryDom()
+    const failureApp = failed.renderer.createApp({ render: () => h(Relationship, { organizationId: 'org-error', auth: { accessToken: 'token' } }) })
+    try {
+      failureApp.mount(failed.root); await flush()
+      assert.match(failed.textContent(failed.root), /관계도를 불러오지 못했습니다/)
+      assert.doesNotMatch(failed.textContent(failed.root), /접근 가능한 프로젝트가 없습니다/)
+    } finally { failureApp.unmount() }
+  })
+})
+
 test('scoped quota page shows only key budget and avoids admin APIs', async () => {
   const { default: Page } = await compileVueComponent('../src/ScopedOverviewPage.vue', 'scoped-overview-test', {
-    '\\./RequestDetailModal\\.vue': emptyComponentStub('RequestDetailModal')
+    '\\./RequestDetailModal\\.vue': emptyComponentStub('RequestDetailModal'),
+    '\\./WorkspaceRelationship\\.vue': emptyComponentStub('WorkspaceRelationship')
   })
   await withDomGlobals(async () => {
     const calls = []
@@ -419,8 +448,72 @@ test('scoped quota page shows only key budget and avoids admin APIs', async () =
       app.mount(root); await flush()
       assert.match(textContent(root), /내 키/)
       assert.match(textContent(root), /개인 상한/)
-      assert.match(textContent(root), /공유 예산 및 사용액은 조회 권한이 없습니다/)
+      assert.match(textContent(root), /키에 직접 설정된 한도/)
       assert.ok(calls.some(url => url.includes('/own-key-quotas')))
+      assert.equal(calls.some(url => url.startsWith('/api/admin/')), false)
+    } finally { app.unmount() }
+  })
+})
+
+test('director dashboard loads only authorized project budget and keeps currency and missing values distinct', async () => {
+  const { default: Page } = await compileVueComponent('../src/ScopedOverviewPage.vue', 'director-dashboard-test', {
+    '\\./RequestDetailModal\\.vue': emptyComponentStub('RequestDetailModal'),
+    '\\./WorkspaceRelationship\\.vue': emptyComponentStub('WorkspaceRelationship')
+  })
+  await withDomGlobals(async () => {
+    const calls = []
+    const projects = [{ id: 'a', name: 'Managed A', access: 'PROJECT_ALL', accessLabel: '관리' }, { id: 'b', name: 'Own B', access: 'OWN_KEYS', accessLabel: '내 키' }, { id: 'c', name: 'Managed C', access: 'PROJECT_ALL', accessLabel: '관리' }]
+    const q = (id, currency, usedAmount, scopeType = 'PROJECT') => ({ id, name: id, currency, usedAmount, scopeType, period: 'MONTHLY', enabled: true, limitAmount: 100, exceeded: false })
+    globalThis.fetch = async url => {
+      calls.push(String(url))
+      if (String(url).includes('spend-quotas')) return okJson({ ceilings: [q('zero', 'USD', 0), q('hidden', 'USD', null)], quotas: [q('zero', 'USD', 0), q('won', 'KRW', 30), q('key', 'KRW', 20, 'API_KEY')] })
+      if (String(url).includes('/requests')) return okJson([])
+      return okJson({ scopeLabel: '접근 범위', availableProjects: projects, total: { requestCount: 0, succeeded: 0, failed: 0, inputTokens: 0, outputTokens: 0, estimatedCostByCurrency: { USD: 0, KRW: 30 } } })
+    }
+    const dom = createMemoryDom(); const app = dom.renderer.createApp({ render: () => h(Page, { organizationId: 'org', auth: { accessToken: 'token' }, mode: 'dashboard', isDirector: true }) })
+    try {
+      app.mount(dom.root); await flush()
+      assert.match(dom.textContent(dom.root), /프로젝트를 선택하세요/)
+      assert.match(dom.textContent(dom.root), /기록 없음/)
+      assert.equal(calls.some(url => url.includes('spend-quotas')), false)
+      const select = dom.walk(dom.root, el => el.tag === 'select')[0]
+      await dom.setSelect(select, 'a'); await flush()
+      assert.equal(calls.filter(url => url.includes('spend-quotas')).length, 1)
+      assert.match(dom.textContent(dom.root), /USD 0 \/ USD 100/)
+      assert.match(dom.textContent(dom.root), /KRW 30 \/ KRW 100/)
+      assert.doesNotMatch(dom.textContent(dom.root), /hidden|key/)
+      assert.equal(dom.walk(dom.root, el => el.props['data-stub'] === 'WorkspaceRelationship').length, 1)
+      await dom.setSelect(select, 'b'); await flush()
+      assert.equal(calls.filter(url => url.includes('spend-quotas')).length, 1)
+      assert.match(dom.textContent(dom.root), /전체 관리 권한이 없습니다/)
+    } finally { app.unmount() }
+  })
+})
+
+test('dashboard isolates request failure and rejects old organization responses without admin calls for general users', async () => {
+  const { default: Page } = await compileVueComponent('../src/ScopedOverviewPage.vue', 'dashboard-race-test', {
+    '\\./RequestDetailModal\\.vue': emptyComponentStub('RequestDetailModal'),
+    '\\./WorkspaceRelationship\\.vue': emptyComponentStub('WorkspaceRelationship')
+  })
+  await withDomGlobals(async () => {
+    const calls = []; let resolveOld
+    const summary = label => ({ scopeLabel: label, availableProjects: [], total: { requestCount: 0, succeeded: 0, failed: 0, inputTokens: 0, outputTokens: 0, estimatedCostByCurrency: {} } })
+    globalThis.fetch = async url => {
+      calls.push(String(url))
+      if (String(url).includes('/requests')) throw new Error('history unavailable')
+      if (String(url).includes('/old/')) return new Promise(resolve => { resolveOld = () => resolve(okJson(summary('OLD SCOPE'))) })
+      return okJson(summary('NEW SCOPE'))
+    }
+    const org = ref('old'), dom = createMemoryDom()
+    const auth = { accessToken: 'token' }
+    const app = dom.renderer.createApp({ render: () => h(Page, { organizationId: org.value, auth, mode: 'dashboard', isDirector: false }) })
+    try {
+      app.mount(dom.root); await flush(); org.value = 'new'; await flush()
+      assert.match(dom.textContent(dom.root), /NEW SCOPE/)
+      assert.match(dom.textContent(dom.root), /요청 조회 실패/)
+      assert.match(dom.textContent(dom.root), /기록 없음/)
+      resolveOld(); await flush()
+      assert.doesNotMatch(dom.textContent(dom.root), /OLD SCOPE/)
       assert.equal(calls.some(url => url.startsWith('/api/admin/')), false)
     } finally { app.unmount() }
   })

@@ -16,6 +16,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
+import java.net.URI;
 import java.util.List;
 import java.util.UUID;
 
@@ -143,9 +144,21 @@ public class DeveloperPortalController {
         return actor.userId().equals(key.getIssuedByUserId()) || access.canManageProject(actor, key.getProjectId());
     }
 
-    private ConnectionEndpointView endpoint(String scope, String label, String value) {
+    static ConnectionEndpointView endpoint(String scope, String label, String value) {
         if (value == null || value.isBlank()) return new ConnectionEndpointView(scope, label, null);
         String normalized = value.trim().replaceAll("/+$", "");
+        try {
+            URI uri = URI.create(normalized);
+            String scheme = uri.getScheme();
+            String path = uri.getRawPath();
+            if (uri.getHost() == null || uri.getPort() > 65535 || uri.getPort() == 0 || uri.getRawUserInfo() != null || uri.getRawQuery() != null || uri.getRawFragment() != null
+                    || !("https".equalsIgnoreCase(scheme) || ("INTERNAL".equals(scope) && "http".equalsIgnoreCase(scheme)))
+                    || (path != null && (path.contains("%") || path.contains("//") || !uri.normalize().getRawPath().equals(path)))) {
+                return new ConnectionEndpointView(scope, label, null);
+            }
+        } catch (IllegalArgumentException ex) {
+            return new ConnectionEndpointView(scope, label, null);
+        }
         if (!normalized.endsWith("/v1")) normalized += "/v1";
         return new ConnectionEndpointView(scope, label, normalized);
     }

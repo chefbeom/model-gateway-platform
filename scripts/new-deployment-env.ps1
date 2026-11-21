@@ -51,8 +51,9 @@ RUNTIME_CONNECT_TIMEOUT_MS=3000
 RUNTIME_RESPONSE_TIMEOUT_MS=360000
 
 # 실제 배포 환경에 맞게 반드시 수정하세요. localhost는 Gateway 컴퓨터에서만 유효합니다.
-GATEWAY_INTERNAL_BASE_URL=http://aiconnect-gateway.company.internal/v1
-GATEWAY_EXTERNAL_BASE_URL=https://api.example.com/v1
+# Optional advertised SDK URLs; external must use HTTPS.
+GATEWAY_INTERNAL_BASE_URL=
+GATEWAY_EXTERNAL_BASE_URL=
 
 # Tailscale 또는 TLS 선택 레이어를 사용할 때 설정합니다.
 TS_AUTHKEY=replace-with-a-preauthorized-tagged-tailscale-auth-key

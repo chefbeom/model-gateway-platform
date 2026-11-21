@@ -5,7 +5,7 @@ import { searchDocuments } from './navigation'
 
 export const DOCS_REVIEWED_AT = '2026. 10. 05.'
 
-const curlExample = `curl "https://ai.company.example/v1/chat/completions" \\
+const curlExample = `curl "$AICONNECT_BASE_URL/chat/completions" \\
   -H "Authorization: Bearer $AICONNECT_API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -21,7 +21,7 @@ import os
 
 client = OpenAI(
     api_key=os.environ["AICONNECT_API_KEY"],
-    base_url="https://ai.company.example/v1",
+    base_url=os.environ["AICONNECT_BASE_URL"],
 )
 
 response = client.chat.completions.create(
@@ -37,7 +37,7 @@ const typescriptExample = `import OpenAI from 'openai'
 
 const client = new OpenAI({
   apiKey: process.env.AICONNECT_API_KEY,
-  baseURL: 'https://ai.company.example/v1'
+  baseURL: process.env.AICONNECT_BASE_URL
 })
 
 const response = await client.chat.completions.create({
@@ -224,18 +224,18 @@ export const devDocs: DocPage[] = [
       {
         id: 'base-url', title: 'Base URL은 호출 위치에 따라 선택',
         blocks: [
-          { type: 'table', columns: ['호출 위치', '사용할 주소', '예시'], rows: [
-            ['Gateway와 같은 컴퓨터', '로컬 Base URL', 'http://localhost/v1'],
-            ['회사 내부망·VPN·Tailnet', '내부 Gateway Base URL', 'http://100.x.x.x/v1 또는 사내 DNS'],
-            ['인터넷의 운영 서버', '외부 HTTPS Base URL', 'https://ai.company.example/v1']
+          { type: 'table', columns: ['호출 위치', '사용할 주소', '확인'], rows: [
+            ['내부에서 호출', '내부 Gateway Base URL', '개발자 포털의 설정값 확인'],
+            ['외부에서 호출', '외부 HTTPS Base URL', '개발자 포털의 설정값과 접근 허용 확인']
           ] },
+          { type: 'paragraph', text: '각 주소는 선택적으로 설정되며, 미설정 또는 조회 실패 시 관리자에게 확인하세요. 아래 예제의 AICONNECT_BASE_URL은 포털에서 복사한 /v1로 끝나는 SDK 주소로 설정하세요. 주소 표시가 네트워크 접근 허용을 보장하지는 않습니다.' },
           { type: 'callout', tone: 'danger', title: 'LM Studio 주소와 혼동하지 마세요', text: 'http://100.x.x.x:1234는 GPU 서버의 Runtime Endpoint일 수 있습니다. 사용자 애플리케이션에는 AICONNECT Gateway 주소를 넣어야 인증·라우팅·사용량·Failover가 동작합니다.' }
         ]
       },
       {
         id: 'models', title: '사용 가능한 모델 조회',
         blocks: [
-          { type: 'code', language: 'bash', title: 'GET /v1/models', code: `curl "https://ai.company.example/v1/models" \\
+          { type: 'code', language: 'bash', title: 'GET /v1/models', code: `curl "$AICONNECT_BASE_URL/models" \\
   -H "Authorization: Bearer $AICONNECT_API_KEY"` },
           { type: 'paragraph', text: '응답의 data[].id 값만 chat/completions의 model로 사용합니다. 여기에는 실제 Runtime / Provider 모델 ID가 아니라 프로젝트에 허용된 논리 서비스 키가 표시됩니다.' }
         ]

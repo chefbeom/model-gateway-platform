@@ -58,6 +58,12 @@ runtime:
   healthCheckDelayMs: 30000
   healthCheckInitialDelayMs: 30000
 
+# Optional advertised SDK URLs; omit either when unavailable. External must use HTTPS.
+# extraEnv:
+#   - name: GATEWAY_EXTERNAL_BASE_URL
+#     value: https://gateway.example.com/v1
+#   - name: GATEWAY_INTERNAL_BASE_URL
+#     value: http://gateway.internal/v1
 extraEnv: []
 
 nameOverride: ""
