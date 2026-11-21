@@ -22,6 +22,7 @@ import ApiPlaygroundPage from './ApiPlaygroundPage.vue'
 import ModelPlaygroundPage from './ModelPlaygroundPage.vue'
 import PlatformAdminPage from './PlatformAdminPage.vue'
 import BetaOperatorPage from './BetaOperatorPage.vue'
+import WorkspaceRelationship from './WorkspaceRelationship.vue'
 import {
   accountTierLabel,
   adminFetch,
@@ -37,7 +38,7 @@ import { formatDateTime } from './dateTime'
 
 type Theme = 'dark' | 'light'
 type FontScale = '100' | '115' | '125' | '135'
-type PageKey = 'beta' | 'dashboard' | 'infrastructure' | 'system' | 'external' | 'services' | 'teams' | 'projects' | 'observability' | 'usage' | 'quotas' | 'data-protection' | 'notifications' | 'audit' | 'platform' | 'portal' | 'playground' | 'model-playground' | 'docs'
+type PageKey = 'beta' | 'dashboard' | 'relationship' | 'infrastructure' | 'system' | 'external' | 'services' | 'teams' | 'projects' | 'observability' | 'usage' | 'quotas' | 'data-protection' | 'notifications' | 'audit' | 'platform' | 'portal' | 'playground' | 'model-playground' | 'docs'
 type OrganizationRole = 'ORGANIZATION_ADMIN' | 'DEVELOPER'
 type Organization = { id: string; name: string; status: string }
 type AccessibleProject = { id: string; name: string; status: string }
@@ -58,6 +59,7 @@ const adminNavItems: NavItem[] = [
   { id: 'services', label: 'LLM 서비스', description: '논리 모델과 라우팅 정책', keywords: 'service model failover routing', icon: '▣', group: '운영' },
   { id: 'teams', label: '팀과 부서', description: '부서·역할·프로젝트 소유', keywords: 'team department role audit', icon: '⌘', group: '워크스페이스 관리' },
   { id: 'projects', label: '프로젝트', description: '프로젝트·권한·API 키', keywords: 'project key quota credential', icon: '⌘', group: '워크스페이스 관리' },
+  { id: 'relationship', label: '조직 관계도', description: '최고 관리자·조직·프로젝트·구성원 계층도', keywords: 'organization relationship hierarchy chart tree member manager 조직 관계도 계층도', icon: '◈', group: '워크스페이스' },
   { id: 'observability', label: '관측성', description: '요청·장애·Failover 추적', keywords: 'request incident failover monitor', icon: '◉', group: '관측' },
   { id: 'usage', label: '사용량', description: '토큰·비용·API 호출 이력', keywords: 'usage token cost billing', icon: '◴', group: '관측' },
   { id: 'notifications', label: '알림 채널', description: 'Discord와 Telegram 연동', keywords: 'notification discord telegram alert', icon: '◇', group: '시스템' },
@@ -71,6 +73,7 @@ const directorNavItems: NavItem[] = [
   { id: 'dashboard', label: '대시보드', description: '접근 범위 요약', keywords: 'dashboard overview', icon: '◔', group: '홈' },
   { id: 'observability', label: '관측성', description: '접근 범위 요청 이력', keywords: 'request monitor', icon: '◉', group: '관측·비용' },
   { id: 'projects', label: '프로젝트', description: '프로젝트·멤버·권한·API 키', keywords: 'project key member delegation policy', icon: '⌘', group: '워크스페이스 관리' },
+  { id: 'relationship', label: '조직 관계도', description: '최고 관리자·조직·프로젝트·구성원 계층도', keywords: 'organization relationship hierarchy chart tree member manager 조직 관계도 계층도', icon: '◈', group: '워크스페이스' },
   { id: 'quotas', label: '요금·한도', description: '프로젝트 예산과 관리자 상한', keywords: 'budget quota limit spend cost ceiling', icon: '₩', group: '내 작업' },
   { id: 'data-protection', label: '데이터 보호', description: '프로젝트·API 키 민감정보 정책', keywords: 'security privacy dlp pii secret local only', icon: '◇', group: '내 작업' },
   { id: 'portal', label: '내 API', description: '프로젝트·사용 모델·API 키', keywords: 'my api project model key', icon: '⌘', group: '내 작업' },
@@ -83,6 +86,7 @@ const developerNavItems: NavItem[] = [
   { id: 'observability', label: '관측성', description: '내 API 키 요청 이력', keywords: 'request monitor', icon: '◉', group: '관측·비용' },
   { id: 'quotas', label: '요금·한도', description: '내 API 키 추정 비용', keywords: 'budget quota cost', icon: '₩', group: '관측·비용' },
   { id: 'portal', label: '내 API', description: '프로젝트·사용 모델·API 키', keywords: 'my api project model key', icon: '⌘', group: '내 작업' },
+  { id: 'relationship', label: '조직 관계도', description: '최고 관리자·조직·프로젝트·구성원 계층도', keywords: 'organization relationship hierarchy chart tree member manager 조직 관계도 계층도', icon: '◈', group: '워크스페이스' },
   { id: 'usage', label: 'API 사용량', description: '내 API 키의 토큰·비용·요청', keywords: 'usage token cost request', icon: '◴', group: '내 작업' },
   { id: 'playground', label: 'API 테스트', description: '모델 연결·Chat Completions 테스트', keywords: 'playground api test chat completion models', icon: '▷', group: '내 작업' }
 ]
@@ -150,7 +154,7 @@ const navItems = computed(() => [
       : developerNavItems),
   ...(platformAdmin.value || betaOperator.value ? [{id:'beta' as const,label:'초대 서비스 운영',description:'초대·접근·운영 상태',keywords:'beta invitation invite',icon:'◇',group:'운영'}] : [])
 ].map(item => ({ ...item, group: item.id === 'dashboard' ? '홈'
-  : ['projects', 'teams', 'portal', 'data-protection'].includes(item.id) ? '워크스페이스'
+  : ['relationship', 'projects', 'teams', 'portal', 'data-protection'].includes(item.id) ? '워크스페이스'
   : ['playground', 'model-playground'].includes(item.id) ? '개발자 도구'
   : ['observability', 'usage', 'quotas'].includes(item.id) ? '관측·비용' : '인프라·시스템' })))
 const groups = computed(() => ['홈', '워크스페이스', '개발자 도구', '관측·비용', '인프라·시스템'].filter(group => navItems.value.some(item => item.group === group)))
@@ -176,7 +180,7 @@ const searchResults = computed(() => {
 })
 
 function knownPage(value: string): value is PageKey {
-  return ['beta', 'dashboard', 'infrastructure', 'system', 'external', 'services', 'teams', 'projects', 'observability', 'usage', 'quotas', 'data-protection', 'notifications', 'audit', 'platform', 'portal', 'playground', 'model-playground', 'docs'].includes(value)
+  return ['beta', 'dashboard', 'relationship', 'infrastructure', 'system', 'external', 'services', 'teams', 'projects', 'observability', 'usage', 'quotas', 'data-protection', 'notifications', 'audit', 'platform', 'portal', 'playground', 'model-playground', 'docs'].includes(value)
 }
 function isAllowedPage(target: PageKey) { return target === 'docs' || navItems.value.some(item => item.id === target) }
 function fallbackPage(): PageKey { return 'dashboard' }
@@ -441,6 +445,7 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
         <ApiPlaygroundPage v-else-if="page === 'playground'" :organization-id="organizationId" :auth="auth" />
         <ModelPlaygroundPage v-else-if="isOrgOrPlatformAdmin && page === 'model-playground'" :organization-id="organizationId" :auth="auth" :initial-target-id="playgroundInitialTargetId" />
         <DevDocsPage v-else-if="page === 'docs'" @navigate="navigate" />
+        <WorkspaceRelationship v-else-if="page === 'relationship'" :organization-id="organizationId" :organization-name="currentOrganization?.name" :user-name="profileName" :role-label="profileRole" :auth="auth" standalone />
         <DeveloperPortalPage v-else :organization-id="organizationId" :auth="auth" />
       </main>
     </div>

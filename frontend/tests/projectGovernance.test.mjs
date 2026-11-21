@@ -278,7 +278,8 @@ test('ConsoleShell hides org-only nav from PROJECT_DIRECTOR/GENERAL_USER and qui
     '\\./ApiPlaygroundPage\\.vue': emptyComponentStub('ApiPlaygroundPage'),
     '\\./ModelPlaygroundPage\\.vue': emptyComponentStub('ModelPlaygroundPage'),
     '\\./PlatformAdminPage\\.vue': emptyComponentStub('PlatformAdminPage'),
-    '\\./BetaOperatorPage\\.vue': emptyComponentStub('BetaOperatorPage')
+    '\\./BetaOperatorPage\\.vue': emptyComponentStub('BetaOperatorPage'),
+    '\\./WorkspaceRelationship\\.vue': emptyComponentStub('WorkspaceRelationship')
   }
   const { default: ConsoleShell } = await compileVueComponent('../src/ConsoleShell.vue', 'shell-gov-test', stubs)
 
@@ -317,7 +318,7 @@ test('ConsoleShell hides org-only nav from PROJECT_DIRECTOR/GENERAL_USER and qui
       assert.equal(calls.some(c => c.url.includes('/teams')), false)
       const sideNav = walk(root, el => el.tag === 'nav')[0]
       const navText = textContent(sideNav)
-      for (const allowed of ['대시보드', '관측성', '프로젝트', '요금·한도', '데이터 보호', '내 API', 'API 사용량', 'API 테스트']) {
+      for (const allowed of ['대시보드', '관측성', '프로젝트', '조직 관계도', '요금·한도', '데이터 보호', '내 API', 'API 사용량', 'API 테스트']) {
         assert.ok(navText.includes(allowed), `Missing allowed nav item: ${allowed}`)
       }
       for (const hidden of ['팀과 부서', 'LLM 서비스', '인프라스트럭처', '외부 AI', '모델 테스트 콘솔', 'Platform Admin', '알림 채널', '감사 로그', '시스템 구조']) {
@@ -394,6 +395,7 @@ test('ConsoleShell hides org-only nav from PROJECT_DIRECTOR/GENERAL_USER and qui
       assert.ok(navText.includes('대시보드'))
       assert.ok(navText.includes('관측성'))
       assert.ok(navText.includes('요금·한도'))
+      assert.ok(navText.includes('조직 관계도'))
       assert.equal(navText.includes('데이터 보호'), false)
       assert.ok(navText.includes('내 API'))
     } finally {
@@ -482,7 +484,7 @@ test('director dashboard loads only authorized project budget and keeps currency
       assert.match(dom.textContent(dom.root), /USD 0 \/ USD 100/)
       assert.match(dom.textContent(dom.root), /KRW 30 \/ KRW 100/)
       assert.doesNotMatch(dom.textContent(dom.root), /hidden|key/)
-      assert.equal(dom.walk(dom.root, el => el.props['data-stub'] === 'WorkspaceRelationship').length, 1)
+      assert.equal(dom.walk(dom.root, el => el.tag === 'button' && dom.textContent(el).includes('조직 관계도')).length, 1)
       await dom.setSelect(select, 'b'); await flush()
       assert.equal(calls.filter(url => url.includes('spend-quotas')).length, 1)
       assert.match(dom.textContent(dom.root), /전체 관리 권한이 없습니다/)
@@ -1165,7 +1167,14 @@ test('relationship renders top tier, organization, managers, members and compact
       await flush()
 
       assert.ok(calls.some(url => url === '/api/portal/organizations/org-1/relationship'))
+      assert.equal(walk(root, el => typeof el.props?.class === 'string' && el.props.class.split(' ').includes('org-chart-tree')).length, 1)
+      assert.ok(walk(root, el => typeof el.props?.class === 'string' && el.props.class.split(' ').includes('org-branch-col')).length >= 4)
       const rendered = textContent(root)
+      assert.match(rendered, /1단계/)
+      assert.match(rendered, /2단계/)
+      assert.match(rendered, /3단계/)
+      assert.match(rendered, /4단계/)
+      assert.match(rendered, /5단계/)
       assert.match(rendered, /admin@aiconnect\.test/)
       assert.match(rendered, /시스템 관리자/)
       assert.match(rendered, /현재 계정/)
