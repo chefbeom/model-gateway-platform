@@ -35,6 +35,7 @@ const selectedProjectId = ref('')
 const requestDetail = ref<RequestDetail | null>(null)
 const requestDetailOpen = ref(false)
 const requestDetailLoading = ref(false)
+let loadGeneration = 0
 
 const pageTitle = computed(() => overview.value?.scope === 'ORGANIZATION' ? '전체 API 사용량'
   : overview.value?.scope === 'PROJECT_OWNER' ? '프로젝트 API 사용량' : '내 API 사용량')
@@ -63,8 +64,13 @@ function queryString() {
 }
 
 async function loadUsage() {
+  const generation = ++loadGeneration
+  overview.value = null
+  requestDetailOpen.value = false
+  requestDetail.value = null
   if (!props.organizationId) {
     overview.value = null
+    busy.value = false
     message.value = 'Workspace에서 조직을 선택하세요.'
     return
   }
@@ -72,6 +78,7 @@ async function loadUsage() {
   try {
     const result = await adminFetch<UsageOverview>(
       `/api/portal/organizations/${props.organizationId}/usage-overview${queryString()}`, props.auth)
+    if (generation !== loadGeneration) return
     overview.value = result
     if (selectedProjectId.value && !result.availableProjects.some(item => item.id === selectedProjectId.value)) {
       selectedProjectId.value = ''
@@ -80,26 +87,30 @@ async function loadUsage() {
       : period.value === '7d' ? '최근 7일' : '최근 30일'
     message.value = `${result.scopeLabel} · ${rangeLabel} 요청 ${integer(result.total.requestCount)}건`
   } catch (error) {
+    if (generation !== loadGeneration) return
     overview.value = null
     message.value = error instanceof Error ? error.message : '사용량을 조회하지 못했습니다.'
   } finally {
-    busy.value = false
+    if (generation === loadGeneration) busy.value = false
   }
 }
 
 async function inspectRequest(item: UsageRequest) {
   if (!props.organizationId) return
+  const generation = loadGeneration
   requestDetailOpen.value = true
   requestDetailLoading.value = true
   requestDetail.value = null
   try {
     const path = '/api/portal/organizations/' + props.organizationId + '/usage-overview/requests/' + encodeURIComponent(item.requestId)
-    requestDetail.value = await adminFetch<RequestDetail>(path, props.auth)
+    const result = await adminFetch<RequestDetail>(path, props.auth)
+    if (generation === loadGeneration) requestDetail.value = result
   } catch (error) {
+    if (generation !== loadGeneration) return
     message.value = error instanceof Error ? error.message : '요청 상세를 조회하지 못했습니다.'
     requestDetailOpen.value = false
   } finally {
-    requestDetailLoading.value = false
+    if (generation === loadGeneration) requestDetailLoading.value = false
   }
 }
 function changeProject() { void loadUsage() }
@@ -184,7 +195,7 @@ onMounted(() => { void loadUsage() })
           <div v-else class="empty-state compact"><span>▣</span><p>선택 범위에 서비스 사용량이 없습니다.</p></div>
         </article>
 
-        <article class="surface-card">
+        <article v-if="overview.scope === 'ORGANIZATION'" class="surface-card">
           <header class="card-header"><div><span class="card-kicker">INFRASTRUCTURE</span><h2>실제 배포별 처리량</h2></div><span class="count-badge">{{ overview.byInfrastructure.length }}</span></header>
           <div v-if="overview.byInfrastructure.length" class="data-table-wrap compact-table"><table class="data-table"><thead><tr><th>노드 · 모델 배포</th><th>요청</th><th>성공/실패</th><th>토큰</th><th>평균 지연</th></tr></thead><tbody><tr v-for="item in overview.byInfrastructure" :key="`${item.label}-${item.detail}`"><td><strong>{{ item.label }}</strong><small>{{ item.detail }}</small></td><td>{{ integer(item.requestCount) }}</td><td>{{ integer(item.succeeded) }} / <span :class="{ 'danger-text': item.failed }">{{ integer(item.failed) }}</span></td><td>{{ integer(item.inputTokens + item.outputTokens) }}</td><td>{{ integer(item.averageLatencyMs) }} ms</td></tr></tbody></table></div>
           <div v-else class="empty-state compact"><span>◇</span><p>선택 범위에 처리된 배포가 없습니다.</p></div>

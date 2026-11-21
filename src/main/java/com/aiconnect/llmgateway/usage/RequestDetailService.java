@@ -103,6 +103,35 @@ public class RequestDetailService {
         );
     }
 
+    /** Metadata allowlist for project-scoped users; never include provider diagnostics. */
+    public RequestDetail scopedView(LlmRequest request) {
+        LlmService service = services.findById(request.getServiceId()).orElse(null);
+        String normalized = normalizeType(request.getRequestType());
+        String type = java.util.Arrays.stream(normalized.split("\\+"))
+                .filter(part -> List.of("TEXT_CHAT", "VISION", "TOOL_CALLING", "STRUCTURED_OUTPUT").contains(part))
+                .distinct().collect(java.util.stream.Collectors.joining("+"));
+        if (type.isEmpty()) type = "TEXT_CHAT";
+        return new RequestDetail(request.getRequestId(), request.getProjectId(), null,
+                service == null ? null : service.getServiceKey(),
+                service == null ? null : service.getDisplayName(), type, capabilitiesFor(type), null, request.isStream(),
+                request.getStatus().name(), null, null, null, null,
+                request.getInputTokens(), request.getOutputTokens(), request.getEstimatedCost(),
+                request.getCostCurrency(), null, null, null, null, request.getLatencyMs(),
+                request.getFailoverCount(), request.getHttpStatus(), safeErrorCode(request.getErrorCode()),
+                request.getStartedAt(), request.getCompletedAt(), List.of(), null,
+                null, null, null, null, null, null, null, null, null, null, null, null);
+    }
+
+    static String safeErrorCode(String code) {
+        if (code == null || code.isBlank()) return null;
+        return java.util.Set.of("REQUEST_CANCELLED", "QUEUE_WAIT_TIMEOUT", "QUEUE_FULL", "QUEUE_KEY_LIMIT",
+                "QUEUE_GLOBAL_FULL", "SCHEDULER_UNAVAILABLE", "MODEL_AT_CAPACITY", "DATA_POLICY_BLOCKED",
+                "DATA_PROTECTION_EXTERNAL_BLOCKED", "CONTEXT_LENGTH_EXCEEDED", "INPUT_TOKEN_LIMIT_EXCEEDED",
+                "OUTPUT_TOKEN_LIMIT_EXCEEDED", "REQUEST_FORMAT_UNSUPPORTED", "RATE_LIMITED", "REQUEST_TIMEOUT",
+                "UPSTREAM_UNAVAILABLE", "RUNTIME_UNAVAILABLE", "STREAM_START_FAILED", "MODEL_NOT_FOUND",
+                "AUTHENTICATION_FAILED", "UPSTREAM_REJECTED").contains(code) ? code : "REQUEST_FAILED";
+    }
+
     private String normalizeType(String value) {
         if (value == null || value.isBlank() || "CHAT_COMPLETION".equalsIgnoreCase(value)) return "TEXT_CHAT";
         return value.toUpperCase(Locale.ROOT);

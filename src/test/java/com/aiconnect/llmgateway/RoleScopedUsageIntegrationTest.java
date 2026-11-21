@@ -20,6 +20,11 @@ import com.aiconnect.llmgateway.repository.LlmRequestRepository;
 import com.aiconnect.llmgateway.repository.LlmServiceRepository;
 import com.aiconnect.llmgateway.repository.OrganizationRepository;
 import com.aiconnect.llmgateway.repository.ProjectRepository;
+import com.aiconnect.llmgateway.quota.SpendQuota;
+import com.aiconnect.llmgateway.quota.SpendQuotaRepository;
+import com.aiconnect.llmgateway.quota.SpendQuotaScope;
+import com.aiconnect.llmgateway.quota.SpendQuotaPeriod;
+import com.aiconnect.llmgateway.domain.Currency;
 import com.aiconnect.llmgateway.team.Team;
 import com.aiconnect.llmgateway.team.TeamMember;
 import com.aiconnect.llmgateway.team.TeamMemberRepository;
@@ -60,6 +65,7 @@ class RoleScopedUsageIntegrationTest {
     @Autowired TeamMemberRepository teamMembers;
     @Autowired AccessTokenService tokens;
     @Autowired AuthRefreshTokenRepository sessions;
+    @Autowired SpendQuotaRepository spendQuotas;
 
     @Test
     void derivesUsageFromTheLoginRoleWithoutAcceptingAProjectApiKey() throws Exception {
@@ -97,6 +103,10 @@ class RoleScopedUsageIntegrationTest {
 
         apiKeys.delete(issuerKey);
         apiKeys.flush();
+        ApiKey ownLiveKey = apiKeys.save(new ApiKey(ownedProject.getId(), issuer.getId(), "own-live", "sk_llmg_role_live", "d".repeat(64), null));
+        spendQuotas.save(new SpendQuota(organization.getId(), SpendQuotaScope.API_KEY, ownLiveKey.getId(), "own limit", Currency.KRW, BigDecimal.TEN, SpendQuotaPeriod.MONTHLY, true));
+        spendQuotas.save(new SpendQuota(organization.getId(), SpendQuotaScope.API_KEY, teammateKey.getId(), "other limit", Currency.KRW, BigDecimal.TEN, SpendQuotaPeriod.MONTHLY, true));
+        spendQuotas.save(new SpendQuota(organization.getId(), SpendQuotaScope.ORGANIZATION, organization.getId(), "shared limit", Currency.KRW, BigDecimal.TEN, SpendQuotaPeriod.MONTHLY, true, true));
 
         String path = "/api/portal/organizations/{organizationId}/usage-overview";
         mvc.perform(get(path, organization.getId()).header("Authorization", "Bearer " + accessToken(issuer)))
@@ -104,16 +114,15 @@ class RoleScopedUsageIntegrationTest {
                 .andExpect(jsonPath("$.scope").value("KEY_ISSUER"))
                 .andExpect(jsonPath("$.total.requestCount").value(1))
                 .andExpect(jsonPath("$.total.inputTokens").value(10))
-                .andExpect(jsonPath("$.runtimeAnalytics.byServer[0].requests.requestCount").value(1))
-                .andExpect(jsonPath("$.runtimeAnalytics.playground").doesNotExist());
+                .andExpect(jsonPath("$.runtimeAnalytics").doesNotExist())
+                .andExpect(jsonPath("$.recentRequests[0].infrastructure").doesNotExist());
 
         mvc.perform(get(path, organization.getId()).header("Authorization", "Bearer " + accessToken(owner)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.scope").value("PROJECT_OWNER"))
                 .andExpect(jsonPath("$.total.requestCount").value(2))
                 .andExpect(jsonPath("$.total.inputTokens").value(30))
-                .andExpect(jsonPath("$.runtimeAnalytics.byServer[0].requests.requestCount").value(2))
-                .andExpect(jsonPath("$.runtimeAnalytics.playground").doesNotExist())
+                .andExpect(jsonPath("$.runtimeAnalytics").doesNotExist())
                 .andExpect(jsonPath("$.availableProjects[0].access").value("PROJECT_ALL"));
 
         mvc.perform(get(path, organization.getId()).header("Authorization", "Bearer " + accessToken(administrator)))
@@ -123,6 +132,45 @@ class RoleScopedUsageIntegrationTest {
                 .andExpect(jsonPath("$.total.inputTokens").value(60))
                 .andExpect(jsonPath("$.runtimeAnalytics.byServer[0].requests.requestCount").value(3))
                 .andExpect(jsonPath("$.runtimeAnalytics.playground.total.requestCount").value(0));
+
+        mvc.perform(get(path + "/requests", organization.getId()).header("Authorization", "Bearer " + accessToken(issuer)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].requestId").value("issuer-request"))
+                .andExpect(jsonPath("$[0].finalDeploymentId").doesNotExist());
+        mvc.perform(get(path + "/requests", organization.getId()).param("projectId", otherProject.getId().toString()).header("Authorization", "Bearer " + accessToken(issuer)))
+                .andExpect(status().isForbidden());
+        mvc.perform(get(path + "/requests/teammate-request", organization.getId()).header("Authorization", "Bearer " + accessToken(issuer)))
+                .andExpect(status().isForbidden());
+        mvc.perform(get(path + "/requests/teammate-request", organization.getId()).header("Authorization", "Bearer " + accessToken(owner)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.finalDeploymentId").doesNotExist())
+                .andExpect(jsonPath("$.diagnostic").doesNotExist());
+        mvc.perform(get(path + "/own-key-quotas", organization.getId()).header("Authorization", "Bearer " + accessToken(issuer)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].name").value("own limit"));
+        mvc.perform(get("/api/portal/projects/{projectId}/api-keys", ownedProject.getId()).header("Authorization", "Bearer " + accessToken(issuer)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].name").value("own-live"));
+        mvc.perform(get("/api/portal/projects/{projectId}/api-keys", ownedProject.getId()).header("Authorization", "Bearer " + accessToken(owner)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(2));
+        String quotaPath = "/api/admin/projects/{projectId}/spend-quotas";
+        mvc.perform(get(quotaPath, ownedProject.getId()).header("Authorization", "Bearer " + accessToken(issuer)))
+                .andExpect(status().isForbidden());
+        mvc.perform(get(quotaPath, ownedProject.getId()).header("Authorization", "Bearer " + accessToken(owner)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.ceilings[0].limitAmount").value(10))
+                .andExpect(jsonPath("$.ceilings[0].usedAmount").doesNotExist());
+        mvc.perform(get(quotaPath, ownedProject.getId()).header("X-Admin-Token", "integration-admin-token"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.ceilings[0].usedAmount").exists());
+        mvc.perform(get(path + "/own-key-quotas", organization.getId()).param("projectId", otherProject.getId().toString()).header("Authorization", "Bearer " + accessToken(issuer)))
+                .andExpect(status().isForbidden());
+        Organization foreign = organizations.save(new Organization("Foreign usage org"));
+        mvc.perform(get(path + "/requests", foreign.getId()).header("Authorization", "Bearer " + accessToken(issuer)))
+                .andExpect(status().isForbidden());
+        teamMembers.findByIdTeamIdAndIdUserId(ownedTeam.getId(), issuer.getId()).ifPresent(teamMembers::delete);
+        teamMembers.flush();
+        mvc.perform(get(path + "/requests/issuer-request", organization.getId()).header("Authorization", "Bearer " + accessToken(issuer)))
+                .andExpect(status().isForbidden());
+        mvc.perform(get(path + "/own-key-quotas", organization.getId()).header("Authorization", "Bearer " + accessToken(issuer)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
     }
 
     private String accessToken(AppUser user) {

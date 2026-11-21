@@ -18,6 +18,8 @@ public interface LlmRequestRepository extends JpaRepository<LlmRequest, UUID> {
     long countByFinalDeploymentIdIn(Collection<UUID> deploymentIds);
     boolean existsByFinalDeploymentIdIn(Collection<UUID> deploymentIds);
     List<LlmRequest> findTop50ByProjectIdOrderByStartedAtDesc(UUID projectId);
+    List<LlmRequest> findTop50ByApiKeyIdOrderByStartedAtDesc(UUID apiKeyId);
+    List<LlmRequest> findByApiKeyIdAndStartedAtGreaterThanEqualAndStartedAtLessThanOrderByStartedAtAsc(UUID apiKeyId, Instant from, Instant to);
     Optional<LlmRequest> findByRequestId(String requestId);
     List<LlmRequest> findByStartedAtAfter(Instant startedAt);
     List<LlmRequest> findByProjectIdInAndStartedAtAfter(Collection<UUID> projectIds, Instant startedAt);

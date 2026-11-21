@@ -16,6 +16,7 @@ import ObservabilityPage from './ObservabilityPage.vue'
 import NotificationsPage from './NotificationsPage.vue'
 import UsagePage from './UsagePage.vue'
 import QuotaPage from './QuotaPage.vue'
+import ScopedOverviewPage from './ScopedOverviewPage.vue'
 import DataProtectionPage from './DataProtectionPage.vue'
 import ApiPlaygroundPage from './ApiPlaygroundPage.vue'
 import ModelPlaygroundPage from './ModelPlaygroundPage.vue'
@@ -50,6 +51,7 @@ const emit = defineEmits<{ logout: []; toggleTheme: []; fontScaleChanged: [value
 const auth = computed<AdminAuth>(() => ({ accessToken: sessionStorage.getItem('aiconnect.accessToken') ?? undefined, platformToken: sessionStorage.getItem('aiconnect.platformToken') ?? undefined }))
 const adminNavItems: NavItem[] = [
   { id: 'dashboard', label: '대시보드', description: '요청·장애·런타임 핵심 지표', keywords: 'overview health dashboard', icon: '◔', group: '운영' },
+  { id: 'portal', label: '내 API', description: '프로젝트·사용 모델·API 키', keywords: 'my api project model key', icon: '⌘', group: '워크스페이스' },
   { id: 'infrastructure', label: '인프라스트럭처', description: '노드·Runtime·배포 모델', keywords: 'server gpu lm studio endpoint model', icon: '◇', group: '운영' },
   { id: 'system', label: '시스템 구조', description: '요청 경로 · Target · 서버 연결 상태', keywords: '시스템 구조 연결도 상태 architecture structure topology infrastructure provider llm team project api key', icon: '~', group: 'Operations' },
   { id: 'external', label: '외부 AI', description: 'OpenAI·승인·수동·자동 Failover', keywords: 'openai external provider cloud approval failover', icon: '◎', group: '운영' },
@@ -66,6 +68,8 @@ const adminNavItems: NavItem[] = [
   { id: 'model-playground', label: '모델 테스트 콘솔', description: '등록된 Runtime·Provider 모델 직접 대화 테스트', keywords: 'model playground chat runtime provider streaming file test', icon: '◈', group: '개발자 도구' }
 ]
 const directorNavItems: NavItem[] = [
+  { id: 'dashboard', label: '대시보드', description: '접근 범위 요약', keywords: 'dashboard overview', icon: '◔', group: '홈' },
+  { id: 'observability', label: '관측성', description: '접근 범위 요청 이력', keywords: 'request monitor', icon: '◉', group: '관측·비용' },
   { id: 'projects', label: '프로젝트', description: '프로젝트·멤버·권한·API 키', keywords: 'project key member delegation policy', icon: '⌘', group: '워크스페이스 관리' },
   { id: 'quotas', label: '요금·한도', description: '프로젝트 예산과 관리자 상한', keywords: 'budget quota limit spend cost ceiling', icon: '₩', group: '내 작업' },
   { id: 'data-protection', label: '데이터 보호', description: '프로젝트·API 키 민감정보 정책', keywords: 'security privacy dlp pii secret local only', icon: '◇', group: '내 작업' },
@@ -75,6 +79,9 @@ const directorNavItems: NavItem[] = [
 ]
 const platformNavItem: NavItem = { id: 'platform', label: 'Platform Admin', description: '조직·사용자·키·데이터 정리', keywords: 'platform admin organization user api key cleanup purge', icon: '⚡', group: '시스템' }
 const developerNavItems: NavItem[] = [
+  { id: 'dashboard', label: '대시보드', description: '접근 범위 요약', keywords: 'dashboard overview', icon: '◔', group: '홈' },
+  { id: 'observability', label: '관측성', description: '내 API 키 요청 이력', keywords: 'request monitor', icon: '◉', group: '관측·비용' },
+  { id: 'quotas', label: '요금·한도', description: '내 API 키 추정 비용', keywords: 'budget quota cost', icon: '₩', group: '관측·비용' },
   { id: 'portal', label: '내 API', description: '프로젝트·사용 모델·API 키', keywords: 'my api project model key', icon: '⌘', group: '내 작업' },
   { id: 'usage', label: 'API 사용량', description: '내 API 키의 토큰·비용·요청', keywords: 'usage token cost request', icon: '◴', group: '내 작업' },
   { id: 'playground', label: 'API 테스트', description: '모델 연결·Chat Completions 테스트', keywords: 'playground api test chat completion models', icon: '▷', group: '내 작업' }
@@ -85,7 +92,7 @@ const fontScaleOptions: Array<{ value: FontScale; label: string; description: st
   { value: '125', label: '크게', description: '125%' }, { value: '135', label: '매우 크게', description: '135%' }
 ]
 
-const page = ref<PageKey>('portal')
+const page = ref<PageKey>('dashboard')
 const organizations = ref<Organization[]>([])
 const accessibleProjects = ref<AccessibleProject[]>([])
 const organizationId = ref(sessionStorage.getItem('aiconnect.setup.organizationId') ?? '')
@@ -142,8 +149,11 @@ const navItems = computed(() => [
       ? directorNavItems
       : developerNavItems),
   ...(platformAdmin.value || betaOperator.value ? [{id:'beta' as const,label:'초대 서비스 운영',description:'초대·접근·운영 상태',keywords:'beta invitation invite',icon:'◇',group:'운영'}] : [])
-])
-const groups = computed(() => [...new Set(navItems.value.map(item => item.group))])
+].map(item => ({ ...item, group: item.id === 'dashboard' ? '홈'
+  : ['projects', 'teams', 'portal', 'data-protection'].includes(item.id) ? '워크스페이스'
+  : ['playground', 'model-playground'].includes(item.id) ? '개발자 도구'
+  : ['observability', 'usage', 'quotas'].includes(item.id) ? '관측·비용' : '인프라·시스템' })))
+const groups = computed(() => ['홈', '워크스페이스', '개발자 도구', '관측·비용', '인프라·시스템'].filter(group => navItems.value.some(item => item.group === group)))
 const allNavigation = computed(() => [...navItems.value, docsItem])
 const currentNav = computed(() => allNavigation.value.find(item => item.id === page.value) ?? navItems.value[0] ?? docsItem)
 const currentOrganization = computed(() => organizations.value.find(item => item.id === organizationId.value) ?? null)
@@ -168,8 +178,8 @@ const searchResults = computed(() => {
 function knownPage(value: string): value is PageKey {
   return ['beta', 'dashboard', 'infrastructure', 'system', 'external', 'services', 'teams', 'projects', 'observability', 'usage', 'quotas', 'data-protection', 'notifications', 'audit', 'platform', 'portal', 'playground', 'model-playground', 'docs'].includes(value)
 }
-function isAllowedPage(target: PageKey) { if(target==='beta')return platformAdmin.value || betaOperator.value; if (isOrgOrPlatformAdmin.value) return target !== 'platform' || platformAdmin.value; if (isProjectDirector.value) return ['projects', 'quotas', 'data-protection', 'portal', 'usage', 'playground', 'docs'].includes(target); return target === 'portal' || target === 'usage' || target === 'playground' || target === 'docs' }
-function fallbackPage(): PageKey { return isOrgOrPlatformAdmin.value ? 'dashboard' : isProjectDirector.value ? 'projects' : 'portal' }
+function isAllowedPage(target: PageKey) { return target === 'docs' || navItems.value.some(item => item.id === target) }
+function fallbackPage(): PageKey { return 'dashboard' }
 function resolveHash(): PageKey {
   const candidate = window.location.hash.replace(/^#\/?/, '')
   const pageCandidate = candidate.split('/')[0]
@@ -413,6 +423,7 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
       <main class="console-content">
         <p v-if="message" class="inline-alert">{{ message }}</p>
         <DashboardPage v-if="isOrgOrPlatformAdmin && page === 'dashboard'" :organization-id="organizationId" :auth="auth" @navigate="navigate" />
+        <ScopedOverviewPage v-else-if="!isOrgOrPlatformAdmin && (page === 'dashboard' || page === 'observability' || (page === 'quotas' && !isProjectDirector))" :key="page" :mode="page" :organization-id="organizationId" :auth="auth" />
         <InfrastructurePage v-else-if="isOrgOrPlatformAdmin && page === 'infrastructure'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" @open-playground="openModelPlayground" />
         <SystemStructurePage v-else-if="isOrgOrPlatformAdmin && page === 'system'" :organization-id="organizationId" :auth="auth" />
         <ExternalProvidersPage v-else-if="isOrgOrPlatformAdmin && page === 'external'" :organization-id="organizationId" :auth="auth" @open-playground="openModelPlayground" />

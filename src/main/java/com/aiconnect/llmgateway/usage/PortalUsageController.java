@@ -23,6 +23,15 @@ public class PortalUsageController {
         this.usage = usage;
     }
 
+    @GetMapping("/requests")
+    public java.util.List<AdminUsageService.ScopedRequest> requests(@PathVariable UUID organizationId,
+            @RequestParam(required = false) UUID projectId, @RequestParam(defaultValue = "0") int offset,
+            @RequestParam(defaultValue = "50") int limit) {
+        AuthPrincipal actor = CurrentActor.principal().orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED,
+                "PORTAL_AUTH_REQUIRED", "An authenticated user session is required."));
+        return usage.scopedRequests(organizationId, actor, projectId, offset, limit);
+    }
+
     @GetMapping("/requests/{requestId}")
     public RequestDetailService.RequestDetail requestDetail(@PathVariable UUID organizationId,
                                                               @PathVariable String requestId) {

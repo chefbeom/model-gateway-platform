@@ -44,8 +44,8 @@ public class UsageController {
         if (!endExclusiveDate.isAfter(startDate)) throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_USAGE_RANGE", "The usage end date must not be before the start date.");
         Instant start = startDate.atStartOfDay().toInstant(ZoneOffset.UTC);
         Instant endExclusive = endExclusiveDate.atStartOfDay().toInstant(ZoneOffset.UTC);
-        List<LlmRequest> all = requests.findByProjectIdAndStartedAtGreaterThanEqualAndStartedAtLessThanOrderByStartedAtAsc(
-                credentials.project().getId(), start, endExclusive);
+        List<LlmRequest> all = requests.findByApiKeyIdAndStartedAtGreaterThanEqualAndStartedAtLessThanOrderByStartedAtAsc(
+                credentials.apiKey().getId(), start, endExclusive);
         int input = all.stream().map(LlmRequest::getInputTokens).filter(Objects::nonNull).mapToInt(Integer::intValue).sum();
         int output = all.stream().map(LlmRequest::getOutputTokens).filter(Objects::nonNull).mapToInt(Integer::intValue).sum();
         BigDecimal cost = all.stream().map(LlmRequest::getEstimatedCost).filter(Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -56,7 +56,7 @@ public class UsageController {
     @GetMapping("/requests")
     public List<RequestView> requestHistory(@RequestHeader(HttpHeaders.AUTHORIZATION) String authorization) {
         ApiKeyCredentials credentials = apiKeyService.authenticate(authorization);
-        return requests.findTop50ByProjectIdOrderByStartedAtDesc(credentials.project().getId()).stream().map(this::view).toList();
+        return requests.findTop50ByApiKeyIdOrderByStartedAtDesc(credentials.apiKey().getId()).stream().map(this::view).toList();
     }
     @GetMapping("/requests/{requestId}")
     public RequestDetailService.RequestDetail requestDetail(
@@ -64,20 +64,19 @@ public class UsageController {
             @PathVariable String requestId) {
         ApiKeyCredentials credentials = apiKeyService.authenticate(authorization);
         LlmRequest request = requests.findByRequestId(requestId)
-                .filter(item -> item.getProjectId().equals(credentials.project().getId()))
+                .filter(item -> credentials.apiKey().getId().equals(item.getApiKeyId()))
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "REQUEST_NOT_FOUND",
                         "The request does not exist in this project."));
-        return requestDetails.view(request);
+        return requestDetails.scopedView(request);
     }
     private RequestView view(LlmRequest request) {
         LlmService service = services.findById(request.getServiceId()).orElse(null);
-        ModelDeployment deployment = request.getFinalDeploymentId() == null ? null : deployments.findById(request.getFinalDeploymentId()).orElse(null);
         return new RequestView(request.getRequestId(), service == null ? null : service.getServiceKey(),
-                service == null ? null : service.getDisplayName(), deployment == null ? null : deployment.getDisplayName(),
+                service == null ? null : service.getDisplayName(), null,
                 request.isStream(), request.getStatus().name(), request.getInputTokens(), request.getOutputTokens(),
-                request.getEstimatedCost(), request.getCostCurrency().name(), request.getLatencyMs(), request.getFailoverCount(), request.getFinalProviderType(), request.getRoutingReason(), request.getHttpStatus(),
-                request.getErrorCode(), request.getStartedAt(), request.getCompletedAt(), request.getReasoningEffort(),
-                request.getRequestedServiceTier(), request.getActualServiceTier());
+                request.getEstimatedCost(), request.getCostCurrency() == null ? null : request.getCostCurrency().name(), request.getLatencyMs(), request.getFailoverCount(), null, null, null,
+                RequestDetailService.safeErrorCode(request.getErrorCode()), request.getStartedAt(), request.getCompletedAt(), null,
+                null, null);
     }
     private Map<String, BigDecimal> costByCurrency(List<LlmRequest> rows) {
         Map<String, BigDecimal> result = new LinkedHashMap<>();

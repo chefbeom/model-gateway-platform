@@ -343,7 +343,7 @@ test('platform admin can create PAUSED beta service, assign operator, and surfac
 test('ConsoleShell exposes 초대 서비스 운영 tab exclusively to platformAdmin or assigned betaOperator', () => {
   const shell = readFileSync(new URL('../src/ConsoleShell.vue', import.meta.url), 'utf8')
   assert.match(shell, /platformAdmin\.value \|\| betaOperator\.value \? \[\{id:'beta' as const,label:'초대 서비스 운영'/)
-  assert.match(shell, /function isAllowedPage\(target: PageKey\)\s*\{\s*if\(target==='beta'\)return platformAdmin\.value \|\| betaOperator\.value;/)
+  assert.match(shell, /function isAllowedPage\(target: PageKey\)\s*\{\s*return target === 'docs' \|\| navItems\.value\.some\(item => item\.id === target\)/)
   assert.match(shell, /<BetaOperatorPage v-else-if="page === 'beta' && \(platformAdmin \|\| betaOperator\)" :auth="auth" :platform-admin="platformAdmin" \/>/)
   assert.match(shell, /if \(auth\.value\.accessToken\)\s*\{\s*try\s*\{\s*const scoped\s*=\s*await adminFetch<unknown\[\]>\('\/api\/beta\/operator\/services',\s*auth\.value\);\s*betaOperator\.value\s*=\s*scoped\.length\s*>\s*0/)
 })

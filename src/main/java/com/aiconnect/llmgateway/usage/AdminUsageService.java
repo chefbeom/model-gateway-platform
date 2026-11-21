@@ -181,13 +181,47 @@ public class AdminUsageService {
 
         boolean organizationAdmin = access.isOrganizationAdmin(actor, organizationId);
         boolean projectManager = access.canManageProject(actor, project.getId());
-        boolean ownKeyRequest = actor.userId().equals(request.getApiKeyIssuerUserId());
+        boolean ownKeyRequest = access.canViewProject(actor, project.getId())
+                && actor.userId().equals(request.getApiKeyIssuerUserId());
         if (!organizationAdmin && !projectManager && !ownKeyRequest) {
             throw new ApiException(HttpStatus.FORBIDDEN, "REQUEST_DETAIL_ACCESS_DENIED",
                     "The current role cannot view this request.");
         }
-        return requestDetails.view(request);
+        return organizationAdmin ? requestDetails.view(request) : requestDetails.scopedView(request);
     }
+
+    /** Bounded request history, with scope predicates applied before pagination. */
+    @Transactional(readOnly = true)
+    public List<ScopedRequest> scopedRequests(UUID organizationId, AuthPrincipal actor, UUID selectedProjectId, int offset, int limit) {
+        if (offset < 0 || offset > 10000 || limit < 1 || limit > 100) throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_PAGE", "Offset must be 0–10000 and limit 1–100.");
+        requireOrganization(organizationId);
+        if (!access.canViewOrganization(actor, organizationId)) throw new ApiException(HttpStatus.FORBIDDEN, "ORGANIZATION_SCOPE_REQUIRED", "Organization membership is required.");
+        List<UUID> managed = new ArrayList<>();
+        List<UUID> own = new ArrayList<>();
+        boolean admin = access.isOrganizationAdmin(actor, organizationId);
+        for (Project project : projects.findByOrganizationId(organizationId)) {
+            if (selectedProjectId != null && !selectedProjectId.equals(project.getId())) continue;
+            if (admin || access.canManageProject(actor, project.getId())) managed.add(project.getId());
+            else if (access.canViewProject(actor, project.getId())) own.add(project.getId());
+        }
+        if (selectedProjectId != null && managed.isEmpty() && own.isEmpty()) throw new ApiException(HttpStatus.FORBIDDEN, "PROJECT_USAGE_ACCESS_DENIED", "Project access is required.");
+        if (managed.isEmpty() && own.isEmpty()) return List.of();
+        String predicate = managed.isEmpty() ? "(r.projectId in :own and r.apiKeyIssuerUserId = :actor)"
+                : own.isEmpty() ? "r.projectId in :managed"
+                : "(r.projectId in :managed or (r.projectId in :own and r.apiKeyIssuerUserId = :actor))";
+        var query = entityManager.createQuery("select r from LlmRequest r where " + predicate + " order by r.startedAt desc, r.id desc", LlmRequest.class);
+        if (!managed.isEmpty()) query.setParameter("managed", managed);
+        if (!own.isEmpty()) query.setParameter("own", own).setParameter("actor", actor.userId());
+        return query.setFirstResult(offset).setMaxResults(limit)
+                .getResultList().stream().map(row -> {
+                    LlmService service = services.findById(row.getServiceId()).orElse(null);
+                    return new ScopedRequest(row.getRequestId(), service == null ? null : service.getServiceKey(), row.getStartedAt(), row.getStatus().name(), row.getLatencyMs(), row.getInputTokens(), row.getOutputTokens(), row.getEstimatedCost(), row.getCostCurrency(), row.getFailoverCount(), RequestDetailService.safeErrorCode(row.getErrorCode()));
+                }).toList();
+    }
+
+    public record ScopedRequest(String requestId, String serviceKey, Instant startedAt, String status, Long latencyMs,
+                                Integer inputTokens, Integer outputTokens, BigDecimal estimatedCost, Currency costCurrency,
+                                int failoverCount, String errorCode) { }
     private String projectScopeLabel(ProjectScope scope) {
         return scope.name() + ("PROJECT_ALL".equals(scope.access())
                 ? " · 프로젝트의 모든 API 키" : " · 내가 발급한 API 키");
@@ -203,8 +237,8 @@ public class AdminUsageService {
         Map<UUID, InferenceNode> nodesById = indexById(nodes.findAll(), InferenceNode::getId);
         Map<UUID, ApiKey> apiKeysById = indexById(apiKeys.findAll(), ApiKey::getId);
         Map<UUID, ExternalProvider> externalProvidersById = indexById(externalProviders.findAll(), ExternalProvider::getId);
-        RuntimeAnalytics runtimeAnalytics = runtimeAnalytics(organizationId, rows, deploymentsById,
-                endpointsById, nodesById, externalProvidersById, from, to, includePlayground);
+        RuntimeAnalytics runtimeAnalytics = includePlayground ? runtimeAnalytics(organizationId, rows, deploymentsById,
+                endpointsById, nodesById, externalProvidersById, from, to, true) : null;
 
         Aggregate total = new Aggregate("전체", scopeLabel);
         Map<UUID, Aggregate> projectGroups = new HashMap<>();
@@ -225,7 +259,7 @@ public class AdminUsageService {
                     service == null ? row.getServiceId().toString() : service.getDisplayName())).add(row);
 
             InfrastructureLabel infrastructure = infrastructureLabel(row, deploymentsById, endpointsById, nodesById, externalProvidersById);
-            infrastructureGroups.computeIfAbsent(infrastructure.key(), id ->
+            if (includePlayground) infrastructureGroups.computeIfAbsent(infrastructure.key(), id ->
                     new Aggregate(infrastructure.title(), infrastructure.detail())).add(row);
 
             String apiKeyKey = row.getApiKeyId() == null ? "deleted:" + String.valueOf(row.getApiKeyIssuerUserId())
@@ -239,11 +273,11 @@ public class AdminUsageService {
                 recent.add(new RecentRequest(row.getRequestId(),
                         project == null ? "삭제된 프로젝트" : project.getName(),
                         service == null ? "삭제된 논리 서비스" : service.getServiceKey(),
-                        infrastructure.title(), apiKey == null ? "삭제된 API 키" : apiKey.getKeyPrefix(),
+                        includePlayground ? infrastructure.title() : null, apiKey == null ? "삭제된 API 키" : apiKey.getKeyPrefix(),
                         row.getStatus().name(), tokens(row.getInputTokens()), tokens(row.getOutputTokens()),
                         cost(row.getEstimatedCost()), row.getCostCurrency() == null ? Currency.KRW.name() : row.getCostCurrency().name(),                         row.getLatencyMs(), row.getFailoverCount(),
-                        row.getErrorCode(), row.getStartedAt(), row.getReasoningEffort(),
-                        row.getRequestedServiceTier(), row.getActualServiceTier()));
+                        includePlayground ? row.getErrorCode() : RequestDetailService.safeErrorCode(row.getErrorCode()), row.getStartedAt(), includePlayground ? row.getReasoningEffort() : null,
+                        includePlayground ? row.getRequestedServiceTier() : null, includePlayground ? row.getActualServiceTier() : null));
             }
         }
 

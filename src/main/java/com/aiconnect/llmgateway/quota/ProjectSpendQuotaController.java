@@ -52,8 +52,13 @@ public class ProjectSpendQuotaController {
 
     @GetMapping
     @Transactional(readOnly = true)
-    public ProjectSpendQuotasView list(@PathVariable UUID projectId) {
+    public ProjectSpendQuotasView list(@PathVariable UUID projectId, HttpServletRequest http) {
         Project project = requireProject(projectId);
+        AuthPrincipal actor = CurrentActor.principal().orElse(null);
+        boolean organizationAdmin = isPlatformOrOrgAdmin(http, project.getOrganizationId());
+        if (!organizationAdmin && !access.canManageProject(actor, projectId)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "PROJECT_MANAGER_REQUIRED", "Project management permission is required.");
+        }
         List<SpendQuota> orgQuotas = quotas.findByOrganizationIdOrderByCreatedAtAsc(project.getOrganizationId());
         Map<UUID, ApiKey> projectKeyMap = apiKeys.findByProjectId(projectId).stream()
                 .collect(Collectors.toMap(ApiKey::getId, key -> key, (a, b) -> a));
@@ -63,7 +68,11 @@ public class ProjectSpendQuotaController {
         for (SpendQuota quota : orgQuotas) {
             boolean appliesToProject = appliesToProject(quota, project, projectKeyMap.keySet());
             if (appliesToProject && quota.isEnabled() && quota.isAdminCeiling()) {
-                ceilings.add(toView(quota, project, projectKeyMap));
+                SpendQuotaAdminController.QuotaView view = toView(quota, project, projectKeyMap);
+                if (!organizationAdmin && (quota.getScopeType() == SpendQuotaScope.ORGANIZATION || quota.getScopeType() == SpendQuotaScope.TEAM)) {
+                    view = new SpendQuotaAdminController.QuotaView(view.id(), view.organizationId(), view.scopeType(), view.scopeId(), view.name(), view.currency(), view.limitAmount(), view.period(), view.enabled(), view.adminCeiling(), view.createdAt(), view.updatedAt(), null, null, null, view.scopeLabel(), view.periodFrom(), view.periodTo());
+                }
+                ceilings.add(view);
             }
             if ((quota.getScopeType() == SpendQuotaScope.PROJECT && projectId.equals(quota.getScopeId()))
                     || (quota.getScopeType() == SpendQuotaScope.API_KEY && projectKeyMap.containsKey(quota.getScopeId()))) {

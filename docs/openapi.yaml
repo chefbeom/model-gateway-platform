@@ -557,7 +557,7 @@ paths:
   /api/me/usage:
     get:
       tags: [Usage]
-      summary: Get project usage totals for a date range
+      summary: Get authenticated API key usage totals for a date range
       security: [{ ProjectApiKey: [] }]
       parameters:
         - { name: from, in: query, schema: { type: string, format: date } }
@@ -566,19 +566,19 @@ paths:
   /api/me/requests:
     get:
       tags: [Usage]
-      summary: Get the latest project requests
+      summary: Get the latest requests for the authenticated API key
       security: [{ ProjectApiKey: [] }]
       responses:
         '200':
-          description: Latest 50 project requests with logical service, actual deployment, stream mode, usage, latency, failover and error fields
+          description: Latest 50 requests for this API key with logical service, stream mode, usage, latency, failover count and normalized error fields; deployment and provider details are excluded
   /api/me/requests/{requestId}:
     get:
       tags: [Usage]
-      summary: Get safe metadata for one project request
+      summary: Get safe metadata for one request made with the authenticated API key
       description: |
-        Returns request type, input/output token counts, cost and currency, routing,
-        failover attempts, status, and request identifiers. Prompt and model response
-        content are never included in this response.
+        Returns normalized request type, input/output token counts, cost and currency,
+        latency, failover count, status, and request identifiers. Provider details,
+        routing diagnostics, prompt and model response content are not included.
       security: [{ ProjectApiKey: [] }]
       parameters:
         - name: requestId
@@ -586,7 +586,7 @@ paths:
           required: true
           schema: { type: string }
       responses:
-        '200': { description: Request metadata for the authenticated project }
+        '200': { description: Request metadata for the authenticated API key }
         '404': { $ref: '#/components/responses/ApiError' }
 components:
   securitySchemes:

@@ -248,7 +248,7 @@ public class SpendQuotaAdminController {
     public record QuotaView(UUID id, UUID organizationId, SpendQuotaScope scopeType, UUID scopeId, String name,
                             Currency currency, BigDecimal limitAmount, SpendQuotaPeriod period, boolean enabled,
                             boolean adminCeiling, Instant createdAt, Instant updatedAt, BigDecimal usedAmount,
-                            BigDecimal usagePercent, boolean exceeded, String scopeLabel, LocalDate periodFrom,
+                            BigDecimal usagePercent, Boolean exceeded, String scopeLabel, LocalDate periodFrom,
                             LocalDate periodTo) {
         public static QuotaView from(SpendQuota quota) {
             return from(quota, new UsageBucket(), quota.getScopeType().name());

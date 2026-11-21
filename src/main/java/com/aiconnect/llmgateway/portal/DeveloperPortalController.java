@@ -93,6 +93,7 @@ public class DeveloperPortalController {
                 .map(Project::effectiveDataBoundaryPolicy)
                 .orElse(DataBoundaryPolicy.EXTERNAL_ALLOWED);
         return apiKeys.findByProjectId(projectId).stream()
+                .filter(key -> access.canManageProject(actor, projectId) || actor.userId().equals(key.getIssuedByUserId()))
                 .map(key -> ApiKeyView.from(key, canManageKey(actor, key), projectBoundary))
                 .toList();
     }

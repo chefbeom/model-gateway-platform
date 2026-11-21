@@ -261,6 +261,7 @@ test('ConsoleShell hides org-only nav from PROJECT_DIRECTOR/GENERAL_USER and qui
     '\\./DateTimePreferences\\.vue': emptyComponentStub('DateTimePreferences'),
     '\\./AuditLogPage\\.vue': emptyComponentStub('AuditLogPage'),
     '\\./DashboardPage\\.vue': emptyComponentStub('DashboardPage'),
+    '\\./ScopedOverviewPage\\.vue': emptyComponentStub('ScopedOverviewPage'),
     '\\./DeveloperPortalPage\\.vue': emptyComponentStub('DeveloperPortalPage'),
     '\\./DevDocsPage\\.vue': emptyComponentStub('DevDocsPage'),
     '\\./InfrastructurePage\\.vue': emptyComponentStub('InfrastructurePage'),
@@ -316,13 +317,15 @@ test('ConsoleShell hides org-only nav from PROJECT_DIRECTOR/GENERAL_USER and qui
       assert.equal(calls.some(c => c.url.includes('/teams')), false)
       const sideNav = walk(root, el => el.tag === 'nav')[0]
       const navText = textContent(sideNav)
-      for (const allowed of ['프로젝트', '요금·한도', '데이터 보호', '내 API', 'API 사용량', 'API 테스트']) {
+      for (const allowed of ['대시보드', '관측성', '프로젝트', '요금·한도', '데이터 보호', '내 API', 'API 사용량', 'API 테스트']) {
         assert.ok(navText.includes(allowed), `Missing allowed nav item: ${allowed}`)
       }
-      for (const hidden of ['팀과 부서', 'LLM 서비스', '인프라스트럭처', '외부 AI', '모델 테스트 콘솔', 'Platform Admin', '대시보드', '관측성', '알림 채널', '감사 로그', '시스템 구조']) {
+      for (const hidden of ['팀과 부서', 'LLM 서비스', '인프라스트럭처', '외부 AI', '모델 테스트 콘솔', 'Platform Admin', '알림 채널', '감사 로그', '시스템 구조']) {
         assert.equal(navText.includes(hidden), false, `Org-only nav leaked to director: ${hidden}`)
       }
-      assert.equal(globalThis.window.location.hash, '#projects')
+      assert.equal(globalThis.window.location.hash, '#dashboard')
+      walk(sideNav, el => el.tag === 'button' && textContent(el).includes('프로젝트·멤버·권한·API 키'))[0].props.onClick()
+      await nextTick()
 
       // Open settings -> 계정 추가 -> quick-invite modal
       walk(root, el => el.tag === 'button' && el.props['aria-label'] === '설정')[0].props.onClick()
@@ -387,13 +390,40 @@ test('ConsoleShell hides org-only nav from PROJECT_DIRECTOR/GENERAL_USER and qui
       await flush()
       const navText = textContent(walk(root, el => el.tag === 'nav')[0])
       assert.equal(walk(walk(root, el => el.tag === 'nav')[0], el => el.tag === 'button' && textContent(el).startsWith('프로젝트')).length, 0)
-      assert.equal(navText.includes('요금·한도'), false)
+      assert.equal(globalThis.window.location.hash, '#dashboard')
+      assert.ok(navText.includes('대시보드'))
+      assert.ok(navText.includes('관측성'))
+      assert.ok(navText.includes('요금·한도'))
       assert.equal(navText.includes('데이터 보호'), false)
       assert.ok(navText.includes('내 API'))
     } finally {
       app.unmount()
     }
   }, { 'aiconnect.accessToken': 'gen-jwt' }, '#projects')
+})
+
+test('scoped quota page shows only key budget and avoids admin APIs', async () => {
+  const { default: Page } = await compileVueComponent('../src/ScopedOverviewPage.vue', 'scoped-overview-test', {
+    '\\./RequestDetailModal\\.vue': emptyComponentStub('RequestDetailModal')
+  })
+  await withDomGlobals(async () => {
+    const calls = []
+    globalThis.fetch = async url => {
+      calls.push(String(url))
+      if (String(url).includes('/own-key-quotas')) return okJson([{ keyName: '내 키', name: '개인 상한', currency: 'KRW', limitAmount: 100, usedAmount: 12, period: 'MONTHLY', enabled: true }])
+      return okJson({ scopeLabel: '내가 발급한 API 키', availableProjects: [], total: { requestCount: 1, succeeded: 1, failed: 0, inputTokens: 3, outputTokens: 2, estimatedCostByCurrency: { KRW: 12 } } })
+    }
+    const { renderer, root, textContent } = createMemoryDom()
+    const app = renderer.createApp({ render: () => h(Page, { organizationId: 'org-1', auth: { accessToken: 'token' }, mode: 'quotas' }) })
+    try {
+      app.mount(root); await flush()
+      assert.match(textContent(root), /내 키/)
+      assert.match(textContent(root), /개인 상한/)
+      assert.match(textContent(root), /공유 예산 및 사용액은 조회 권한이 없습니다/)
+      assert.ok(calls.some(url => url.includes('/own-key-quotas')))
+      assert.equal(calls.some(url => url.startsWith('/api/admin/')), false)
+    } finally { app.unmount() }
+  })
 })
 
 test('issued connection guide distinguishes SDK and separate-path client URLs', async () => {

@@ -480,10 +480,10 @@ onMounted(() => { void load(); void loadScopeOptions() })
             <div v-for="item in directorCeilings" :key="item.id" class="quota-row" :class="{ exceeded: item.exceeded }">
               <div class="quota-row-head">
                 <div><strong>{{ item.name }}</strong><small>{{ item.scopeLabel || item.scopeType }} · {{ item.period }} · ADMIN CEILING</small></div>
-                <span :class="['status-chip tiny', item.exceeded ? 'unhealthy' : 'healthy']">{{ item.exceeded ? 'EXCEEDED' : item.enabled ? 'ACTIVE' : 'PAUSED' }}</span>
+                <span :class="['status-chip tiny', item.usedAmount == null ? '' : item.exceeded ? 'unhealthy' : 'healthy']">{{ item.usedAmount == null ? '상태 비공개' : item.exceeded ? 'EXCEEDED' : item.enabled ? 'ACTIVE' : 'PAUSED' }}</span>
               </div>
-              <div class="quota-progress"><span :style="{ width: `${Math.min(100, item.usagePercent)}%` }"></span></div>
-              <div class="quota-row-foot"><span>{{ money(item.usedAmount, item.currency) }} / {{ money(item.limitAmount, item.currency) }}</span><span>{{ percent(item.usagePercent) }}</span></div>
+              <div v-if="item.usedAmount != null" class="quota-progress"><span :style="{ width: `${Math.min(100, item.usagePercent)}%` }"></span></div>
+              <div class="quota-row-foot"><span>{{ item.usedAmount == null ? '공유 사용액 조회 권한 없음' : money(item.usedAmount, item.currency) }} / {{ money(item.limitAmount, item.currency) }}</span><span v-if="item.usagePercent != null">{{ percent(item.usagePercent) }}</span></div>
               <small class="ceiling-readonly-note">관리자 상한은 프로젝트 총괄이 수정하거나 삭제할 수 없습니다.</small>
             </div>
           </div>

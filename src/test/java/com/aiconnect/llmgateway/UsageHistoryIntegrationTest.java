@@ -40,9 +40,11 @@ class UsageHistoryIntegrationTest {
         Project project = projects.save(new Project(organization.getId(), "visible"));
         Project other = projects.save(new Project(organization.getId(), "other"));
         IssuedApiKey key = apiKeyService.issue(project.getId(), "visible-key", null);
+        IssuedApiKey sibling = apiKeyService.issue(project.getId(), "sibling-key", null);
         IssuedApiKey otherKey = apiKeyService.issue(other.getId(), "other-key", null);
         ApiKey visibleApiKey = apiKeyService.authenticate("Bearer " + key.secret()).apiKey();
         ApiKey otherApiKey = apiKeyService.authenticate("Bearer " + otherKey.secret()).apiKey();
+        ApiKey siblingApiKey = apiKeyService.authenticate("Bearer " + sibling.secret()).apiKey();
         InferenceNode node = nodes.save(new InferenceNode(organization.getId(), "usage-node", null, "DIRECT", null));
         RuntimeEndpoint endpoint = new RuntimeEndpoint(node.getId(), RuntimeType.LM_STUDIO, "http://usage-node:1234", null);
         endpoint.recordHealth(true); endpoint = endpoints.save(endpoint);
@@ -55,12 +57,15 @@ class UsageHistoryIntegrationTest {
         visible.succeed(deployment.getId(), 3, 2, 50, 200, 1); requests.save(visible);
         LlmRequest hidden = new LlmRequest(UUID.randomUUID().toString(), other.getId(), otherApiKey.getId(), service, false);
         hidden.succeed(deployment.getId(), 100, 100, 50, 200, 0); requests.save(hidden);
+        LlmRequest siblingRequest = new LlmRequest(UUID.randomUUID().toString(), project.getId(), siblingApiKey.getId(), service, false);
+        siblingRequest.succeed(deployment.getId(), 200, 200, 50, 200, 0); requests.save(siblingRequest);
 
         mvc.perform(get("/api/me/requests").header("Authorization", "Bearer " + key.secret()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].serviceKey").value("logical-analysis"))
                 .andExpect(jsonPath("$[0].serviceDisplayName").value("Logical Analysis"))
-                .andExpect(jsonPath("$[0].deploymentDisplayName").value("Production Model"))
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].deploymentDisplayName").doesNotExist())
                 .andExpect(jsonPath("$[0].stream").value(true));
 
         mvc.perform(get("/api/me/usage").header("Authorization", "Bearer " + key.secret()))
@@ -72,6 +77,7 @@ class UsageHistoryIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.requestType").value("VISION"))
                 .andExpect(jsonPath("$.capabilities[0]").value("VISION"))
+                .andExpect(jsonPath("$.finalDeploymentId").doesNotExist())
                 .andExpect(jsonPath("$.inputTokens").value(3))
                 .andExpect(jsonPath("$.outputTokens").value(2))
                 .andExpect(jsonPath("$.costCurrency").value("KRW"))
@@ -80,6 +86,8 @@ class UsageHistoryIntegrationTest {
                 .andExpect(jsonPath("$.response").doesNotExist());
 
         mvc.perform(get("/api/me/requests/" + hidden.getRequestId()).header("Authorization", "Bearer " + key.secret()))
+                .andExpect(status().isNotFound());
+        mvc.perform(get("/api/me/requests/" + siblingRequest.getRequestId()).header("Authorization", "Bearer " + key.secret()))
                 .andExpect(status().isNotFound());
     }
 }
