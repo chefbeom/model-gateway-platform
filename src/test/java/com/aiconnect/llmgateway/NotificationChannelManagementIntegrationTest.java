@@ -36,7 +36,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("integration")
-@TestPropertySource(properties = "spring.datasource.url=jdbc:h2:mem:aiconnect_notification_channel_management;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1")
+@TestPropertySource(properties = {
+        "spring.datasource.url=jdbc:h2:mem:aiconnect_notification_channel_management;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
+        "aiconnect.security.external-url.allow-loopback-test-server=true"
+})
 class NotificationChannelManagementIntegrationTest {
     @Autowired MockMvc mvc;
     @Autowired OrganizationRepository organizations;

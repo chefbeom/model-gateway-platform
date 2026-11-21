@@ -15,7 +15,7 @@ import java.net.Proxy;
 public class HttpClientConfig {
     @Bean
     RestClient runtimeRestClient(GatewayProperties properties, RuntimeProxySettings proxySettings) {
-        SimpleClientHttpRequestFactory factory = requestFactory(properties);
+        SimpleClientHttpRequestFactory factory = noRedirectRequestFactory(properties);
         if (proxySettings.enabled()) {
             factory.setProxy(new Proxy(Proxy.Type.HTTP, proxySettings.address()));
         }
@@ -24,11 +24,15 @@ public class HttpClientConfig {
 
     @Bean
     RestClient notificationRestClient(GatewayProperties properties) {
-        return RestClient.builder().requestFactory(requestFactory(properties)).build();
+        return RestClient.builder().requestFactory(noRedirectRequestFactory(properties)).build();
     }
 
     @Bean
     RestClient externalProviderRestClient(GatewayProperties properties) {
+        return RestClient.builder().requestFactory(noRedirectRequestFactory(properties)).build();
+    }
+
+    private SimpleClientHttpRequestFactory noRedirectRequestFactory(GatewayProperties properties) {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory() {
             @Override
             protected void prepareConnection(HttpURLConnection connection, String httpMethod) throws IOException {
@@ -36,13 +40,6 @@ public class HttpClientConfig {
                 connection.setInstanceFollowRedirects(false);
             }
         };
-        factory.setConnectTimeout(properties.connectTimeoutMs());
-        factory.setReadTimeout(properties.responseTimeoutMs());
-        return RestClient.builder().requestFactory(factory).build();
-    }
-
-    private SimpleClientHttpRequestFactory requestFactory(GatewayProperties properties) {
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(properties.connectTimeoutMs());
         factory.setReadTimeout(properties.responseTimeoutMs());
         return factory;

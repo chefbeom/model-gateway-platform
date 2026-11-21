@@ -46,22 +46,56 @@ public class ExternalUrlSafetyValidator {
 
     /** Validates syntax, host rules, and any resolvable IP addresses at provider registration/update time. */
     public String validateAndNormalizeBaseUrl(String rawUrl) {
-        ParsedBaseUrl parsed = parseAndValidateUri(rawUrl);
-        validateHostName(parsed.host());
-        validateIpOrDns(parsed.host(), false);
+        ParsedBaseUrl parsed = parseAndValidateUri(rawUrl, false);
+        validateHostName(parsed.host(), false);
+        validateIpOrDns(parsed.host(), false, false);
         return parsed.normalizedUrl();
     }
 
     /** Re-validates syntax, host rules, and live DNS resolution immediately before an outbound request. */
     public void assertSafeDestination(String baseUrl) {
-        ParsedBaseUrl parsed = parseAndValidateUri(baseUrl);
-        validateHostName(parsed.host());
-        validateIpOrDns(parsed.host(), true);
+        ParsedBaseUrl parsed = parseAndValidateUri(baseUrl, false);
+        validateHostName(parsed.host(), false);
+        validateIpOrDns(parsed.host(), true, false);
     }
 
-    private ParsedBaseUrl parseAndValidateUri(String rawUrl) {
+    /** Validates runtime endpoint URLs while allowing private/LAN/Tailnet hosts and blocking cloud metadata and link-local targets. */
+    public String validateAndNormalizeRuntimeBaseUrl(String rawUrl) {
+        ParsedBaseUrl parsed = parseAndValidateUri(rawUrl, true);
+        validateHostName(parsed.host(), true);
+        validateIpOrDns(parsed.host(), false, true);
+        return parsed.normalizedUrl();
+    }
+
+    /** Re-validates runtime endpoint URLs immediately before making an outbound probe or inference request. */
+    public void assertSafeRuntimeDestination(String baseUrl) {
+        ParsedBaseUrl parsed = parseAndValidateUri(baseUrl, true);
+        validateHostName(parsed.host(), true);
+        validateIpOrDns(parsed.host(), false, true);
+    }
+
+    public String validateTelegramBotToken(String rawToken) {
+        String token = rawToken == null ? "" : rawToken.trim();
+        if (token.isEmpty() || token.length() > 128
+                || !token.matches("^[A-Za-z0-9:_-]+$")) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_NOTIFICATION_SECRET",
+                    "Telegram bot token contains invalid characters.");
+        }
+        return token;
+    }
+
+    public String validateTelegramChatId(String rawChatId) {
+        String chatId = rawChatId == null ? "" : rawChatId.trim();
+        if (chatId.isEmpty() || chatId.length() > 128 || chatId.chars().anyMatch(ch -> ch < 0x20 || ch == 0x7F)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_NOTIFICATION_TARGET",
+                    "Telegram chat target must be a valid chat identifier.");
+        }
+        return chatId;
+    }
+
+    private ParsedBaseUrl parseAndValidateUri(String rawUrl, boolean runtimeMode) {
         if (rawUrl == null || rawUrl.isBlank()) {
-            throw invalidUrl();
+            throw invalidUrl(runtimeMode);
         }
         String normalized = rawUrl.trim().replaceAll("/+$", "");
         URI uri;
@@ -77,12 +111,12 @@ public class ExternalUrlSafetyValidator {
                 throw new IllegalArgumentException();
             }
         } catch (IllegalArgumentException ex) {
-            throw invalidUrl();
+            throw invalidUrl(runtimeMode);
         }
 
         if (uri.getHost() == null || uri.getHost().isBlank()) {
-            checkOpaqueAuthorityForNonCanonicalIp(uri.getRawAuthority());
-            throw invalidUrl();
+            checkOpaqueAuthorityForNonCanonicalIp(uri.getRawAuthority(), runtimeMode);
+            throw invalidUrl(runtimeMode);
         }
 
         String host = uri.getHost().trim();
@@ -90,50 +124,53 @@ public class ExternalUrlSafetyValidator {
             host = host.substring(1, host.length() - 1);
         }
         if (host.contains("%")) {
-            throw forbiddenUrl();
+            throw forbiddenUrl(runtimeMode);
         }
         while (host.endsWith(".")) {
             host = host.substring(0, host.length() - 1);
         }
         host = host.toLowerCase(Locale.ROOT);
         if (host.isEmpty()) {
-            throw invalidUrl();
+            throw invalidUrl(runtimeMode);
         }
         return new ParsedBaseUrl(normalized, host);
     }
 
-    private void validateHostName(String host) {
-        if ("localhost".equals(host)
+    private void validateHostName(String host, boolean runtimeMode) {
+        if ("metadata.google.internal".equals(host) || "metadata.goog".equals(host) || "instance-data".equals(host)) {
+            throw forbiddenUrl(runtimeMode);
+        }
+        if (!runtimeMode && ("localhost".equals(host)
                 || host.endsWith(".localhost")
                 || host.endsWith(".local")
-                || host.endsWith(".internal")) {
-            throw forbiddenUrl();
+                || host.endsWith(".internal"))) {
+            throw forbiddenUrl(false);
         }
         if (!host.contains(":")) {
-            if (!host.contains(".")) {
-                throw forbiddenUrl();
+            if (!runtimeMode && !host.contains(".")) {
+                throw forbiddenUrl(false);
             }
             if (isNonCanonicalNumericIpv4(host)) {
-                throw forbiddenUrl();
+                throw forbiddenUrl(runtimeMode);
             }
         }
     }
 
-    private void validateIpOrDns(String host, boolean requireResolution) {
+    private void validateIpOrDns(String host, boolean requireResolution, boolean runtimeMode) {
         byte[] ipv4Literal = parseCanonicalIpv4(host);
         if (ipv4Literal != null) {
             try {
-                checkAddress(InetAddress.getByAddress(host, ipv4Literal));
+                checkAddress(InetAddress.getByAddress(host, ipv4Literal), runtimeMode);
             } catch (UnknownHostException impossible) {
-                throw forbiddenUrl();
+                throw forbiddenUrl(runtimeMode);
             }
             return;
         }
         if (host.contains(":")) {
             try {
-                checkAddress(InetAddress.getByName(host));
+                checkAddress(InetAddress.getByName(host), runtimeMode);
             } catch (UnknownHostException ex) {
-                throw invalidUrl();
+                throw invalidUrl(runtimeMode);
             }
             return;
         }
@@ -155,86 +192,92 @@ public class ExternalUrlSafetyValidator {
             return;
         }
         for (InetAddress address : addresses) {
-            checkAddress(address);
+            checkAddress(address, runtimeMode);
         }
     }
 
-    private void checkAddress(InetAddress address) {
+    private void checkAddress(InetAddress address, boolean runtimeMode) {
         if (address == null) {
-            throw forbiddenUrl();
+            throw forbiddenUrl(runtimeMode);
         }
         if (address.isAnyLocalAddress()
                 || address.isLinkLocalAddress()
-                || address.isSiteLocalAddress()
                 || address.isMulticastAddress()
-                || (address.isLoopbackAddress() && !allowLoopbackTestServer)) {
-            throw forbiddenUrl();
+                || (!runtimeMode && (address.isSiteLocalAddress()
+                        || (address.isLoopbackAddress() && !allowLoopbackTestServer)))) {
+            throw forbiddenUrl(runtimeMode);
         }
         byte[] raw = address.getAddress();
         if (raw.length == 4) {
-            checkIpv4(raw);
+            checkIpv4(raw, runtimeMode);
         } else if (raw.length == 16) {
-            checkIpv6(raw);
+            checkIpv6(raw, runtimeMode);
         } else {
-            throw forbiddenUrl();
+            throw forbiddenUrl(runtimeMode);
         }
     }
 
-    private void checkIpv4(byte[] addr) {
+    private void checkIpv4(byte[] addr, boolean runtimeMode) {
         int b0 = u(addr[0]);
         int b1 = u(addr[1]);
         int b2 = u(addr[2]);
-        if (b0 == 0 || b0 == 10) {
-            throw forbiddenUrl();
+        if (b0 == 0) {
+            throw forbiddenUrl(runtimeMode);
+        }
+        if (b0 == 169 && b1 == 254) {
+            throw forbiddenUrl(runtimeMode);
+        }
+        if (b0 >= 224) {
+            throw forbiddenUrl(runtimeMode);
+        }
+        if (runtimeMode) {
+            return;
+        }
+        if (b0 == 10) {
+            throw forbiddenUrl(false);
         }
         if (b0 == 100 && (b1 & 0xC0) == 64) {
-            throw forbiddenUrl();
+            throw forbiddenUrl(false);
         }
         if (b0 == 127) {
             if (!allowLoopbackTestServer) {
-                throw forbiddenUrl();
+                throw forbiddenUrl(false);
             }
             return;
         }
-        if (b0 == 169 && b1 == 254) {
-            throw forbiddenUrl();
-        }
         if (b0 == 172 && b1 >= 16 && b1 <= 31) {
-            throw forbiddenUrl();
+            throw forbiddenUrl(false);
         }
         if (b0 == 192 && b1 == 0 && b2 == 0) {
-            throw forbiddenUrl();
+            throw forbiddenUrl(false);
         }
         if (b0 == 192 && b1 == 88 && b2 == 99) {
-            throw forbiddenUrl();
+            throw forbiddenUrl(false);
         }
         if (b0 == 192 && b1 == 168) {
-            throw forbiddenUrl();
+            throw forbiddenUrl(false);
         }
         if (b0 == 198 && (b1 == 18 || b1 == 19)) {
-            throw forbiddenUrl();
-        }
-        if (b0 >= 224) {
-            throw forbiddenUrl();
+            throw forbiddenUrl(false);
         }
     }
 
-    private void checkIpv6(byte[] addr) {
+    private void checkIpv6(byte[] addr, boolean runtimeMode) {
         if (isAllZero(addr, 0, 16)) {
-            throw forbiddenUrl();
-        }
-        if (isAllZero(addr, 0, 15) && u(addr[15]) == 1) {
-            if (!allowLoopbackTestServer) {
-                throw forbiddenUrl();
-            }
-            return;
+            throw forbiddenUrl(runtimeMode);
         }
         if (isAllZero(addr, 0, 10) && u(addr[10]) == 0xFF && u(addr[11]) == 0xFF) {
-            checkIpv4(new byte[]{addr[12], addr[13], addr[14], addr[15]});
+            checkIpv4(new byte[]{addr[12], addr[13], addr[14], addr[15]}, runtimeMode);
             return;
         }
-        if (isAllZero(addr, 0, 12)) {
-            checkIpv4(new byte[]{addr[12], addr[13], addr[14], addr[15]});
+        if (isAllZero(addr, 0, 12) && !isAllZero(addr, 12, 16)) {
+            if (isAllZero(addr, 0, 15) && u(addr[15]) == 1) {
+                if (!runtimeMode && !allowLoopbackTestServer) {
+                    throw forbiddenUrl(false);
+                }
+                return;
+            }
+            checkIpv4(new byte[]{addr[12], addr[13], addr[14], addr[15]}, runtimeMode);
             return;
         }
         int b0 = u(addr[0]);
@@ -243,31 +286,39 @@ public class ExternalUrlSafetyValidator {
         int b3 = u(addr[3]);
         int b4 = u(addr[4]);
         int b5 = u(addr[5]);
-        if ((b0 & 0xFE) == 0xFC) {
-            throw forbiddenUrl();
+        // Block AWS IPv6 metadata endpoint fd00:ec2::254 even in runtime mode
+        if (b0 == 0xFD && b1 == 0x00 && b2 == 0x0E && b3 == 0xC2
+                && isAllZero(addr, 4, 14) && u(addr[14]) == 0x02 && u(addr[15]) == 0x54) {
+            throw forbiddenUrl(runtimeMode);
         }
         if (b0 == 0xFE && ((b1 & 0xC0) == 0x80 || (b1 & 0xC0) == 0xC0)) {
-            throw forbiddenUrl();
+            throw forbiddenUrl(runtimeMode);
         }
         if (b0 == 0xFF) {
-            throw forbiddenUrl();
+            throw forbiddenUrl(runtimeMode);
+        }
+        if (runtimeMode) {
+            return;
+        }
+        if ((b0 & 0xFE) == 0xFC) {
+            throw forbiddenUrl(false);
         }
         if (b0 == 0x01 && b1 == 0x00 && isAllZero(addr, 2, 8)) {
-            throw forbiddenUrl();
+            throw forbiddenUrl(false);
         }
         if (b0 == 0x20 && b1 == 0x01 && b2 == 0x00 && b3 == 0x00) {
-            throw forbiddenUrl();
+            throw forbiddenUrl(false);
         }
         if (b0 == 0x20 && b1 == 0x02) {
-            throw forbiddenUrl();
+            throw forbiddenUrl(false);
         }
         if (b0 == 0x00 && b1 == 0x64 && b2 == 0xFF && b3 == 0x9B
                 && ((b4 == 0x00 && b5 == 0x00 && isAllZero(addr, 6, 12)) || (b4 == 0x00 && b5 == 0x01))) {
-            throw forbiddenUrl();
+            throw forbiddenUrl(false);
         }
     }
 
-    private static void checkOpaqueAuthorityForNonCanonicalIp(String rawAuthority) {
+    private static void checkOpaqueAuthorityForNonCanonicalIp(String rawAuthority, boolean runtimeMode) {
         if (rawAuthority == null || rawAuthority.isBlank() || rawAuthority.contains("@") || rawAuthority.startsWith("[")) {
             return;
         }
@@ -296,7 +347,7 @@ public class ExternalUrlSafetyValidator {
             candidate = candidate.substring(0, candidate.length() - 1);
         }
         if (!candidate.isEmpty() && isNonCanonicalNumericIpv4(candidate)) {
-            throw forbiddenUrl();
+            throw forbiddenUrl(runtimeMode);
         }
     }
 
@@ -342,12 +393,20 @@ public class ExternalUrlSafetyValidator {
         return value & 0xFF;
     }
 
-    private static ApiException invalidUrl() {
+    private static ApiException invalidUrl(boolean runtimeMode) {
+        if (runtimeMode) {
+            return new ApiException(HttpStatus.BAD_REQUEST, "INVALID_RUNTIME_BASE_URL",
+                    "The runtime Base URL must be an absolute HTTP(S) URL without credentials, query, or fragment.");
+        }
         return new ApiException(HttpStatus.BAD_REQUEST, "INVALID_PROVIDER_BASE_URL",
                 "Provider URL must be an absolute HTTP(S) URL without credentials, query or fragment.");
     }
 
-    private static ApiException forbiddenUrl() {
+    private static ApiException forbiddenUrl(boolean runtimeMode) {
+        if (runtimeMode) {
+            return new ApiException(HttpStatus.BAD_REQUEST, "RUNTIME_ENDPOINT_URL_FORBIDDEN",
+                    "Runtime endpoint URL cannot target cloud metadata, link-local, or unspecified addresses.");
+        }
         return new ApiException(HttpStatus.BAD_REQUEST, "EXTERNAL_PROVIDER_URL_FORBIDDEN", FORBIDDEN_MESSAGE);
     }
 

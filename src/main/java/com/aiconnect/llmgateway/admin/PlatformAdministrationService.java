@@ -263,6 +263,8 @@ public class PlatformAdministrationService {
         execute("delete from team_member where user_id = :id", userId);
         execute("delete from organization_member where user_id = :id", userId);
         execute("delete from app_user where id = :id", userId);
+        audit.record(null, CurrentActor.userIdOrNull(), "PLATFORM_USER_DELETED", "APP_USER", userId,
+                Map.of("email", user.getEmail()));
     }
 
     @Transactional

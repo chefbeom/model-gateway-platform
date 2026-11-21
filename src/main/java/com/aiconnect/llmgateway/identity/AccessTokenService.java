@@ -61,9 +61,14 @@ public class AccessTokenService {
         try {
             String[] parts = token.split("\\.");
             if (parts.length != 3 || !MessageDigest.isEqual(decode(parts[2]), hmac(parts[0] + "." + parts[1]))) throw unauthorized();
+            Map<String, Object> header = objectMapper.readValue(decode(parts[0]), new TypeReference<>() { });
+            if (!"HS256".equals(header.get("alg")) || !"JWT".equals(header.get("typ"))) throw unauthorized();
             Map<String, Object> payload = objectMapper.readValue(decode(parts[1]), new TypeReference<>() { });
+            long now = Instant.now().getEpochSecond();
             long expiresAt = ((Number) payload.get("exp")).longValue();
-            if (Instant.now().getEpochSecond() >= expiresAt) throw unauthorized();
+            if (!(payload.get("iat") instanceof Number issuedAtNumber)) throw unauthorized();
+            long issuedAt = issuedAtNumber.longValue();
+            if (issuedAt > now + 60 || expiresAt <= issuedAt || now >= expiresAt) throw unauthorized();
             boolean platformAdmin = Boolean.TRUE.equals(payload.get("platform_admin"));
             AccountTier tier = parseTier(payload.get("account_tier"), platformAdmin);
             boolean totpEnabled = Boolean.TRUE.equals(payload.get("totp_enabled"));

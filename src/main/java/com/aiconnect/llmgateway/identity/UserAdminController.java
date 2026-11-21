@@ -1,6 +1,8 @@
 package com.aiconnect.llmgateway.identity;
 
+import com.aiconnect.llmgateway.domain.Project;
 import com.aiconnect.llmgateway.repository.OrganizationRepository;
+import com.aiconnect.llmgateway.repository.ProjectRepository;
 import com.aiconnect.llmgateway.team.TeamRole;
 import com.aiconnect.llmgateway.team.TeamService;
 import com.aiconnect.llmgateway.web.ApiException;
@@ -10,6 +12,7 @@ import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -36,6 +39,10 @@ public class UserAdminController {
     private final OrganizationRepository organizations;
     private final OrganizationMemberRepository organizationMembers;
     private final AuditService audit;
+    @Autowired(required = false)
+    private ProjectRepository projects;
+    @Autowired(required = false)
+    private ProjectMembershipRepository projectMemberships;
 
     public UserAdminController(IdentityService identity, TeamService teams, OrganizationAccessService access,
                                TotpService totpService, AppUserRepository users, OrganizationRepository organizations,
@@ -121,6 +128,18 @@ public class UserAdminController {
                     || targetMembership.getRole() == OrganizationRole.ORGANIZATION_ADMIN) {
                 throw new ApiException(HttpStatus.FORBIDDEN, "ACCOUNT_TIER_FORBIDDEN",
                         "Project directors can only reset TOTP for general users in their organization.");
+            }
+            if (projects != null && projectMemberships != null) {
+                boolean sharedManagedProject = projects.findByOrganizationId(organizationId).stream()
+                        .map(Project::getId)
+                        .anyMatch(projectId ->
+                                projectMemberships.existsByIdProjectIdAndIdUserIdAndRole(
+                                        projectId, actor.userId(), ProjectMembership.Role.MANAGER)
+                                        && projectMemberships.findById(new ProjectMembershipId(projectId, userId)).isPresent());
+                if (!sharedManagedProject) {
+                    throw new ApiException(HttpStatus.FORBIDDEN, "PROJECT_ACCESS_DENIED",
+                            "Project directors can only reset TOTP for members of projects they manage.");
+                }
             }
         }
         totpService.resetTotp(userId, CurrentActor.userIdOrNull(), organizationId);

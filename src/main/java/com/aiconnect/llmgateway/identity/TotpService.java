@@ -79,14 +79,17 @@ public class TotpService {
 
     @Transactional
     public TotpSetup beginSetup(UUID userId) {
+        Instant now = clock.instant();
         AppUser user = requireUserForUpdate(userId);
         if (user.isTotpEnabled()) {
             throw new ApiException(HttpStatus.CONFLICT, "TOTP_ALREADY_ENABLED",
                     "Two-factor authentication is already enabled for this account.");
         }
+        ensureNotLocked(user, now);
         String secret = generateSecret();
         user.assignPendingTotpSecret(cipher.encrypt(secret));
         users.save(user);
+        audit.record(null, userId, "TOTP_SETUP_INITIATED", "APP_USER", userId, Map.of("email", user.getEmail()));
         return new TotpSetup(secret, buildOtpauthUri(user.getEmail(), secret), issuer, user.getEmail());
     }
 

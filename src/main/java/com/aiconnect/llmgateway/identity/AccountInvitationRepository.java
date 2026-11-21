@@ -21,6 +21,7 @@ public interface AccountInvitationRepository extends JpaRepository<AccountInvita
     Optional<AccountInvitation> findByIdForUpdate(@Param("id") UUID id);
 
     List<AccountInvitation> findByOrganizationIdOrderByCreatedAtDesc(UUID organizationId);
+    List<AccountInvitation> findByOrganizationIdAndIssuedByUserIdAndConsumedAtIsNullAndRevokedAtIsNull(UUID organizationId, UUID issuedByUserId);
     List<AccountInvitation> findAllByOrderByCreatedAtDesc();
     List<AccountInvitation> findByProjectIdAndIssuedByUserIdAndConsumedAtIsNullAndRevokedAtIsNull(UUID projectId, UUID issuedByUserId);
 }

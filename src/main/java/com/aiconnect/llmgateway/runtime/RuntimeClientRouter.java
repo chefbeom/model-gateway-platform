@@ -2,7 +2,9 @@ package com.aiconnect.llmgateway.runtime;
 
 import com.aiconnect.llmgateway.domain.RuntimeEndpoint;
 import com.aiconnect.llmgateway.domain.RuntimeType;
+import com.aiconnect.llmgateway.security.ExternalUrlSafetyValidator;
 import com.fasterxml.jackson.databind.JsonNode;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.EnumMap;
@@ -13,6 +15,8 @@ import java.util.Map;
 @Component
 public class RuntimeClientRouter implements InferenceRuntimeClient {
     private final Map<RuntimeType, RuntimeProviderAdapter> adapters = new EnumMap<>(RuntimeType.class);
+    @Autowired(required = false)
+    private ExternalUrlSafetyValidator urlSafetyValidator;
 
     public RuntimeClientRouter(List<RuntimeProviderAdapter> providers) {
         for (RuntimeProviderAdapter provider : providers) {
@@ -24,12 +28,19 @@ public class RuntimeClientRouter implements InferenceRuntimeClient {
 
     @Override
     public RuntimeResult listModels(RuntimeEndpoint endpoint) {
+        assertSafeRuntime(endpoint);
         return adapter(endpoint).listModels(endpoint);
     }
 
     @Override
     public RuntimeResult chatCompletion(RuntimeEndpoint endpoint, JsonNode request) {
+        assertSafeRuntime(endpoint);
         return adapter(endpoint).chatCompletion(endpoint, request);
+    }
+
+    private void assertSafeRuntime(RuntimeEndpoint endpoint) {
+        ExternalUrlSafetyValidator validator = urlSafetyValidator != null ? urlSafetyValidator : new ExternalUrlSafetyValidator(false);
+        validator.assertSafeRuntimeDestination(endpoint.getBaseUrl());
     }
 
     private RuntimeProviderAdapter adapter(RuntimeEndpoint endpoint) {

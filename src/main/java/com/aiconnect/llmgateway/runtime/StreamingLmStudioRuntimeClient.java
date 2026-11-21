@@ -3,9 +3,11 @@ package com.aiconnect.llmgateway.runtime;
 import com.aiconnect.llmgateway.config.GatewayProperties;
 import com.aiconnect.llmgateway.config.RuntimeProxySettings;
 import com.aiconnect.llmgateway.domain.RuntimeEndpoint;
+import com.aiconnect.llmgateway.security.ExternalUrlSafetyValidator;
 import com.aiconnect.llmgateway.service.SecretCipher;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -22,11 +24,14 @@ public class StreamingLmStudioRuntimeClient {
     private final ObjectMapper objectMapper;
     private final SecretCipher secretCipher;
     private final GatewayProperties properties;
+    @Autowired(required = false)
+    private ExternalUrlSafetyValidator urlSafetyValidator;
 
     public StreamingLmStudioRuntimeClient(ObjectMapper objectMapper, SecretCipher secretCipher,
                                           GatewayProperties properties, RuntimeProxySettings proxySettings) {
         HttpClient.Builder builder = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofMillis(properties.connectTimeoutMs()));
+                .connectTimeout(Duration.ofMillis(properties.connectTimeoutMs()))
+                .followRedirects(HttpClient.Redirect.NEVER);
         if (proxySettings.enabled()) builder.proxy(ProxySelector.of(proxySettings.address()));
         this.client = builder.build();
         this.objectMapper = objectMapper;
@@ -35,6 +40,8 @@ public class StreamingLmStudioRuntimeClient {
     }
 
     public StreamingRuntimeResult chatCompletion(RuntimeEndpoint endpoint, JsonNode requestBody) {
+        ExternalUrlSafetyValidator validator = urlSafetyValidator != null ? urlSafetyValidator : new ExternalUrlSafetyValidator(false);
+        validator.assertSafeRuntimeDestination(endpoint.getBaseUrl());
         try {
             HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(RuntimeUrl.openAi(endpoint.getBaseUrl(), "/chat/completions")))
                     .timeout(Duration.ofMillis(properties.responseTimeoutMs()))

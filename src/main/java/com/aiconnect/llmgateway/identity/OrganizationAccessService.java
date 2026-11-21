@@ -1,5 +1,9 @@
 package com.aiconnect.llmgateway.identity;
 
+import com.aiconnect.llmgateway.beta.BetaOperator;
+import com.aiconnect.llmgateway.beta.BetaOperatorRepository;
+import com.aiconnect.llmgateway.beta.BetaService;
+import com.aiconnect.llmgateway.beta.BetaServiceRepository;
 import com.aiconnect.llmgateway.domain.ApiKey;
 import com.aiconnect.llmgateway.domain.Project;
 import com.aiconnect.llmgateway.repository.ApiKeyRepository;
@@ -11,10 +15,12 @@ import com.aiconnect.llmgateway.team.TeamMemberRepository;
 import com.aiconnect.llmgateway.team.TeamRepository;
 import com.aiconnect.llmgateway.team.TeamRole;
 import com.aiconnect.llmgateway.web.ApiException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -38,6 +44,16 @@ public class OrganizationAccessService {
     private final ApiKeyRepository apiKeys;
     private final AppUserRepository users;
     private final AuditService audit;
+    @Autowired(required = false)
+    private ProjectMembershipRepository projectMemberships;
+    @Autowired(required = false)
+    private AccountInvitationRepository invitations;
+    @Autowired(required = false)
+    private BetaServiceRepository betaServices;
+    @Autowired(required = false)
+    private BetaOperatorRepository betaOperators;
+    @Autowired(required = false)
+    private AuthRefreshTokenRepository refreshTokens;
 
     public OrganizationAccessService(OrganizationRepository organizations, TeamRepository teams,
                                      TeamMemberRepository teamMembers, OrganizationMemberRepository organizationMembers,
@@ -138,17 +154,63 @@ public class OrganizationAccessService {
 
         List<TeamMember> memberships = teamMembershipsInOrganization(organizationId, userId);
         List<ApiKey> keys = keysIssuedInOrganization(organizationId, userId);
+        Map<UUID, Project> orgProjects = projectsForOrganization(organizationId);
+        List<ProjectMembership> orgProjectMemberships = projectMemberships == null ? List.of()
+                : projectMemberships.findByIdUserId(userId).stream()
+                .filter(pm -> orgProjects.containsKey(pm.getId().getProjectId()))
+                .toList();
 
         apiKeys.deleteAll(keys);
         apiKeys.flush();
+        if (projectMemberships != null && !orgProjectMemberships.isEmpty()) {
+            projectMemberships.deleteAll(orgProjectMemberships);
+            projectMemberships.flush();
+        }
         teamMembers.deleteAll(memberships);
         teamMembers.flush();
         organizationMembers.delete(membership);
         organizationMembers.flush();
 
+        int revokedInvitations = 0;
+        if (invitations != null) {
+            Instant now = Instant.now();
+            List<AccountInvitation> pending = invitations
+                    .findByOrganizationIdAndIssuedByUserIdAndConsumedAtIsNullAndRevokedAtIsNull(organizationId, userId);
+            for (AccountInvitation invite : pending) {
+                invite.revoke(now);
+            }
+            if (!pending.isEmpty()) {
+                invitations.saveAll(pending);
+                revokedInvitations = pending.size();
+            }
+        }
+
+        if (betaServices != null && betaOperators != null) {
+            for (BetaService service : betaServices.findByOrganizationId(organizationId)) {
+                BetaOperator.Key opKey = new BetaOperator.Key(service.getId(), userId);
+                if (betaOperators.existsById(opKey)) {
+                    betaOperators.deleteById(opKey);
+                }
+            }
+        }
+
+        if (refreshTokens != null) {
+            boolean hasOtherOrgs = !organizationMembers.findByIdUserId(userId).isEmpty();
+            boolean isPlatformAdmin = users.findById(userId).map(AppUser::isPlatformAdmin).orElse(false);
+            if (!hasOtherOrgs && !isPlatformAdmin) {
+                List<AuthRefreshToken> activeTokens = refreshTokens.findByUserIdAndRevokedAtIsNull(userId);
+                if (!activeTokens.isEmpty()) {
+                    activeTokens.forEach(AuthRefreshToken::revoke);
+                    refreshTokens.saveAll(activeTokens);
+                }
+            }
+        }
+
         audit.record(organizationId, CurrentActor.userIdOrNull(), "ORGANIZATION_USER_REMOVED", "APP_USER", userId,
                 Map.of("email", email(userId), "deletedApiKeyCount", keys.size(),
-                        "removedTeamMembershipCount", memberships.size()));
+                        "removedTeamMembershipCount", memberships.size(),
+                        "removedProjectMembershipCount", orgProjectMemberships.size(),
+                        "revokedInvitationCount", revokedInvitations));
     }
 
     private Team requireTeam(UUID organizationId, UUID teamId) {

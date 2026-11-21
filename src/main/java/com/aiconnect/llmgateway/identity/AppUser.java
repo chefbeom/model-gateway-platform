@@ -22,6 +22,8 @@ public class AppUser {
     private Long totpLastUsedStep;
     @Column(nullable = false) private int totpFailedAttempts = 0;
     private Instant totpLockedUntil;
+    @Column(nullable = false) private int loginFailedAttempts = 0;
+    private Instant loginLockedUntil;
     @Column(nullable = false) private boolean enabled = true;
     @Column(nullable = false) private boolean projectScopeEnforced = false;
     @Column(nullable = false) private Instant createdAt = Instant.now();
@@ -58,6 +60,8 @@ public class AppUser {
     public Long getTotpLastUsedStep() { return totpLastUsedStep; }
     public int getTotpFailedAttempts() { return totpFailedAttempts; }
     public Instant getTotpLockedUntil() { return totpLockedUntil; }
+    public int getLoginFailedAttempts() { return loginFailedAttempts; }
+    public Instant getLoginLockedUntil() { return loginLockedUntil; }
     public boolean isEnabled() { return enabled; }
     public boolean isProjectScopeEnforced() { return projectScopeEnforced; }
     public void enforceProjectScope() { projectScopeEnforced = true; }
@@ -102,6 +106,24 @@ public class AppUser {
     public void clearTotpLockout() {
         this.totpFailedAttempts = 0;
         this.totpLockedUntil = null;
+    }
+
+    public boolean isLoginLocked(Instant now) {
+        return loginLockedUntil != null && loginLockedUntil.isAfter(now);
+    }
+
+    public boolean recordLoginFailure(int maxAttempts, Duration lockDuration, Instant now) {
+        this.loginFailedAttempts = this.loginFailedAttempts + 1;
+        if (this.loginFailedAttempts >= maxAttempts) {
+            this.loginLockedUntil = now.plus(lockDuration);
+            return true;
+        }
+        return false;
+    }
+
+    public void clearLoginLockout() {
+        this.loginFailedAttempts = 0;
+        this.loginLockedUntil = null;
     }
 
     public void resetTotp() {

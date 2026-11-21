@@ -68,7 +68,7 @@ public class AuthController {
         IdentityService.EnrollmentResult result = identity.enrollTotp(ctx.userId(), ctx.sessionId(), body.code());
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noStore())
-                .header(HttpHeaders.SET_COOKIE, refreshCookie(result.session().refreshToken()).toString())
+                .header(HttpHeaders.SET_COOKIE, refreshCookie(result.session().refreshToken(), identity.effectiveRefreshTtlSeconds(true)).toString())
                 .body(new TotpEnrollResponse(toSessionBody(result.session()), result.recoveryCodes()));
     }
 
@@ -78,7 +78,7 @@ public class AuthController {
         IdentityService.Session session = identity.verifyTotp(ctx.userId(), ctx.sessionId(), body.code());
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noStore())
-                .header(HttpHeaders.SET_COOKIE, refreshCookie(session.refreshToken()).toString())
+                .header(HttpHeaders.SET_COOKIE, refreshCookie(session.refreshToken(), identity.effectiveRefreshTtlSeconds(true)).toString())
                 .body(toSessionBody(session));
     }
 
@@ -108,7 +108,7 @@ public class AuthController {
     private ResponseEntity<SessionResponse> toResponse(IdentityService.Session session) {
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noStore())
-                .header(HttpHeaders.SET_COOKIE, refreshCookie(session.refreshToken()).toString())
+                .header(HttpHeaders.SET_COOKIE, refreshCookie(session.refreshToken(), identity.effectiveRefreshTtlSeconds(session.mfaVerified())).toString())
                 .body(toSessionBody(session));
     }
 
@@ -116,9 +116,9 @@ public class AuthController {
         return new SessionResponse(session.accessToken(), UserView.from(session.user()), session.mfaState());
     }
 
-    private ResponseCookie refreshCookie(String token) {
+    private ResponseCookie refreshCookie(String token, long maxAgeSeconds) {
         return ResponseCookie.from(REFRESH_COOKIE, token).httpOnly(true).secure(properties.cookieSecure())
-                .sameSite("Strict").path("/api/auth").maxAge(properties.refreshTokenSeconds()).build();
+                .sameSite("Strict").path("/api/auth").maxAge(maxAgeSeconds).build();
     }
 
     private ResponseCookie expiredCookie() {

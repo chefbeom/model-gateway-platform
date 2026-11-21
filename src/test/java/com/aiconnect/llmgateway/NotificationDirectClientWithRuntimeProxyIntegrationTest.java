@@ -29,7 +29,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @ActiveProfiles("integration")
 @TestPropertySource(properties = {
         "spring.datasource.url=jdbc:h2:mem:aiconnect_notification_direct_proxy;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
-        "RUNTIME_HTTP_PROXY_URL=http://127.0.0.1:1"
+        "RUNTIME_HTTP_PROXY_URL=http://127.0.0.1:1",
+        "aiconnect.security.external-url.allow-loopback-test-server=true"
 })
 class NotificationDirectClientWithRuntimeProxyIntegrationTest {
     @Autowired OrganizationRepository organizations;

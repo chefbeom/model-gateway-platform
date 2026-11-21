@@ -8,7 +8,9 @@ import com.aiconnect.llmgateway.domain.InferenceNode;
 import com.aiconnect.llmgateway.domain.Project;
 import com.aiconnect.llmgateway.domain.RuntimeEndpoint;
 import com.aiconnect.llmgateway.repository.InferenceNodeRepository;
+import com.aiconnect.llmgateway.security.ExternalUrlSafetyValidator;
 import com.aiconnect.llmgateway.service.SecretCipher;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -26,6 +28,8 @@ public class NotificationService {
     private final InferenceNodeRepository nodes;
     private final SecretCipher cipher;
     private final RestClient restClient;
+    @Autowired(required = false)
+    private ExternalUrlSafetyValidator urlSafetyValidator;
 
     public NotificationService(NotificationChannelRepository channels, NotificationDeliveryRepository deliveries,
                                UsageAlertDeliveryRepository usageAlertDeliveries, InferenceNodeRepository nodes,
@@ -82,14 +86,20 @@ public class NotificationService {
     private void send(NotificationChannel channel, String message) {
         String target = cipher.decrypt(channel.getEncryptedTarget());
         String secret = cipher.decrypt(channel.getEncryptedSecret());
+        ExternalUrlSafetyValidator validator = urlSafetyValidator != null ? urlSafetyValidator : new ExternalUrlSafetyValidator(false);
         if (channel.getChannelType() == NotificationChannelType.DISCORD_WEBHOOK) {
-            restClient.post().uri(target).contentType(MediaType.APPLICATION_JSON)
+            validator.assertSafeDestination(target);
+            var response = restClient.post().uri(target).contentType(MediaType.APPLICATION_JSON)
                     .body(Map.of("content", message)).retrieve().toBodilessEntity();
+            if (response.getStatusCode().is3xxRedirection()) {
+                throw new IllegalStateException("Notification webhook redirect was rejected (HTTP " + response.getStatusCode().value() + ").");
+            }
             return;
         }
-        if (secret == null || secret.isBlank()) throw new IllegalStateException("Telegram bot token is not configured.");
-        restClient.post().uri("https://api.telegram.org/bot" + secret + "/sendMessage")
-                .contentType(MediaType.APPLICATION_JSON).body(Map.of("chat_id", target, "text", message))
+        String validatedToken = validator.validateTelegramBotToken(secret);
+        String validatedChatId = validator.validateTelegramChatId(target);
+        restClient.post().uri("https://api.telegram.org/bot" + validatedToken + "/sendMessage")
+                .contentType(MediaType.APPLICATION_JSON).body(Map.of("chat_id", validatedChatId, "text", message))
                 .retrieve().toBodilessEntity();
     }
 

@@ -12,6 +12,7 @@ import com.aiconnect.llmgateway.repository.ModelDeploymentRepository;
 import com.aiconnect.llmgateway.repository.RuntimeEndpointRepository;
 import com.aiconnect.llmgateway.repository.ServiceTargetRepository;
 import com.aiconnect.llmgateway.service.SecretCipher;
+import com.aiconnect.llmgateway.security.ExternalUrlSafetyValidator;
 import com.aiconnect.llmgateway.security.RuntimeTrustAttestationRepository;
 import com.aiconnect.llmgateway.web.ApiException;
 import org.springframework.http.HttpStatus;
@@ -34,6 +35,8 @@ public class EndpointAdministrationService {
     private final SecretCipher cipher;
     private final AuditService audit;
     private final RuntimeTrustAttestationRepository trustAttestations;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ExternalUrlSafetyValidator urlSafetyValidator;
 
     public EndpointAdministrationService(RuntimeEndpointRepository endpoints, InferenceNodeRepository nodes,
                                          ModelDeploymentRepository deployments, ServiceTargetRepository targets,
@@ -103,20 +106,8 @@ public class EndpointAdministrationService {
     }
 
     private String normalizeBaseUrl(String raw) {
-        String value = raw == null ? "" : raw.trim();
-        while (value.endsWith("/")) value = value.substring(0, value.length() - 1);
-        try {
-            URI uri = URI.create(value);
-            String scheme = uri.getScheme();
-            if (scheme == null || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))
-                    || uri.getHost() == null || uri.getUserInfo() != null || uri.getQuery() != null || uri.getFragment() != null) {
-                throw new IllegalArgumentException();
-            }
-            return value;
-        } catch (IllegalArgumentException exception) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_RUNTIME_BASE_URL",
-                    "The runtime Base URL must be an absolute HTTP(S) URL without credentials, query, or fragment.");
-        }
+        ExternalUrlSafetyValidator validator = urlSafetyValidator != null ? urlSafetyValidator : new ExternalUrlSafetyValidator(false);
+        return validator.validateAndNormalizeRuntimeBaseUrl(raw);
     }
 
     public record UpdateCommand(String displayName, String baseUrl, RuntimeType runtimeType, String apiToken, boolean clearApiToken, Boolean enabled, boolean clearPricing, BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Currency currency) { }

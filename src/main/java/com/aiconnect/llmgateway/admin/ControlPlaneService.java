@@ -6,6 +6,7 @@ import com.aiconnect.llmgateway.repository.*;
 import com.aiconnect.llmgateway.runtime.InferenceRuntimeClient;
 import com.aiconnect.llmgateway.runtime.RuntimeResult;
 import com.aiconnect.llmgateway.runtime.RuntimeUnavailableException;
+import com.aiconnect.llmgateway.security.ExternalUrlSafetyValidator;
 import com.aiconnect.llmgateway.service.SecretCipher;
 import com.aiconnect.llmgateway.team.Team;
 import com.aiconnect.llmgateway.team.TeamRepository;
@@ -16,7 +17,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
-import java.net.URI;
 import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -36,6 +36,8 @@ public class ControlPlaneService {
     private final SecretCipher secretCipher;
     private final InferenceRuntimeClient runtimeClient;
     private final LmStudioModelDiscovery modelDiscovery;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ExternalUrlSafetyValidator urlSafetyValidator;
 
     public ControlPlaneService(OrganizationRepository organizations, ProjectRepository projects, InferenceNodeRepository nodes,
                                RuntimeEndpointRepository endpoints, ModelDeploymentRepository deployments,
@@ -383,20 +385,8 @@ public class ControlPlaneService {
     private BigDecimal zeroIfNull(BigDecimal value) { return value == null ? BigDecimal.ZERO : value; }
 
     private String normalizedBaseUrl(String rawValue) {
-        String value = rawValue == null ? "" : rawValue.trim();
-        while (value.endsWith("/")) value = value.substring(0, value.length() - 1);
-        try {
-            URI uri = URI.create(value);
-            String scheme = uri.getScheme();
-            if (scheme == null || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))
-                    || uri.getHost() == null || uri.getUserInfo() != null || uri.getQuery() != null || uri.getFragment() != null) {
-                throw new IllegalArgumentException();
-            }
-            return value;
-        } catch (IllegalArgumentException exception) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_RUNTIME_BASE_URL",
-                    "The runtime Base URL must be an absolute HTTP(S) URL without credentials, query, or fragment.");
-        }
+        ExternalUrlSafetyValidator validator = urlSafetyValidator != null ? urlSafetyValidator : new ExternalUrlSafetyValidator(false);
+        return validator.validateAndNormalizeRuntimeBaseUrl(rawValue);
     }
 
     public record ProbeResult(boolean reachable, int httpStatus, List<String> modelIds, String errorMessage,
