@@ -269,26 +269,29 @@ onMounted(() => { void loadProjects(); void loadConnections() })
 
     <template v-if="selected">
       <div class="developer-summary-grid">
-        <article class="surface-card simple-card">
-          <span class="card-kicker">AVAILABLE MODELS</span><h2>사용 가능한 모델</h2>
-          <div v-if="selected.services.length" class="model-chip-list">
-            <span v-for="service in selected.services" :key="service.serviceKey" class="model-chip"><b>{{ service.serviceKey }}</b><small>{{ service.displayName }}</small></span>
-          </div>
-          <p v-else>이 프로젝트에 연결된 모델이 없습니다. 관리자에게 모델 권한을 요청하세요.</p>
-        </article>
+        <div class="developer-left-stack">
+          <article class="surface-card simple-card">
+            <span class="card-kicker">AVAILABLE MODELS</span><h2>사용 가능한 모델</h2>
+            <div v-if="selected.services.length" class="model-chip-list">
+              <span v-for="service in selected.services" :key="service.serviceKey" class="model-chip"><b>{{ service.serviceKey }}</b><small>{{ service.displayName }}</small></span>
+            </div>
+            <p v-else>이 프로젝트에 연결된 모델이 없습니다. 관리자에게 모델 권한을 요청하세요.</p>
+          </article>
+
+          <article class="surface-card external-access-card">
+            <header class="card-header"><div><span class="card-kicker">EXTERNAL AI ACCESS</span><h2>외부 AI 사용 권한</h2></div></header>
+            <p class="external-policy-copy">기본값은 외부 전송 금지입니다. 필요할 때 사용 요청을 보내고, 관리자가 승인한 수동 사용 또는 자동 Failover만 동작합니다.</p>
+            <div v-if="externalAccess.length" class="external-access-list"><div v-for="provider in externalAccess" :key="provider.providerId"><span class="status-chip tiny" :class="provider.status === 'APPROVED' ? 'healthy' : 'unknown'">{{ provider.status }}</span><span><b>{{ provider.providerName }}</b><small>{{ provider.providerType }} · 수동 {{ provider.manualAllowed ? 'ON' : 'OFF' }} · 자동 Failover {{ provider.autoFailoverEnabled ? 'ON' : 'OFF' }}<template v-if="provider.monthlyCostLimit != null && provider.monthlyCostCurrency"> · 월 한도 {{ formatSpend(provider.monthlyCostLimit, provider.monthlyCostCurrency) }}</template><template v-else-if="provider.monthlyCostLimit != null"> · 통화 미설정 (차단)</template></small></span><button v-if="provider.status !== 'APPROVED'" class="secondary-button" @click="openExternalRequest(provider)">{{ provider.status === 'REQUESTED' ? '요청 수정' : '사용 요청' }}</button><small v-else>{{ provider.expiresAt ? formatDate(provider.expiresAt) + '까지' : '만료 없음' }}</small></div></div>
+            <div v-else class="empty-state compact"><span>◇</span><p>관리자가 등록한 외부 AI Provider가 없습니다.</p></div>
+          </article>
+        </div>
+
         <article class="surface-card simple-card">
           <span class="card-kicker">CONNECT</span><h2>연결 정보</h2>
-          <p>발급 후에는 접속 위치에 맞는 Base URL과 논리 모델명을 복사해 OpenAI SDK에 사용하세요.</p>
-          <IssuedConnectionGuide :endpoints="connections" :models="[]" :connection-error="connectionError" hide-models />
+          <p>접속 위치에 맞는 Base URL과 논리 모델명을 복사해 OpenAI SDK에 사용하세요.</p>
+          <IssuedConnectionGuide :endpoints="connections" :models="[]" :connection-error="connectionError" hide-models embedded />
         </article>
       </div>
-
-      <article class="surface-card external-access-card">
-        <header class="card-header"><div><span class="card-kicker">EXTERNAL AI ACCESS</span><h2>외부 AI 사용 권한</h2></div></header>
-        <p class="external-policy-copy">기본값은 외부 전송 금지입니다. 필요할 때 사용 요청을 보내고, 관리자가 승인한 수동 사용 또는 자동 Failover만 동작합니다.</p>
-        <div v-if="externalAccess.length" class="external-access-list"><div v-for="provider in externalAccess" :key="provider.providerId"><span class="status-chip tiny" :class="provider.status === 'APPROVED' ? 'healthy' : 'unknown'">{{ provider.status }}</span><span><b>{{ provider.providerName }}</b><small>{{ provider.providerType }} · 수동 {{ provider.manualAllowed ? 'ON' : 'OFF' }} · 자동 Failover {{ provider.autoFailoverEnabled ? 'ON' : 'OFF' }}<template v-if="provider.monthlyCostLimit != null && provider.monthlyCostCurrency"> · 월 한도 {{ formatSpend(provider.monthlyCostLimit, provider.monthlyCostCurrency) }}</template><template v-else-if="provider.monthlyCostLimit != null"> · 통화 미설정 (차단)</template></small></span><button v-if="provider.status !== 'APPROVED'" class="secondary-button" @click="openExternalRequest(provider)">{{ provider.status === 'REQUESTED' ? '요청 수정' : '사용 요청' }}</button><small v-else>{{ provider.expiresAt ? formatDate(provider.expiresAt) + '까지' : '만료 없음' }}</small></div></div>
-        <div v-else class="empty-state compact"><span>◇</span><p>관리자가 등록한 외부 AI Provider가 없습니다.</p></div>
-      </article>
 
       <article class="surface-card">
         <header class="card-header">
@@ -369,14 +372,15 @@ onMounted(() => { void loadProjects(); void loadConnections() })
 </template>
 
 <style scoped>
-.developer-summary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-.simple-card { min-height: 184px; padding: 22px; }.simple-card h2 { margin: 7px 0 10px; font-size: 18px; }.simple-card p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
-.model-chip-list { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 16px; }.model-chip { min-width: 132px; padding: 10px 12px; display: grid; gap: 4px; border: 1px solid var(--accent-border); border-radius: 10px; background: var(--accent-dim); }.model-chip b { color: var(--accent-strong); font-size: 12px; }.model-chip small { color: var(--text-soft); font-size: 10px; }
+.developer-summary-grid { display: grid; grid-template-columns: minmax(280px, 0.92fr) minmax(0, 1.38fr); gap: 16px; align-items: start; }
+.developer-left-stack { display: grid; gap: 14px; min-width: 0; }
+.simple-card { min-height: 0; padding: 18px 20px; }.simple-card h2 { margin: 6px 0 8px; font-size: 17px; }.simple-card p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.65; }
+.model-chip-list { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 12px; }.model-chip { min-width: 126px; padding: 10px 12px; display: grid; gap: 4px; border: 1px solid var(--accent-border); border-radius: 10px; background: var(--accent-dim); }.model-chip b { color: var(--accent-strong); font-size: 12px; }.model-chip small { color: var(--text-soft); font-size: 10px; }
 .quick-endpoints { margin-top: 12px; display: grid; gap: 6px; }.quick-endpoints code { padding: 8px; overflow-x: auto; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); color: var(--accent-strong); font-size: 10px; }.configuration-warning { display: block; margin-top: 14px; color: var(--warning); font-size: 10px; line-height: 1.55; }
 .connection-reveal { display: grid; gap: 12px; }.connection-value { padding: 14px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 9px; border: 1px solid var(--accent-border); border-radius: 12px; background: var(--accent-dim); }.connection-value.unconfigured { border-color: color-mix(in srgb, var(--warning) 35%, transparent); background: var(--warning-dim); }.connection-value > span { grid-column: 1 / -1; color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .14em; }.connection-value > code, .issued-model-list code { min-width: 0; padding: 10px; overflow-x: auto; border-radius: 8px; background: var(--surface); color: var(--accent-strong); font-size: 10px; }.connection-value > small { grid-column: 1 / -1; color: var(--muted); font-size: 10px; line-height: 1.5; }.issued-model-list { grid-column: 1 / -1; display: grid; gap: 7px; }.issued-model-list > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 9px; }
 .revocation-note { padding: 16px; display: grid; gap: 8px; border: 1px solid color-mix(in srgb, var(--danger) 38%, transparent); border-radius: 12px; background: var(--danger-dim); }.revocation-note span { color: var(--danger); font-size: 9px; font-weight: 800; letter-spacing: .12em; }.revocation-note strong { font-size: 14px; }.revocation-note code { padding: 8px; overflow: auto; border-radius: 7px; background: var(--surface); color: var(--text-soft); font-size: 10px; }.revocation-note p { margin: 2px 0 0; color: var(--text-soft); font-size: 11px; line-height: 1.6; }
-.external-access-card { overflow: hidden; }.external-policy-copy { margin: 0; padding: 16px 22px; color: var(--text-soft); font-size: 11px; line-height: 1.7; border-bottom: 1px solid var(--border); }.external-access-list { display: grid; }.external-access-list > div { padding: 13px 20px; display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 11px; align-items: center; border-bottom: 1px solid var(--border); }.external-access-list > div:last-child { border-bottom: 0; }.external-access-list > div > span:nth-child(2) { display: grid; gap: 4px; }.external-access-list small { color: var(--muted); font-size: 9px; }
-@media (max-width: 760px) { .developer-summary-grid { grid-template-columns: 1fr; }.simple-card { min-height: 0; } }
+.external-access-card { overflow: hidden; }.external-access-card .card-header { min-height: 0; padding: 16px 20px; }.external-policy-copy { margin: 0; padding: 12px 20px; color: var(--text-soft); font-size: 11px; line-height: 1.6; border-bottom: 1px solid var(--border); }.external-access-list { display: grid; }.external-access-list > div { padding: 12px 20px; display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 11px; align-items: center; border-bottom: 1px solid var(--border); }.external-access-list > div:last-child { border-bottom: 0; }.external-access-list > div > span:nth-child(2) { display: grid; gap: 4px; }.external-access-list small { color: var(--muted); font-size: 9px; }
+@media (max-width: 960px) { .developer-summary-grid { grid-template-columns: 1fr; } }
 .project-chip-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .delegation-notice { padding: 16px 20px; display: grid; gap: 6px; border-color: color-mix(in srgb, var(--warning) 42%, var(--border)); background: var(--warning-dim); }
 .delegation-notice strong { font-size: 13px; }

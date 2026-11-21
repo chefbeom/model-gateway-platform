@@ -379,13 +379,16 @@ watch(() => [props.organizationId, props.auth.accessToken], () => { void loadPro
 
         <div class="playground-form">
           <label class="field">{{ targetMode === 'gateway' ? '브라우저 테스트 요청 주소' : '직접 호출 요청 주소' }} <small>{{ targetMode === 'gateway' ? '기본값은 현재 화면과 같은 출처의 테스트 경로이며 SDK 공지 주소가 아닙니다.' : selectedTarget.label + ' 요청 주소' }} · /v1 자동 보정</small><input v-model.trim="baseUrl" placeholder="https://example.com/v1" /></label>
-          <div v-if="targetMode === 'gateway'" class="temporary-key-panel">
-            <label class="field">설정된 SDK Gateway 주소 선택 <select v-model="selectedConnection"><option value="INTERNAL">내부 Gateway</option><option value="EXTERNAL">외부 Gateway · HTTPS</option></select></label>
-            <p v-if="connectionError" class="field-error" role="status">Gateway 주소 조회에 실패했습니다.</p>
-            <template v-else-if="selectedConnectionUrl"><code>{{ selectedConnectionUrl }}</code> <button type="button" class="secondary-button" @click="copyConnection">선택한 SDK 주소 복사</button></template>
-            <p v-else class="field-hint">선택한 주소가 설정되지 않았습니다. 관리자에게 문의하세요.</p>
-            <p class="field-hint">SDK용 주소는 브라우저 테스트 대상에 자동 적용되지 않습니다. 네트워크 허용과 브라우저 CORS는 별도로 확인하세요.</p>
-          </div>
+          <details v-if="targetMode === 'gateway'" class="collapsible-subform sdk-address-disclosure">
+            <summary>설정된 SDK Gateway 주소 확인 · 복사</summary>
+            <div class="collapsible-subform-body sdk-disclosure-body">
+              <label class="field">설정된 SDK Gateway 주소 선택 <select v-model="selectedConnection"><option value="INTERNAL">내부 Gateway</option><option value="EXTERNAL">외부 Gateway · HTTPS</option></select></label>
+              <p v-if="connectionError" class="field-error" role="status">Gateway 주소 조회에 실패했습니다.</p>
+              <template v-else-if="selectedConnectionUrl"><code>{{ selectedConnectionUrl }}</code> <button type="button" class="secondary-button" @click="copyConnection">선택한 SDK 주소 복사</button></template>
+              <p v-else class="field-hint">선택한 주소가 설정되지 않았습니다. 관리자에게 문의하세요.</p>
+              <p class="field-hint">SDK용 주소는 브라우저 테스트 대상에 자동 적용되지 않습니다. 네트워크 허용과 브라우저 CORS는 별도로 확인하세요.</p>
+            </div>
+          </details>
 
           <div class="panel-heading"><span>인증 키 선택</span><small>원문은 현재 브라우저 메모리에만 보관됩니다.</small></div>
           <div class="key-mode-grid">
@@ -512,6 +515,7 @@ watch(() => [props.organizationId, props.auth.accessToken], () => { void loadPro
 .key-mode-grid strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .key-mode-grid small { color: var(--muted); font-size: 9px; line-height: 1.45; }
 .temporary-key-panel, .manual-key-panel { padding: 14px; display: grid; gap: 13px; border: 1px solid var(--accent-border); border-radius: 12px; background: var(--accent-dim); }
+.sdk-disclosure-body code { padding: 8px 10px; border-radius: 7px; background: var(--surface); color: var(--accent-strong); font-size: 11px; overflow-wrap: anywhere; }
 .manual-key-panel { border-color: var(--border); background: var(--surface-2); }
 .form-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
 .action-field { min-width: 0; padding: 10px 11px; display: grid; gap: 4px; align-content: center; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2); }

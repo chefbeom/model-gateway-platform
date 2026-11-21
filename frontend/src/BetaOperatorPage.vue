@@ -222,55 +222,61 @@ onMounted(() => {
         </div>
       </article>
 
-      <article class="surface-card beta-card">
-        <header class="beta-section-head">
-          <span class="card-kicker">ONE-TIME INVITATION</span>
-          <h2>초대 발급</h2>
+      <details class="surface-card beta-card collapsible-panel beta-invite-panel" :open="Boolean(token)">
+        <summary class="card-header beta-summary">
+          <div>
+            <span class="card-kicker">ONE-TIME INVITATION</span>
+            <h2>초대 발급</h2>
+          </div>
+        </summary>
+        <div class="collapsible-body">
           <p class="beta-note">이메일 주소 확인은 자동 수행하지 않습니다. 1회용 초대 코드는 신뢰할 수 있는 별도 경로로 전달하세요.</p>
-        </header>
-        <div class="beta-form-grid">
-          <label class="field">초대 이메일<input v-model.trim="email" type="email" placeholder="tester@example.com" /></label>
-          <label class="field">초대 만료 시각<input v-model="expires" type="datetime-local" /></label>
-        </div>
-        <button type="button" class="primary-button" :disabled="busy || !email || !expires" @click="invite">1회용 초대 발급</button>
+          <div class="beta-form-grid">
+            <label class="field">초대 이메일<input v-model.trim="email" type="email" placeholder="tester@example.com" /></label>
+            <label class="field">초대 만료 시각<input v-model="expires" type="datetime-local" /></label>
+          </div>
+          <button type="button" class="primary-button" :disabled="busy || !email || !expires" @click="invite">1회용 초대 발급</button>
 
-        <div v-if="token" role="status" class="secret-reveal">
-          <span>초대 코드 (한 번만 표시)</span>
-          <code>{{ token }}</code>
-          <div class="actions">
-            <button type="button" class="secondary-button" @click="copyInviteToken">복사</button>
-            <button type="button" class="secondary-button" @click="token = ''">닫기</button>
+          <div v-if="token" role="status" class="secret-reveal">
+            <span>초대 코드 (한 번만 표시)</span>
+            <code>{{ token }}</code>
+            <div class="actions">
+              <button type="button" class="secondary-button" @click="copyInviteToken">복사</button>
+              <button type="button" class="secondary-button" @click="token = ''">닫기</button>
+            </div>
           </div>
         </div>
-      </article>
+      </details>
 
-      <article class="surface-card beta-card">
-        <header class="beta-section-head">
-          <span class="card-kicker">INVITATION HISTORY</span>
-          <h2>초대 이력</h2>
-        </header>
-        <p v-if="!invitations.length" class="beta-note">발급된 초대가 없습니다.</p>
-        <ul v-else class="beta-list">
-          <li v-for="i in invitations" :key="i.id">
-            <span>{{ i.email }} · {{ i.status }} · {{ formatDateTime(i.expiresAt) }}</span>
-            <button v-if="i.status === 'PENDING'" type="button" class="secondary-button danger-text" :disabled="busy" @click="revoke(i.id)">초대 회수</button>
-          </li>
-        </ul>
-      </article>
+      <div class="beta-two-col">
+        <article class="surface-card beta-card">
+          <header class="beta-section-head">
+            <span class="card-kicker">INVITATION HISTORY</span>
+            <h2>초대 이력</h2>
+          </header>
+          <p v-if="!invitations.length" class="beta-note">발급된 초대가 없습니다.</p>
+          <ul v-else class="beta-list">
+            <li v-for="i in invitations" :key="i.id">
+              <span>{{ i.email }} · {{ i.status }} · {{ formatDateTime(i.expiresAt) }}</span>
+              <button v-if="i.status === 'PENDING'" type="button" class="secondary-button danger-text" :disabled="busy" @click="revoke(i.id)">초대 회수</button>
+            </li>
+          </ul>
+        </article>
 
-      <article class="surface-card beta-card">
-        <header class="beta-section-head">
-          <span class="card-kicker">BETA MEMBERS</span>
-          <h2>초대 사용자</h2>
-        </header>
-        <p v-if="!members.length" class="beta-note">등록된 사용자가 없습니다.</p>
-        <ul v-else class="beta-list">
-          <li v-for="m in members" :key="m.id">
-            <span>{{ m.email }} · {{ m.active ? '활성' : '중지' }}</span>
-            <button v-if="m.active" type="button" class="secondary-button danger-text" :disabled="busy" @click="suspend(m.id)">정지 (키 모두 거부)</button>
-          </li>
-        </ul>
-      </article>
+        <article class="surface-card beta-card">
+          <header class="beta-section-head">
+            <span class="card-kicker">BETA MEMBERS</span>
+            <h2>초대 사용자</h2>
+          </header>
+          <p v-if="!members.length" class="beta-note">등록된 사용자가 없습니다.</p>
+          <ul v-else class="beta-list">
+            <li v-for="m in members" :key="m.id">
+              <span>{{ m.email }} · {{ m.active ? '활성' : '중지' }}</span>
+              <button v-if="m.active" type="button" class="secondary-button danger-text" :disabled="busy" @click="suspend(m.id)">정지 (키 모두 거부)</button>
+            </li>
+          </ul>
+        </article>
+      </div>
     </template>
   </section>
 </template>
@@ -289,8 +295,15 @@ onMounted(() => {
 .actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .beta-card > button { justify-self: start; }
 .beta-admin-body > button { justify-self: start; }
+.beta-invite-panel { padding: 0; }
+.beta-summary { min-height: 0; padding: 16px 22px; }
+.beta-invite-panel .collapsible-body > button { justify-self: start; }
+.beta-two-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
 .beta-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
 .beta-list li { padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12px; }
+@media (max-width: 860px) {
+  .beta-two-col { grid-template-columns: 1fr; }
+}
 @media (max-width: 720px) {
   .beta-toolbar, .beta-assign-row { grid-template-columns: 1fr; }
 }

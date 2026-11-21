@@ -238,7 +238,12 @@ onMounted(() => { void load() })
             <label><input v-model="editor.detectMedia" type="checkbox" /><span><b>미디어</b><small>이미지·파일 URL 또는 data URI</small></span></label>
           </div>
         </section>
-        <label class="field"><span>사용자 정의 정규식 (JSON 배열)</span><textarea v-model="editor.customPatternsJson" rows="3" placeholder='["customer-[0-9]+", "internal-only"]'></textarea><small>매칭된 원문은 저장하지 않고 CONFIDENTIAL 분류만 기록합니다.</small></label>
+        <details class="collapsible-subform custom-pattern-disclosure" :open="Boolean(editor.customPatternsJson && editor.customPatternsJson.trim() && editor.customPatternsJson.trim() !== '[]')">
+          <summary>고급 · 사용자 정의 정규식 패턴 (선택)</summary>
+          <div class="collapsible-subform-body">
+            <label class="field"><span>사용자 정의 정규식 (JSON 배열)</span><textarea v-model="editor.customPatternsJson" rows="3" placeholder='["customer-[0-9]+", "internal-only"]'></textarea><small>매칭된 원문은 저장하지 않고 CONFIDENTIAL 분류만 기록합니다.</small></label>
+          </div>
+        </details>
         <footer class="editor-footer"><span>현재 범위: {{ policyTitle(editorScope) }}</span><button type="button" class="primary-button" :disabled="busy || (editorScope === 'PROJECT' && !selectedProjectId) || (editorScope === 'SERVICE' && !selectedServiceId) || (editorScope === 'API_KEY' && !selectedKeyId)" @click="save">정책 저장</button></footer>
       </article>
     </div>

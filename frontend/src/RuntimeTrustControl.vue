@@ -142,35 +142,40 @@ async function revokeApproval() {
     <p v-if="trust?.classification === 'EXTERNAL_NO_RETENTION' && (trust.vendorName || trust.processingLocation)" class="trust-metadata-summary">
       벤더 {{ trust.vendorName || '-' }} · 처리 위치 {{ trust.processingLocation || '-' }} · 보존 정책 {{ trust.retentionPolicy || '-' }} · 승인 범위 {{ trust.approvalScope || '-' }}
     </p>
-    <div class="trust-fields">
-      <label class="field">처리 위치<select v-model="classification"><option value="INTERNAL">사내 GPU</option><option value="EXTERNAL_NO_RETENTION">외부 GPU · 비보존 조건 확인</option><option value="EXTERNAL_UNVERIFIED">외부 GPU · 미확인</option></select></label>
-      <label class="field">검토 근거<input v-model.trim="evidence" maxlength="1000" placeholder="계약 또는 검토 기록" /></label>
-      <label class="field">승인 만료일{{ isExternalNoRetention ? ' (필수)' : ' (선택)' }}<input v-model="trustExpiry" type="datetime-local" /></label>
-      <button type="button" class="secondary-button" :disabled="!canSaveTrust" @click="saveTrust">분류 저장</button>
-      <button type="button" class="secondary-button danger-text" :disabled="busy || !trust || !trust.valid || trust.classification === 'UNCLASSIFIED'" @click="revokeTrust">신뢰 분류 철회</button>
-    </div>
-    <div v-if="isExternalNoRetention" class="trust-fields trust-metadata-fields">
-      <label class="field">외부 벤더명 (필수)<input v-model.trim="vendorName" maxlength="120" placeholder="예: CoreWeave / RunPod" /></label>
-      <label class="field">데이터 처리 위치 / 리전 (필수)<input v-model.trim="processingLocation" maxlength="120" placeholder="예: KR / ap-northeast-2" /></label>
-      <label class="field">데이터 보존 정책 (필수)<input v-model.trim="retentionPolicy" maxlength="240" placeholder="예: Zero-retention · 메모리 처리 후 즉시 파기" /></label>
-      <label class="field">승인 범위 (필수)<input v-model.trim="approvalScope" maxlength="240" placeholder="예: 비식별 문서 요약 및 내부 코드 리뷰" /></label>
-    </div>
-    <template v-if="(trust?.classification === 'EXTERNAL_NO_RETENTION' || trust?.classification === 'INTERNAL') && trust.valid">
-      <h4>프로젝트별 GPU 사용 승인</h4>
-      <p>사내 GPU도 프로젝트별 사용 승인이 필요합니다. 외부 GPU는 프로젝트의 외부 전송 제한을 우회할 수 없습니다.</p>
-      <div class="trust-fields">
-        <label class="field">프로젝트<select v-model="projectId"><option value="">프로젝트 선택</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></label>
-        <label class="field">승인 만료일<input v-model="approvalExpiry" type="datetime-local" /></label>
-        <label class="trust-check"><input v-model="manualAllowed" type="checkbox" /> 직접 사용 허용</label>
-        <label v-if="trust.classification === 'EXTERNAL_NO_RETENTION'" class="trust-check"><input v-model="failoverAllowed" type="checkbox" /> 자동 전환 허용</label>
-        <button type="button" class="secondary-button" :disabled="busy || !projectId || !approvalExpiry" @click="saveApproval">프로젝트 승인 저장</button>
-        <button type="button" class="secondary-button" :disabled="busy || !projectId || !approval?.valid" @click="revokeApproval">승인 철회</button>
+    <details class="collapsible-subform trust-disclosure">
+      <summary>보안 분류 · 프로젝트 GPU 승인 설정</summary>
+      <div class="collapsible-subform-body">
+        <div class="trust-fields">
+          <label class="field">처리 위치<select v-model="classification"><option value="INTERNAL">사내 GPU</option><option value="EXTERNAL_NO_RETENTION">외부 GPU · 비보존 조건 확인</option><option value="EXTERNAL_UNVERIFIED">외부 GPU · 미확인</option></select></label>
+          <label class="field">검토 근거<input v-model.trim="evidence" maxlength="1000" placeholder="계약 또는 검토 기록" /></label>
+          <label class="field">승인 만료일{{ isExternalNoRetention ? ' (필수)' : ' (선택)' }}<input v-model="trustExpiry" type="datetime-local" /></label>
+          <button type="button" class="secondary-button" :disabled="!canSaveTrust" @click="saveTrust">분류 저장</button>
+          <button type="button" class="secondary-button danger-text" :disabled="busy || !trust || !trust.valid || trust.classification === 'UNCLASSIFIED'" @click="revokeTrust">신뢰 분류 철회</button>
+        </div>
+        <div v-if="isExternalNoRetention" class="trust-fields trust-metadata-fields">
+          <label class="field">외부 벤더명 (필수)<input v-model.trim="vendorName" maxlength="120" placeholder="예: CoreWeave / RunPod" /></label>
+          <label class="field">데이터 처리 위치 / 리전 (필수)<input v-model.trim="processingLocation" maxlength="120" placeholder="예: KR / ap-northeast-2" /></label>
+          <label class="field">데이터 보존 정책 (필수)<input v-model.trim="retentionPolicy" maxlength="240" placeholder="예: Zero-retention · 메모리 처리 후 즉시 파기" /></label>
+          <label class="field">승인 범위 (필수)<input v-model.trim="approvalScope" maxlength="240" placeholder="예: 비식별 문서 요약 및 내부 코드 리뷰" /></label>
+        </div>
+        <template v-if="(trust?.classification === 'EXTERNAL_NO_RETENTION' || trust?.classification === 'INTERNAL') && trust.valid">
+          <h4>프로젝트별 GPU 사용 승인</h4>
+          <p>사내 GPU도 프로젝트별 사용 승인이 필요합니다. 외부 GPU는 프로젝트의 외부 전송 제한을 우회할 수 없습니다.</p>
+          <div class="trust-fields">
+            <label class="field">프로젝트<select v-model="projectId"><option value="">프로젝트 선택</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></label>
+            <label class="field">승인 만료일<input v-model="approvalExpiry" type="datetime-local" /></label>
+            <label class="trust-check"><input v-model="manualAllowed" type="checkbox" /> 직접 사용 허용</label>
+            <label v-if="trust.classification === 'EXTERNAL_NO_RETENTION'" class="trust-check"><input v-model="failoverAllowed" type="checkbox" /> 자동 전환 허용</label>
+            <button type="button" class="secondary-button" :disabled="busy || !projectId || !approvalExpiry" @click="saveApproval">프로젝트 승인 저장</button>
+            <button type="button" class="secondary-button" :disabled="busy || !projectId || !approval?.valid" @click="revokeApproval">승인 철회</button>
+          </div>
+          <p v-if="approval && projectId">현재 승인: {{ approval.valid ? '유효' : '없음 또는 만료·철회' }}<span v-if="approval.expiresAt"> · 만료 {{ formatDateTime(approval.expiresAt) }}</span></p>
+        </template>
       </div>
-      <p v-if="approval && projectId">현재 승인: {{ approval.valid ? '유효' : '없음 또는 만료·철회' }}<span v-if="approval.expiresAt"> · 만료 {{ formatDateTime(approval.expiresAt) }}</span></p>
-    </template>
+    </details>
     <p role="status">{{ message }}</p>
   </section>
 </template>
 <style scoped>
-.trust-control{padding:22px 24px;border-bottom:1px solid var(--border)}.trust-control h3,.trust-control h4{margin:0 0 8px}.trust-control h4{margin-top:20px}.trust-control p{font-size:12px;line-height:1.6;color:var(--muted);margin:8px 0}.trust-fields{display:flex;align-items:end;gap:12px;flex-wrap:wrap}.trust-metadata-fields{margin-top:12px}.trust-metadata-summary{color:var(--text-soft)!important}.trust-fields .field{min-width:180px;flex:1}.trust-check{display:flex;gap:6px;align-items:center;min-height:40px}.trust-control [role=status]{color:var(--foreground)}
+.trust-control{padding:18px 22px;border-bottom:1px solid var(--border);display:grid;gap:8px}.trust-control h3,.trust-control h4{margin:0}.trust-control h4{margin-top:6px}.trust-control p{font-size:12px;line-height:1.55;color:var(--muted);margin:0}.trust-fields{display:flex;align-items:end;gap:12px;flex-wrap:wrap}.trust-metadata-fields{margin-top:4px}.trust-metadata-summary{color:var(--text-soft)!important}.trust-fields .field{min-width:180px;flex:1}.trust-check{display:flex;gap:6px;align-items:center;min-height:40px}.trust-control [role=status]{color:var(--foreground)}
 </style>

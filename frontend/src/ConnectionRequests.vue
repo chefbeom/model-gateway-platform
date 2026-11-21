@@ -54,16 +54,19 @@ async function decide(item: Entry, approved: boolean) {
   <article class="surface-card connection-requests">
     <header><span class="card-kicker">CONNECTION APPROVAL</span><h2>{{ platformAdmin ? '연결 등록 승인 대기' : 'GPU · 외부 API 연결 신청' }}</h2></header>
     <p>신청 단계에서는 서버에 연결하지 않습니다. Runtime 등록 승인 후에도 보안 분류와 프로젝트별 사용 승인을 별도로 설정해야 합니다.</p>
-    <div v-if="!platformAdmin" class="request-fields">
-      <label class="field">프로젝트<select v-model="projectId"><option value="">프로젝트 선택</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></label>
-      <label class="field">연결 종류<select v-model="form.kind"><option value="RUNTIME">GPU Runtime</option><option value="EXTERNAL_PROVIDER">외부 AI API</option></select></label>
-      <label class="field">이름<input v-model.trim="form.displayName" maxlength="160" /></label>
-      <label class="field">Endpoint URL<input v-model.trim="form.baseUrl" maxlength="500" placeholder="http://100.x.x.x:1234" /></label>
-      <label v-if="form.kind === 'RUNTIME'" class="field">Runtime 종류<select v-model="form.runtimeType"><option value="LM_STUDIO">LM Studio</option><option value="OLLAMA">Ollama</option><option value="LLAMA_CPP">llama.cpp</option><option value="OPENAI_COMPATIBLE">OpenAI 호환</option></select></label>
-      <label class="field">API 키 / 토큰 {{ form.kind === 'EXTERNAL_PROVIDER' ? '(필수)' : '(선택)' }}<input v-model="form.secret" type="password" autocomplete="new-password" maxlength="2000" /></label>
-      <label class="field">사용 목적<input v-model.trim="form.reason" maxlength="1000" /></label>
-      <button type="button" class="primary-button" :disabled="busy || !projectId || !form.displayName || !form.baseUrl || !form.reason || (form.kind === 'EXTERNAL_PROVIDER' && !form.secret)" @click="submit">등록 신청</button>
-    </div>
+    <details v-if="!platformAdmin" class="collapsible-subform connection-request-form">
+      <summary>+ 새 GPU · 외부 API 연결 신청 작성</summary>
+      <div class="collapsible-subform-body request-fields">
+        <label class="field">프로젝트<select v-model="projectId"><option value="">프로젝트 선택</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></label>
+        <label class="field">연결 종류<select v-model="form.kind"><option value="RUNTIME">GPU Runtime</option><option value="EXTERNAL_PROVIDER">외부 AI API</option></select></label>
+        <label class="field">이름<input v-model.trim="form.displayName" maxlength="160" /></label>
+        <label class="field">Endpoint URL<input v-model.trim="form.baseUrl" maxlength="500" placeholder="http://100.x.x.x:1234" /></label>
+        <label v-if="form.kind === 'RUNTIME'" class="field">Runtime 종류<select v-model="form.runtimeType"><option value="LM_STUDIO">LM Studio</option><option value="OLLAMA">Ollama</option><option value="LLAMA_CPP">llama.cpp</option><option value="OPENAI_COMPATIBLE">OpenAI 호환</option></select></label>
+        <label class="field">API 키 / 토큰 {{ form.kind === 'EXTERNAL_PROVIDER' ? '(필수)' : '(선택)' }}<input v-model="form.secret" type="password" autocomplete="new-password" maxlength="2000" /></label>
+        <label class="field">사용 목적<input v-model.trim="form.reason" maxlength="1000" /></label>
+        <button type="button" class="primary-button" :disabled="busy || !projectId || !form.displayName || !form.baseUrl || !form.reason || (form.kind === 'EXTERNAL_PROVIDER' && !form.secret)" @click="submit">등록 신청</button>
+      </div>
+    </details>
     <div v-if="entries.length" class="request-list">
       <div v-for="item in entries" :key="item.id" class="request-item">
         <div><strong>{{ item.displayName }} · {{ item.kind }}</strong><p>{{ item.baseUrl }} · {{ item.status }} · {{ formatDateTime(item.createdAt) }}</p><p>프로젝트 {{ item.projectId }} · 목적 {{ item.reason }}</p></div>
@@ -74,5 +77,5 @@ async function decide(item: Entry, approved: boolean) {
   </article>
 </template>
 <style scoped>
-.connection-requests{padding:24px}.connection-requests h2{margin:8px 0}.connection-requests p{font-size:12px;line-height:1.6;color:var(--muted);margin:8px 0}.request-fields{display:flex;gap:12px;flex-wrap:wrap;align-items:end}.request-fields .field{min-width:190px;flex:1}.request-list{margin-top:18px}.request-item{padding:14px 0;border-top:1px solid var(--border);display:flex;gap:12px;flex-wrap:wrap;justify-content:space-between}.request-actions{display:flex;gap:8px;align-items:end;flex-wrap:wrap}.connection-requests [role=status]{color:var(--foreground)}
+.connection-requests{padding:20px 22px;display:grid;gap:10px}.connection-requests h2{margin:6px 0 0}.connection-requests p{font-size:12px;line-height:1.55;color:var(--muted);margin:0}.request-fields{display:flex;gap:12px;flex-wrap:wrap;align-items:end;flex-direction:row}.request-fields .field{min-width:190px;flex:1}.request-list{margin-top:6px}.request-item{padding:14px 0;border-top:1px solid var(--border);display:flex;gap:12px;flex-wrap:wrap;justify-content:space-between}.request-actions{display:flex;gap:8px;align-items:end;flex-wrap:wrap}.connection-requests [role=status]{color:var(--foreground)}
 </style>

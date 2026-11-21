@@ -269,7 +269,7 @@ kbd { padding: 3px 6px; border: 1px solid var(--border-strong); border-radius: 5
 .skeleton { background: linear-gradient(90deg, var(--surface) 25%, var(--surface-2) 50%, var(--surface) 75%); background-size: 200% 100%; animation: shimmer 1.2s infinite; }
 .metric-skeleton { min-height: 148px; border-radius: 17px; }
 @keyframes shimmer { to { background-position: -200% 0; } }
-.dashboard-grid { display: grid; grid-template-columns: 1.5fr 1fr; gap: 14px; }
+.dashboard-grid { display: grid; grid-template-columns: 1.5fr 1fr; gap: 14px; align-items: start; }
 .span-two { grid-row: span 2; }
 .runtime-strip { padding: 9px; display: grid; }
 .runtime-node { width: 100%; padding: 14px 12px; display: grid; grid-template-columns: 11px 1fr auto; align-items: center; gap: 12px; border: 0; border-bottom: 1px solid var(--border); background: transparent; text-align: left; }
@@ -302,15 +302,16 @@ kbd { padding: 3px 6px; border: 1px solid var(--border-strong); border-radius: 5
 .quick-grid small { color: var(--muted); font-size: 8px; }
 .empty-state { min-height: 220px; padding: 30px; display: grid; place-content: center; justify-items: center; text-align: center; color: var(--muted); }
 .empty-state.compact { min-height: 145px; }
-.empty-state.centered { min-height: 430px; }
+.empty-state.centered { min-height: 260px; }
 .empty-state > span { width: 42px; height: 42px; margin-bottom: 12px; display: grid; place-content: center; border: 1px solid var(--border); border-radius: 13px; background: var(--surface-2); color: var(--accent-strong); font-size: 18px; }
 .empty-state h3 { margin-bottom: 6px; color: var(--text-soft); font-size: 14px; }
 .empty-state p { margin-bottom: 12px; font-size: 10px; }
 .success-empty > span { color: var(--accent-strong); }
 
 /* Lists, detail pages, routing */
-.split-layout { display: grid; grid-template-columns: minmax(270px, .62fr) minmax(0, 1.6fr); gap: 14px; align-items: start; }
-.list-panel, .detail-panel { min-height: 580px; overflow: hidden; }
+.split-layout { display: grid; grid-template-columns: minmax(250px, 310px) minmax(0, 1fr); gap: 14px; align-items: start; }
+.list-panel { min-height: 0; overflow: hidden; }
+.detail-panel { min-height: 360px; overflow: hidden; }
 .entity-list { padding: 8px; display: grid; gap: 3px; }
 .entity-list > button { width: 100%; min-height: 60px; padding: 11px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 11px; border: 1px solid transparent; border-radius: 11px; background: transparent; color: var(--muted); text-align: left; }
 .entity-list > button:hover { background: var(--surface-2); }
@@ -476,6 +477,28 @@ kbd { padding: 3px 6px; border: 1px solid var(--border-strong); border-radius: 5
 .toggle-field small { color: var(--muted); font-size: 8px; font-weight: 500; }
 .toggle-field input { width: 17px; min-height: auto; accent-color: var(--accent-strong); }
 
+/* Reusable disclosure panels for optional or infrequent input forms */
+.collapsible-panel { overflow: hidden; }
+.collapsible-panel > summary { list-style: none; cursor: pointer; user-select: none; border-bottom: 0; transition: background .15s ease; }
+.collapsible-panel > summary::-webkit-details-marker { display: none; }
+.collapsible-panel > summary:hover { background: var(--surface-2); }
+.collapsible-panel > summary:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: -2px; }
+.collapsible-panel > summary::after { content: '펼치기 ⌄'; flex-shrink: 0; margin-left: 10px; padding: 5px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text-soft); font-size: 10px; font-weight: 700; white-space: nowrap; }
+.collapsible-panel[open] > summary { border-bottom: 1px solid var(--border); }
+.collapsible-panel[open] > summary::after { content: '접기 ⌃'; border-color: var(--accent-border); background: var(--accent-dim); color: var(--accent-strong); }
+.collapsible-summary-meta { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.collapsible-body { padding: 16px 20px; display: grid; gap: 14px; }
+
+.collapsible-subform { border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); overflow: hidden; }
+.collapsible-subform > summary { min-height: 44px; padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; list-style: none; color: var(--text-soft); font-size: 11px; font-weight: 700; }
+.collapsible-subform > summary::-webkit-details-marker { display: none; }
+.collapsible-subform > summary:hover { background: var(--surface); color: var(--text); }
+.collapsible-subform > summary:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: -2px; }
+.collapsible-subform > summary::after { content: '펼치기 ⌄'; flex-shrink: 0; color: var(--accent-strong); font-size: 10px; font-weight: 700; white-space: nowrap; }
+.collapsible-subform[open] > summary { border-bottom: 1px solid var(--border); color: var(--text); }
+.collapsible-subform[open] > summary::after { content: '접기 ⌃'; }
+.collapsible-subform-body { padding: 14px; display: grid; gap: 12px; }
+
 .sidebar-scrim { display: none; }
 
 @media (max-width: 1280px) {
@@ -501,7 +524,7 @@ kbd { padding: 3px 6px; border: 1px solid var(--border-strong); border-radius: 5
   .feature-search { width: 180px; }
   .split-layout { grid-template-columns: 1fr; }
   .list-panel { min-height: auto; }
-  .detail-panel { min-height: 480px; }
+  .detail-panel { min-height: 280px; }
   .entity-list { grid-template-columns: repeat(2, 1fr); }
   .entity-list > button { min-width: 0; }
 }

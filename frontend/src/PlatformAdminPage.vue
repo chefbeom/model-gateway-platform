@@ -412,7 +412,6 @@ onMounted(() => void load())
 
 <template>
   <section class="page-stack platform-admin-page">
-    <ConnectionRequests :auth="auth" organization-id="" :platform-admin="true" />
     <div class="page-hero">
       <div>
         <p class="eyebrow">PLATFORM ADMINISTRATION</p>
@@ -445,82 +444,87 @@ onMounted(() => void load())
         <span class="count-badge">{{ accountInvitations.length }}</span>
       </header>
       <div class="invite-issuer-body">
-        <div class="invite-form-grid">
-          <label class="field">
-            부여 계층
-            <select v-model="inviteForm.targetTier" @change="onTargetTierChange">
-              <option value="PROJECT_DIRECTOR">프로젝트 총괄 (PROJECT_DIRECTOR)</option>
-              <option value="GENERAL_USER">기본 계정 (GENERAL_USER)</option>
-            </select>
-          </label>
-          <label class="field">
-            대상 조직
-            <select v-model="inviteForm.organizationId" @change="onInviteOrgChange">
-              <option value="">조직 선택</option>
-              <option v-for="org in organizations" :key="org.id" :value="org.id">{{ org.name }}</option>
-            </select>
-          </label>
-          <label class="field">
-            관리할 프로젝트
-            <select v-model="inviteForm.projectId">
-              <option value="">프로젝트 선택</option>
-              <option v-for="project in inviteProjects" :key="project.id" :value="project.id">{{ project.name }}</option>
-            </select>
-          </label>
-          <label v-if="!inviteForm.projectId" class="field">
-            소속 팀 (선택)
-            <select v-model="inviteForm.teamId" :disabled="!teamsForInviteOrg.length">
-              <option value="">팀 미지정</option>
-              <option v-for="team in teamsForInviteOrg" :key="team.id" :value="team.id">{{ team.name }}</option>
-            </select>
-          </label>
-          <label v-if="inviteForm.teamId" class="field">
-            팀 역할
-            <select v-model="inviteForm.teamRole">
-              <option value="TEAM_ADMIN">TEAM_ADMIN</option>
-              <option value="PROJECT_OWNER">PROJECT_OWNER</option>
-              <option value="DEVELOPER">DEVELOPER</option>
-              <option value="AUDITOR">AUDITOR</option>
-            </select>
-          </label>
-          <label class="field">
-            지정 이메일 (선택)
-            <input v-model.trim="inviteForm.expectedEmail" type="email" placeholder="director@company.com" />
-          </label>
-          <label v-if="inviteForm.targetTier === 'PROJECT_DIRECTOR'" class="field">
-            베타 서비스 ID (선택)
-            <input v-model.trim="inviteForm.betaServiceId" placeholder="연결할 베타 서비스 UUID" />
-          </label>
-          <label class="field">
-            만료 시간 (시간)
-            <input v-model.number="inviteForm.expiresInHours" type="number" min="1" max="720" />
-          </label>
-          <label v-if="inviteForm.targetTier === 'GENERAL_USER'" class="toggle-field">
-            <span>API 키 발급 권한 위임<small>체크하면 프로젝트에서 직접 키를 발급할 수 있습니다.</small></span>
-            <input v-model="inviteForm.canIssueApiKeys" type="checkbox" />
-          </label>
-        </div>
-        <div class="invite-issuer-actions">
-          <button
-            type="button"
-            class="primary-button"
-            :disabled="busy || !inviteForm.organizationId"
-            @click="issueAccountInvitation"
-          >
-            {{ accountTierLabel(inviteForm.targetTier) }} 초대 코드/링크 발급
-          </button>
-        </div>
+        <details class="collapsible-subform invite-issuer-disclosure" :open="Boolean(issuedInvitation)">
+          <summary>초대 코드/링크 발급 · 기존 관리자 배정 폼</summary>
+          <div class="collapsible-subform-body">
+            <div class="invite-form-grid">
+              <label class="field">
+                부여 계층
+                <select v-model="inviteForm.targetTier" @change="onTargetTierChange">
+                  <option value="PROJECT_DIRECTOR">프로젝트 총괄 (PROJECT_DIRECTOR)</option>
+                  <option value="GENERAL_USER">기본 계정 (GENERAL_USER)</option>
+                </select>
+              </label>
+              <label class="field">
+                대상 조직
+                <select v-model="inviteForm.organizationId" @change="onInviteOrgChange">
+                  <option value="">조직 선택</option>
+                  <option v-for="org in organizations" :key="org.id" :value="org.id">{{ org.name }}</option>
+                </select>
+              </label>
+              <label class="field">
+                관리할 프로젝트
+                <select v-model="inviteForm.projectId">
+                  <option value="">프로젝트 선택</option>
+                  <option v-for="project in inviteProjects" :key="project.id" :value="project.id">{{ project.name }}</option>
+                </select>
+              </label>
+              <label v-if="!inviteForm.projectId" class="field">
+                소속 팀 (선택)
+                <select v-model="inviteForm.teamId" :disabled="!teamsForInviteOrg.length">
+                  <option value="">팀 미지정</option>
+                  <option v-for="team in teamsForInviteOrg" :key="team.id" :value="team.id">{{ team.name }}</option>
+                </select>
+              </label>
+              <label v-if="inviteForm.teamId" class="field">
+                팀 역할
+                <select v-model="inviteForm.teamRole">
+                  <option value="TEAM_ADMIN">TEAM_ADMIN</option>
+                  <option value="PROJECT_OWNER">PROJECT_OWNER</option>
+                  <option value="DEVELOPER">DEVELOPER</option>
+                  <option value="AUDITOR">AUDITOR</option>
+                </select>
+              </label>
+              <label class="field">
+                지정 이메일 (선택)
+                <input v-model.trim="inviteForm.expectedEmail" type="email" placeholder="director@company.com" />
+              </label>
+              <label v-if="inviteForm.targetTier === 'PROJECT_DIRECTOR'" class="field">
+                베타 서비스 ID (선택)
+                <input v-model.trim="inviteForm.betaServiceId" placeholder="연결할 베타 서비스 UUID" />
+              </label>
+              <label class="field">
+                만료 시간 (시간)
+                <input v-model.number="inviteForm.expiresInHours" type="number" min="1" max="720" />
+              </label>
+              <label v-if="inviteForm.targetTier === 'GENERAL_USER'" class="toggle-field">
+                <span>API 키 발급 권한 위임<small>체크하면 프로젝트에서 직접 키를 발급할 수 있습니다.</small></span>
+                <input v-model="inviteForm.canIssueApiKeys" type="checkbox" />
+              </label>
+            </div>
+            <div class="invite-issuer-actions">
+              <button
+                type="button"
+                class="primary-button"
+                :disabled="busy || !inviteForm.organizationId"
+                @click="issueAccountInvitation"
+              >
+                {{ accountTierLabel(inviteForm.targetTier) }} 초대 코드/링크 발급
+              </button>
+            </div>
 
-        <div class="invite-issuer-actions">
-          <label class="field">
-            기존 프로젝트 관리자 배정
-            <select v-model="existingDirectorId">
-              <option value="">기존 관리자 선택</option>
-              <option v-for="user in users.filter(item => userTier(item) === 'PROJECT_DIRECTOR' && item.enabled)" :key="user.id" :value="user.id">{{ user.email }}</option>
-            </select>
-          </label>
-          <button type="button" class="secondary-button" :disabled="busy || !inviteForm.projectId || !existingDirectorId" @click="assignExistingDirector">선택 프로젝트에 배정</button>
-        </div>
+            <div class="invite-issuer-actions">
+              <label class="field">
+                기존 프로젝트 관리자 배정
+                <select v-model="existingDirectorId">
+                  <option value="">기존 관리자 선택</option>
+                  <option v-for="user in users.filter(item => userTier(item) === 'PROJECT_DIRECTOR' && item.enabled)" :key="user.id" :value="user.id">{{ user.email }}</option>
+                </select>
+              </label>
+              <button type="button" class="secondary-button" :disabled="busy || !inviteForm.projectId || !existingDirectorId" @click="assignExistingDirector">선택 프로젝트에 배정</button>
+            </div>
+          </div>
+        </details>
 
         <div v-if="issuedInvitation" role="status" class="secret-reveal invite-reveal-box">
           <span>1회용 초대 코드 및 가입 링크 (한 번만 표시 · 만료 {{ date(issuedInvitation.expiresAt) }})</span>
@@ -638,6 +642,8 @@ onMounted(() => void load())
         </table>
       </div>
     </article>
+
+    <ConnectionRequests :auth="auth" organization-id="" :platform-admin="true" />
 
     <article ref="organizationCard" class="surface-card">
       <header class="card-header"><div><span class="card-kicker">ORGANIZATIONS</span><h2>조직·워크스페이스 관리</h2></div><div class="hero-actions"><span class="count-badge">{{ organizations.length }}</span><button class="primary-button" @click="orgCreateOpen = true">+ 조직</button></div></header>
