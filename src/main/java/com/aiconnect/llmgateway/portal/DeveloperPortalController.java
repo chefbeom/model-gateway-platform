@@ -5,6 +5,8 @@ import com.aiconnect.llmgateway.identity.*;
 import com.aiconnect.llmgateway.repository.*;
 import com.aiconnect.llmgateway.service.*;
 import com.aiconnect.llmgateway.team.TeamAccessService;
+import com.aiconnect.llmgateway.team.TeamMember;
+import com.aiconnect.llmgateway.team.TeamMemberRepository;
 import com.aiconnect.llmgateway.web.ApiException;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -13,19 +15,30 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Max;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
 import java.net.URI;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.HashSet;
 import java.util.UUID;
 
 /** Role-safe API surface used by the developer portal. */
 @RestController
 @RequestMapping("/api/portal")
 public class DeveloperPortalController {
+    private final OrganizationRepository organizations;
     private final OrganizationMemberRepository memberships;
     private final ProjectRepository projects;
+    private final ProjectMembershipRepository projectMemberships;
+    private final TeamMemberRepository teamMembers;
+    private final AppUserRepository users;
     private final ProjectServiceAccessRepository serviceAccess;
     private final LlmServiceRepository services;
     private final ApiKeyRepository apiKeys;
@@ -34,13 +47,19 @@ public class DeveloperPortalController {
     private final String internalBaseUrl;
     private final String externalBaseUrl;
 
-    public DeveloperPortalController(OrganizationMemberRepository memberships, ProjectRepository projects,
+    public DeveloperPortalController(OrganizationRepository organizations, OrganizationMemberRepository memberships,
+                                    ProjectRepository projects, ProjectMembershipRepository projectMemberships,
+                                    TeamMemberRepository teamMembers, AppUserRepository users,
                                     ProjectServiceAccessRepository serviceAccess, LlmServiceRepository services,
                                     ApiKeyRepository apiKeys, ApiKeyService apiKeyService, TeamAccessService access,
                                     @Value("${gateway.internal-base-url:}") String internalBaseUrl,
                                     @Value("${gateway.external-base-url:}") String externalBaseUrl) {
+        this.organizations = organizations;
         this.memberships = memberships;
         this.projects = projects;
+        this.projectMemberships = projectMemberships;
+        this.teamMembers = teamMembers;
+        this.users = users;
         this.serviceAccess = serviceAccess;
         this.services = services;
         this.apiKeys = apiKeys;
@@ -84,6 +103,25 @@ public class DeveloperPortalController {
                         "ACTIVE".equalsIgnoreCase(project.getStatus()) && access.canIssueProjectApiKeys(actor, project.getId()),
                         modelsFor(project)))
                 .toList();
+    }
+
+    @GetMapping("/organizations/{organizationId}/relationship")
+    @Transactional(readOnly = true)
+    public OrganizationRelationshipView relationship(@PathVariable UUID organizationId) {
+        AuthPrincipal actor = actor();
+        requireOrganizationAccess(actor, organizationId);
+        String organizationName = organizations.findById(organizationId).map(Organization::getName).orElse(null);
+        List<RelationshipUserView> topUsers = resolveTopUsers(actor, organizationId);
+        List<RelationshipProjectView> relationshipProjects = projects.findByOrganizationId(organizationId).stream()
+                .filter(project -> access.canViewProject(actor, project.getId()))
+                .map(project -> toRelationshipProject(actor, organizationId, project))
+                .sorted(Comparator
+                        .comparing((RelationshipProjectView p) -> containsCurrentUser(p.managers()) || containsCurrentUser(p.members()))
+                        .reversed()
+                        .thenComparing(Comparator.comparing((RelationshipProjectView p) -> "ACTIVE".equalsIgnoreCase(p.status())).reversed())
+                        .thenComparing(RelationshipProjectView::name, String.CASE_INSENSITIVE_ORDER))
+                .toList();
+        return new OrganizationRelationshipView(organizationId, organizationName, topUsers, relationshipProjects);
     }
 
     @GetMapping("/projects/{projectId}/api-keys")
@@ -196,6 +234,129 @@ public class DeveloperPortalController {
         }
     }
 
+    private List<RelationshipUserView> resolveTopUsers(AuthPrincipal actor, UUID organizationId) {
+        Map<UUID, RelationshipUserView> byUser = new LinkedHashMap<>();
+        UUID actorId = actor.userId();
+        for (AppUser user : users.findAll()) {
+            if (!user.isEnabled()) continue;
+            AccountTier tier = AccountTier.effectiveFor(user);
+            if (user.isPlatformAdmin() || tier == AccountTier.SYSTEM_ADMIN) {
+                boolean isCurrent = actorId != null && actorId.equals(user.getId());
+                byUser.put(user.getId(), new RelationshipUserView(
+                        user.getId(), user.getEmail(), AccountTier.SYSTEM_ADMIN.name(),
+                        "SYSTEM_ADMIN", "시스템 관리자", true, isCurrent));
+            }
+        }
+        for (OrganizationMember member : memberships.findByIdOrganizationId(organizationId)) {
+            if (member.getRole() != OrganizationRole.ORGANIZATION_ADMIN) continue;
+            UUID uid = member.getId().getUserId();
+            if (byUser.containsKey(uid)) continue;
+            AppUser user = users.findById(uid).orElse(null);
+            if (user == null || !user.isEnabled()) continue;
+            AccountTier tier = AccountTier.effectiveFor(user);
+            if (tier == AccountTier.PROJECT_DIRECTOR || user.isProjectScopeEnforced()) continue;
+            boolean isCurrent = actorId != null && actorId.equals(uid);
+            byUser.put(uid, new RelationshipUserView(
+                    uid, user.getEmail(), tier.name(),
+                    "ORGANIZATION_ADMIN", "조직 관리자", true, isCurrent));
+        }
+        if (actor.platformAdmin() && actorId != null && !byUser.containsKey(actorId)) {
+            String email = actor.email() != null && !actor.email().isBlank() ? actor.email() : "시스템 관리자";
+            byUser.put(actorId, new RelationshipUserView(
+                    actorId, email, AccountTier.SYSTEM_ADMIN.name(),
+                    "SYSTEM_ADMIN", "시스템 관리자", true, true));
+        }
+        return byUser.values().stream()
+                .sorted(Comparator
+                        .comparing(RelationshipUserView::currentUser).reversed()
+                        .thenComparing(Comparator.comparing((RelationshipUserView u) -> "SYSTEM_ADMIN".equals(u.role())).reversed())
+                        .thenComparing(RelationshipUserView::email, String.CASE_INSENSITIVE_ORDER))
+                .toList();
+    }
+
+    private RelationshipProjectView toRelationshipProject(AuthPrincipal actor, UUID organizationId, Project project) {
+        UUID actorId = actor.userId();
+        Set<UUID> seenUsers = new HashSet<>();
+        List<RelationshipUserView> managers = new ArrayList<>();
+        List<RelationshipUserView> members = new ArrayList<>();
+
+        for (ProjectMembership pm : projectMemberships.findByIdProjectId(project.getId())) {
+            UUID uid = pm.getId().getUserId();
+            AppUser user = users.findById(uid).orElse(null);
+            if (user != null && !user.isEnabled()) continue;
+            seenUsers.add(uid);
+            String email = user != null ? user.getEmail() : "(삭제된 계정)";
+            String tier = user != null
+                    ? AccountTier.effectiveFor(user).name()
+                    : (pm.getRole() == ProjectMembership.Role.MANAGER
+                        ? AccountTier.PROJECT_DIRECTOR.name()
+                        : AccountTier.GENERAL_USER.name());
+            boolean isCurrent = actorId != null && actorId.equals(uid);
+            if (pm.getRole() == ProjectMembership.Role.MANAGER) {
+                managers.add(new RelationshipUserView(uid, email, tier, "MANAGER", "프로젝트 총관리자", true, isCurrent));
+            } else {
+                members.add(new RelationshipUserView(uid, email, tier, "MEMBER", "팀원", pm.isCanIssueApiKeys(), isCurrent));
+            }
+        }
+
+        if (project.getTeamId() != null) {
+            for (TeamMember tm : teamMembers.findByIdTeamId(project.getTeamId())) {
+                UUID uid = tm.getId().getUserId();
+                if (seenUsers.contains(uid)) continue;
+                AppUser user = users.findById(uid).orElse(null);
+                if (user == null || !user.isEnabled()) continue;
+                AccountTier tier = AccountTier.effectiveFor(user);
+                if (user.isPlatformAdmin() || tier == AccountTier.SYSTEM_ADMIN
+                        || tier == AccountTier.PROJECT_DIRECTOR || user.isProjectScopeEnforced()) {
+                    continue;
+                }
+                if (memberships.findByIdOrganizationIdAndIdUserId(organizationId, uid).isEmpty()) continue;
+                seenUsers.add(uid);
+                boolean isCurrent = actorId != null && actorId.equals(uid);
+                if (tm.getRole().canManageProjects()) {
+                    managers.add(new RelationshipUserView(uid, user.getEmail(), tier.name(), "MANAGER", "프로젝트 총관리자", true, isCurrent));
+                } else {
+                    members.add(new RelationshipUserView(uid, user.getEmail(), tier.name(), "MEMBER", "팀원", true, isCurrent));
+                }
+            }
+        }
+
+        managers.sort(Comparator
+                .comparing(RelationshipUserView::currentUser).reversed()
+                .thenComparing(RelationshipUserView::email, String.CASE_INSENSITIVE_ORDER));
+        members.sort(Comparator
+                .comparing(RelationshipUserView::currentUser).reversed()
+                .thenComparing(RelationshipUserView::canIssueApiKeys, Comparator.reverseOrder())
+                .thenComparing(RelationshipUserView::email, String.CASE_INSENSITIVE_ORDER));
+        boolean projectCanIssue = "ACTIVE".equalsIgnoreCase(project.getStatus())
+                && access.canIssueProjectApiKeys(actor, project.getId());
+        return new RelationshipProjectView(project.getId(), project.getName(), project.getStatus(), projectCanIssue, managers, members);
+    }
+
+    private static boolean containsCurrentUser(List<RelationshipUserView> list) {
+        return list.stream().anyMatch(RelationshipUserView::currentUser);
+    }
+
+    public record OrganizationRelationshipView(
+            UUID organizationId,
+            String organizationName,
+            List<RelationshipUserView> topUsers,
+            List<RelationshipProjectView> projects) { }
+    public record RelationshipProjectView(
+            UUID id,
+            String name,
+            String status,
+            boolean canIssueApiKeys,
+            List<RelationshipUserView> managers,
+            List<RelationshipUserView> members) { }
+    public record RelationshipUserView(
+            UUID userId,
+            String email,
+            String accountTier,
+            String role,
+            String roleLabel,
+            boolean canIssueApiKeys,
+            boolean currentUser) { }
     public record SessionView(boolean platformAdmin, String accountTier, boolean totpEnabled, String mfaState,
                               List<MembershipView> memberships) { }
     public record ConnectionView(List<ConnectionEndpointView> endpoints) { }

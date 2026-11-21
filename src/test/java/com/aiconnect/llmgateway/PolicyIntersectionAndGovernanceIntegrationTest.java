@@ -452,6 +452,54 @@ class PolicyIntersectionAndGovernanceIntegrationTest {
     }
 
     @Test
+    void relationshipShowsTopTierOrganizationManagersAndMembers() throws Exception {
+        Organization org = organizations.save(new Organization("Relationship Org " + UUID.randomUUID()));
+        Project projectA = projects.save(new Project(org.getId(), "Rel Project A"));
+        projects.save(new Project(org.getId(), "Rel Project B"));
+
+        AppUser sysAdmin = identity.createUser("sysadmin-rel@gov.test", PASSWORD, true, AccountTier.SYSTEM_ADMIN, null);
+        String adminToken = sessionToken(sysAdmin);
+        AppUser director = createDirector(org, projectA, "director-rel@gov.test");
+        String directorToken = sessionToken(director);
+        String inviteCode = issueInvite(org.getId(), projectA.getId(), directorToken);
+        EnrolledAccount member = acceptAndEnroll("member-rel@gov.test", inviteCode);
+
+        mvc.perform(get("/api/portal/organizations/{orgId}/relationship", org.getId())
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.organizationName").value(org.getName()))
+                .andExpect(jsonPath("$.topUsers[?(@.email=='sysadmin-rel@gov.test')].role").value("SYSTEM_ADMIN"))
+                .andExpect(jsonPath("$.topUsers[?(@.email=='sysadmin-rel@gov.test')].currentUser").value(true))
+                .andExpect(jsonPath("$.projects.length()").value(2))
+                .andExpect(jsonPath("$.projects[?(@.name=='Rel Project A')].managers[0].email").value("director-rel@gov.test"))
+                .andExpect(jsonPath("$.projects[?(@.name=='Rel Project A')].managers[0].role").value("MANAGER"))
+                .andExpect(jsonPath("$.projects[?(@.name=='Rel Project A')].managers[0].roleLabel").value("프로젝트 총관리자"))
+                .andExpect(jsonPath("$.projects[?(@.name=='Rel Project A')].members[0].email").value("member-rel@gov.test"))
+                .andExpect(jsonPath("$.projects[?(@.name=='Rel Project A')].members[0].role").value("MEMBER"))
+                .andExpect(jsonPath("$.projects[?(@.name=='Rel Project A')].members[0].roleLabel").value("팀원"));
+
+        mvc.perform(get("/api/portal/organizations/{orgId}/relationship", org.getId())
+                        .header("Authorization", "Bearer " + directorToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.topUsers[?(@.email=='sysadmin-rel@gov.test')].role").value("SYSTEM_ADMIN"))
+                .andExpect(jsonPath("$.projects.length()").value(1))
+                .andExpect(jsonPath("$.projects[0].name").value("Rel Project A"))
+                .andExpect(jsonPath("$.projects[0].managers[0].email").value("director-rel@gov.test"))
+                .andExpect(jsonPath("$.projects[0].managers[0].currentUser").value(true))
+                .andExpect(jsonPath("$.projects[0].members[0].email").value("member-rel@gov.test"));
+
+        mvc.perform(get("/api/portal/organizations/{orgId}/relationship", org.getId())
+                        .header("Authorization", "Bearer " + member.accessToken()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.topUsers[?(@.email=='sysadmin-rel@gov.test')].role").value("SYSTEM_ADMIN"))
+                .andExpect(jsonPath("$.projects.length()").value(1))
+                .andExpect(jsonPath("$.projects[0].name").value("Rel Project A"))
+                .andExpect(jsonPath("$.projects[0].managers[0].email").value("director-rel@gov.test"))
+                .andExpect(jsonPath("$.projects[0].members[0].email").value("member-rel@gov.test"))
+                .andExpect(jsonPath("$.projects[0].members[0].currentUser").value(true));
+    }
+
+    @Test
     void managerAndMemberRevocationCascadesKeysInvitationsScopeAndTokens() throws Exception {
         Organization org = organizations.save(new Organization("Revoke Org " + UUID.randomUUID()));
         Team team = teams.save(new Team(org.getId(), "Legacy Team"));

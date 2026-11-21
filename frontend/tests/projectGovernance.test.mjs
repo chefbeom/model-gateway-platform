@@ -1120,3 +1120,85 @@ test('ServicesPage sets dataBoundaryPolicy and DeveloperPortalPage enforces canI
     }
   })
 })
+
+test('relationship renders top tier, organization, managers, members and compacts large lists', async () => {
+  const { default: Relationship } = await compileVueComponent('../src/WorkspaceRelationship.vue', 'relationship-hierarchy-test')
+  await withDomGlobals(async () => {
+    const calls = []
+    const payload = {
+      organizationId: 'org-1',
+      organizationName: 'Calen-Ledger-Project',
+      topUsers: [
+        { userId: 'u-admin', email: 'admin@aiconnect.test', accountTier: 'SYSTEM_ADMIN', role: 'SYSTEM_ADMIN', roleLabel: '시스템 관리자', canIssueApiKeys: true, currentUser: true }
+      ],
+      projects: [
+        {
+          id: 'p-1',
+          name: 'calen-ledger-ai',
+          status: 'ACTIVE',
+          canIssueApiKeys: true,
+          managers: [
+            { userId: 'u-dir-1', email: 'director@aiconnect.test', accountTier: 'PROJECT_DIRECTOR', role: 'MANAGER', roleLabel: '프로젝트 총관리자', canIssueApiKeys: true, currentUser: false }
+          ],
+          members: [
+            { userId: 'u-m-1', email: 'member1@aiconnect.test', accountTier: 'GENERAL_USER', role: 'MEMBER', roleLabel: '팀원', canIssueApiKeys: true, currentUser: false },
+            { userId: 'u-m-2', email: 'member2@aiconnect.test', accountTier: 'GENERAL_USER', role: 'MEMBER', roleLabel: '팀원', canIssueApiKeys: false, currentUser: false },
+            { userId: 'u-m-3', email: 'member3@aiconnect.test', accountTier: 'GENERAL_USER', role: 'MEMBER', roleLabel: '팀원', canIssueApiKeys: true, currentUser: false },
+            { userId: 'u-m-4', email: 'member4@aiconnect.test', accountTier: 'GENERAL_USER', role: 'MEMBER', roleLabel: '팀원', canIssueApiKeys: false, currentUser: false },
+            { userId: 'u-m-5', email: 'member5@aiconnect.test', accountTier: 'GENERAL_USER', role: 'MEMBER', roleLabel: '팀원', canIssueApiKeys: true, currentUser: false }
+          ]
+        },
+        { id: 'p-2', name: 'project-two', status: 'ACTIVE', canIssueApiKeys: true, managers: [], members: [] },
+        { id: 'p-3', name: 'project-three', status: 'ACTIVE', canIssueApiKeys: true, managers: [], members: [] },
+        { id: 'p-4', name: 'project-four', status: 'ACTIVE', canIssueApiKeys: true, managers: [], members: [] },
+        { id: 'p-5', name: 'project-five', status: 'ACTIVE', canIssueApiKeys: false, managers: [], members: [] }
+      ]
+    }
+    globalThis.fetch = async url => {
+      calls.push(String(url))
+      return okJson(payload)
+    }
+    const { renderer, root, walk, textContent } = createMemoryDom()
+    const app = renderer.createApp({ render: () => h(Relationship, { organizationId: 'org-1', organizationName: 'Calen-Ledger-Project', auth: { accessToken: 'token' } }) })
+    try {
+      app.mount(root)
+      await flush()
+
+      assert.ok(calls.some(url => url === '/api/portal/organizations/org-1/relationship'))
+      const rendered = textContent(root)
+      assert.match(rendered, /admin@aiconnect\.test/)
+      assert.match(rendered, /시스템 관리자/)
+      assert.match(rendered, /현재 계정/)
+      assert.match(rendered, /Calen-Ledger-Project/)
+      assert.match(rendered, /calen-ledger-ai/)
+      assert.match(rendered, /director@aiconnect\.test/)
+      assert.match(rendered, /프로젝트 총관리자/)
+      assert.match(rendered, /member1@aiconnect\.test/)
+      assert.match(rendered, /member3@aiconnect\.test/)
+      assert.doesNotMatch(rendered, /member4@aiconnect\.test/)
+      assert.doesNotMatch(rendered, /project-five/)
+      assert.match(rendered, /\+ 외 2명 팀원 더보기/)
+      assert.match(rendered, /\+ 외 1개 프로젝트 더보기/)
+
+      const expandMembersBtn = walk(root, el => el.tag === 'button' && textContent(el).includes('팀원 더보기'))[0]
+      expandMembersBtn.props.onClick()
+      await nextTick()
+      assert.match(textContent(root), /member4@aiconnect\.test/)
+      assert.match(textContent(root), /member5@aiconnect\.test/)
+
+      const expandAllBtn = walk(root, el => el.tag === 'button' && textContent(el).includes('전체 펼치기'))[0]
+      expandAllBtn.props.onClick()
+      await nextTick()
+      assert.match(textContent(root), /project-five/)
+      assert.match(textContent(root), /축약 보기/)
+
+      const collapseAllBtn = walk(root, el => el.tag === 'button' && textContent(el).includes('축약 보기'))[0]
+      collapseAllBtn.props.onClick()
+      await nextTick()
+      assert.doesNotMatch(textContent(root), /member4@aiconnect\.test/)
+      assert.doesNotMatch(textContent(root), /project-five/)
+    } finally {
+      app.unmount()
+    }
+  })
+})
