@@ -287,131 +287,135 @@ function toggleExpandAll() {
 
           <div class="org-vertical-stem" aria-hidden="true"></div>
 
-          <!-- 2단계: 선택된 조직 -->
-          <div class="org-level organization-level">
-            <div class="org-node-card organization-card">
+          <!-- 2단계: 선택된 조직 포함 범위 (내부에 모든 프로젝트 및 구성원 포함) -->
+          <div class="org-scope-enclosure">
+            <div class="org-scope-header">
               <div class="node-card-head">
-                <span class="stage-tag org-tag">2단계 · 선택된 조직 (WORKSPACE)</span>
+                <span class="stage-tag org-tag">2단계 · 선택된 조직 (WORKSPACE · 조직 포함 범위)</span>
               </div>
               <strong class="org-title">{{ organizationName || serverOrgName || '현재 조직' }}</strong>
               <span class="org-summary">
                 접근 가능한 프로젝트 {{ projects.length }}개 · 프로젝트 총관리자 {{ uniqueManagerCount }}명 · 팀원 {{ uniqueMemberCount }}명
               </span>
             </div>
-          </div>
 
-          <!-- 3~5단계: 프로젝트 분기 -> 프로젝트 총관리자 -> 팀원 -->
-          <template v-if="projects.length">
-            <div class="org-vertical-stem" aria-hidden="true"></div>
+            <!-- 3~5단계: 조직 범위 내부의 프로젝트 분기 -> 프로젝트 총관리자 -> 팀원 -->
+            <div class="org-scope-body">
+              <template v-if="projects.length">
+                <div class="org-vertical-stem" aria-hidden="true"></div>
 
-            <ul class="org-tree-branches project-branches">
-              <li v-for="item in visibleProjects" :key="item.id" class="org-branch-col project-col">
-                <div class="org-node-card project-dept-card">
-                  <div class="node-card-head">
-                    <span class="stage-tag project-tag">3단계 · 프로젝트</span>
-                    <span class="project-state" :class="{ paused: item.status !== 'ACTIVE' }">
-                      {{ item.status === 'ACTIVE' ? '활성' : item.status === 'SUSPENDED' ? '중지' : item.status }}
-                    </span>
-                  </div>
-                  <strong class="project-title">{{ item.name }}</strong>
-                  <span class="project-perm">{{ item.canIssueApiKeys ? 'API 키 발급 가능' : 'API 키 발급 권한 없음' }}</span>
-                  <div class="project-card-foot">
-                    <small>총관리자 {{ item.managers.length }}명 · 팀원 {{ item.members.length }}명</small>
-                    <button type="button" class="collapse-toggle" @click="toggleProjectCollapse(item.id)">
-                      {{ isProjectCollapsed(item.id) ? `구성원 펼치기 (${item.managers.length + item.members.length}명)` : '구성원 접기' }}
-                    </button>
-                  </div>
+                <ul class="org-tree-branches project-branches">
+                  <li v-for="item in visibleProjects" :key="item.id" class="org-branch-col project-col">
+                    <div class="project-scope-enclosure">
+                      <div class="project-scope-header">
+                        <div class="node-card-head">
+                          <span class="stage-tag project-tag">3단계 · 프로젝트 · 팀 범위</span>
+                          <span class="project-state" :class="{ paused: item.status !== 'ACTIVE' }">
+                            {{ item.status === 'ACTIVE' ? '활성' : item.status === 'SUSPENDED' ? '중지' : item.status }}
+                          </span>
+                        </div>
+                        <strong class="project-title">{{ item.name }}</strong>
+                        <span class="project-perm">{{ item.canIssueApiKeys ? 'API 키 발급 가능' : 'API 키 발급 권한 없음' }}</span>
+                        <div class="project-card-foot">
+                          <small>총관리자 {{ item.managers.length }}명 · 팀원 {{ item.members.length }}명</small>
+                          <button type="button" class="collapse-toggle" @click="toggleProjectCollapse(item.id)">
+                            {{ isProjectCollapsed(item.id) ? `구성원 펼치기 (${item.managers.length + item.members.length}명)` : '구성원 접기' }}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div v-if="!isProjectCollapsed(item.id)" class="project-scope-body">
+                        <div class="org-vertical-stem" aria-hidden="true"></div>
+
+                        <!-- 4단계: 프로젝트 총관리자 -->
+                        <div class="tier-scope-box manager-scope-box org-manager-section">
+                          <div class="section-pill-header">
+                            <span class="stage-tag manager-tag">4단계 · 프로젝트 총관리자</span>
+                            <small>{{ item.managers.length }}명</small>
+                          </div>
+                          <template v-if="item.managers.length">
+                            <ul class="org-tree-branches manager-branches">
+                              <li v-for="manager in visibleManagers(item)" :key="manager.userId" class="org-branch-col manager-col">
+                                <div class="org-person-box manager-box">
+                                  <span class="person-avatar manager-avatar" aria-hidden="true">◉</span>
+                                  <strong>{{ manager.email }}</strong>
+                                  <div class="person-badges">
+                                    <span class="role-chip">{{ manager.roleLabel || '프로젝트 총관리자' }}</span>
+                                    <span v-if="manager.currentUser" class="current-user-badge">현재 계정</span>
+                                  </div>
+                                  <small class="perm-label">{{ manager.canIssueApiKeys ? 'API 키 발급 가능' : 'API 키 발급 권한 없음' }}</small>
+                                </div>
+                              </li>
+                            </ul>
+                            <button
+                              v-if="item.managers.length > MAX_VISIBLE_MANAGERS && !expandAll"
+                              type="button"
+                              class="more-toggle centered-toggle"
+                              @click="toggleExpandedManagers(item.id)"
+                            >
+                              {{ expandedManagers[item.id] ? '총관리자 접기' : `+ 외 ${item.managers.length - MAX_VISIBLE_MANAGERS}명 총관리자 더보기` }}
+                            </button>
+                          </template>
+                          <div v-else class="org-empty-box">
+                            <p class="empty-tier-note">배정된 프로젝트 총관리자 없음</p>
+                          </div>
+                        </div>
+
+                        <div class="org-vertical-stem" aria-hidden="true"></div>
+
+                        <!-- 5단계: 팀원 -->
+                        <div class="tier-scope-box member-scope-box org-member-section">
+                          <div class="section-pill-header">
+                            <span class="stage-tag member-tag">5단계 · 팀원</span>
+                            <small>{{ item.members.length }}명</small>
+                          </div>
+                          <template v-if="item.members.length">
+                            <ul class="org-tree-branches member-branches">
+                              <li v-for="member in visibleMembers(item)" :key="member.userId" class="org-branch-col member-col">
+                                <div class="org-person-box member-box">
+                                  <span class="person-avatar member-avatar" aria-hidden="true">○</span>
+                                  <strong>{{ member.email }}</strong>
+                                  <div class="person-badges">
+                                    <span class="role-chip">{{ member.roleLabel || '팀원' }}</span>
+                                    <span v-if="member.currentUser" class="current-user-badge">현재 계정</span>
+                                  </div>
+                                  <small class="perm-label" :class="{ muted: !member.canIssueApiKeys }">
+                                    {{ member.canIssueApiKeys ? 'API 키 발급 가능' : 'API 키 발급 권한 없음' }}
+                                  </small>
+                                </div>
+                              </li>
+                            </ul>
+                            <button
+                              v-if="item.members.length > MAX_VISIBLE_MEMBERS && !expandAll"
+                              type="button"
+                              class="more-toggle centered-toggle"
+                              @click="toggleExpandedMembers(item.id)"
+                            >
+                              {{ expandedMembers[item.id] ? '팀원 접기' : `+ 외 ${item.members.length - MAX_VISIBLE_MEMBERS}명 팀원 더보기` }}
+                            </button>
+                          </template>
+                          <div v-else class="org-empty-box">
+                            <p class="empty-tier-note">소속 팀원 없음</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </li>
+                </ul>
+
+                <div v-if="projects.length > MAX_VISIBLE_PROJECTS && !expandAll" class="projects-more-wrap">
+                  <button
+                    type="button"
+                    class="more-projects-toggle"
+                    @click="projectsExpanded = !projectsExpanded"
+                  >
+                    {{ projectsExpanded ? '프로젝트 목록 접기' : `+ 외 ${projects.length - MAX_VISIBLE_PROJECTS}개 프로젝트 더보기 (전체 ${projects.length}개)` }}
+                  </button>
                 </div>
-
-                <template v-if="!isProjectCollapsed(item.id)">
-                  <div class="org-vertical-stem" aria-hidden="true"></div>
-
-                  <!-- 4단계: 프로젝트 총관리자 -->
-                  <div class="org-manager-section">
-                    <div class="section-pill-header">
-                      <span class="stage-tag manager-tag">4단계 · 프로젝트 총관리자</span>
-                      <small>{{ item.managers.length }}명</small>
-                    </div>
-                    <template v-if="item.managers.length">
-                      <ul class="org-tree-branches manager-branches">
-                        <li v-for="manager in visibleManagers(item)" :key="manager.userId" class="org-branch-col manager-col">
-                          <div class="org-person-box manager-box">
-                            <span class="person-avatar manager-avatar" aria-hidden="true">◉</span>
-                            <strong>{{ manager.email }}</strong>
-                            <div class="person-badges">
-                              <span class="role-chip">{{ manager.roleLabel || '프로젝트 총관리자' }}</span>
-                              <span v-if="manager.currentUser" class="current-user-badge">현재 계정</span>
-                            </div>
-                            <small class="perm-label">{{ manager.canIssueApiKeys ? 'API 키 발급 가능' : 'API 키 발급 권한 없음' }}</small>
-                          </div>
-                        </li>
-                      </ul>
-                      <button
-                        v-if="item.managers.length > MAX_VISIBLE_MANAGERS && !expandAll"
-                        type="button"
-                        class="more-toggle centered-toggle"
-                        @click="toggleExpandedManagers(item.id)"
-                      >
-                        {{ expandedManagers[item.id] ? '총관리자 접기' : `+ 외 ${item.managers.length - MAX_VISIBLE_MANAGERS}명 총관리자 더보기` }}
-                      </button>
-                    </template>
-                    <div v-else class="org-empty-box">
-                      <p class="empty-tier-note">배정된 프로젝트 총관리자 없음</p>
-                    </div>
-                  </div>
-
-                  <div class="org-vertical-stem" aria-hidden="true"></div>
-
-                  <!-- 5단계: 팀원 -->
-                  <div class="org-member-section">
-                    <div class="section-pill-header">
-                      <span class="stage-tag member-tag">5단계 · 팀원</span>
-                      <small>{{ item.members.length }}명</small>
-                    </div>
-                    <template v-if="item.members.length">
-                      <ul class="org-tree-branches member-branches">
-                        <li v-for="member in visibleMembers(item)" :key="member.userId" class="org-branch-col member-col">
-                          <div class="org-person-box member-box">
-                            <span class="person-avatar member-avatar" aria-hidden="true">○</span>
-                            <strong>{{ member.email }}</strong>
-                            <div class="person-badges">
-                              <span class="role-chip">{{ member.roleLabel || '팀원' }}</span>
-                              <span v-if="member.currentUser" class="current-user-badge">현재 계정</span>
-                            </div>
-                            <small class="perm-label" :class="{ muted: !member.canIssueApiKeys }">
-                              {{ member.canIssueApiKeys ? 'API 키 발급 가능' : 'API 키 발급 권한 없음' }}
-                            </small>
-                          </div>
-                        </li>
-                      </ul>
-                      <button
-                        v-if="item.members.length > MAX_VISIBLE_MEMBERS && !expandAll"
-                        type="button"
-                        class="more-toggle centered-toggle"
-                        @click="toggleExpandedMembers(item.id)"
-                      >
-                        {{ expandedMembers[item.id] ? '팀원 접기' : `+ 외 ${item.members.length - MAX_VISIBLE_MEMBERS}명 팀원 더보기` }}
-                      </button>
-                    </template>
-                    <div v-else class="org-empty-box">
-                      <p class="empty-tier-note">소속 팀원 없음</p>
-                    </div>
-                  </div>
-                </template>
-              </li>
-            </ul>
-
-            <div v-if="projects.length > MAX_VISIBLE_PROJECTS && !expandAll" class="projects-more-wrap">
-              <button
-                type="button"
-                class="more-projects-toggle"
-                @click="projectsExpanded = !projectsExpanded"
-              >
-                {{ projectsExpanded ? '프로젝트 목록 접기' : `+ 외 ${projects.length - MAX_VISIBLE_PROJECTS}개 프로젝트 더보기 (전체 ${projects.length}개)` }}
-              </button>
+              </template>
+              <div v-else class="relationship-message empty-chart">이 조직에서 접근 가능한 프로젝트가 없습니다.</div>
             </div>
-          </template>
-          <div v-else class="relationship-message empty-chart">이 조직에서 접근 가능한 프로젝트가 없습니다.</div>
+          </div>
         </div>
       </div>
 
@@ -454,11 +458,19 @@ function toggleExpandAll() {
 
 .org-node-card { display:grid; gap:8px; padding:14px 16px; border:1px solid var(--border); border-radius:12px; background:var(--surface); box-shadow:0 4px 16px rgba(0, 0, 0, 0.14); text-align:center; }
 .top-admin-card { min-width:290px; max-width:540px; border-top:3px solid #f59e0b; }
-.organization-card { min-width:300px; max-width:460px; border-color:var(--accent-border); border-top:3px solid var(--accent); background:linear-gradient(180deg, var(--accent-dim), var(--surface)); }
-.project-dept-card { width:100%; min-width:250px; max-width:340px; border-top:3px solid #38bdf8; text-align:left; }
+
+/* 2단계 조직 포함 범위 컨테이너 */
+.org-scope-enclosure { display:flex; flex-direction:column; align-items:center; border:1.5px solid var(--accent-border); border-top:3px solid var(--accent); border-radius:16px; background:color-mix(in srgb, var(--accent-dim) 26%, var(--surface)); box-shadow:0 8px 24px rgba(0, 0, 0, 0.16); overflow:hidden; }
+.org-scope-header { display:grid; gap:6px; justify-items:center; width:100%; padding:14px 24px; border-bottom:1px solid color-mix(in srgb, var(--accent-border) 65%, var(--border)); background:linear-gradient(180deg, var(--accent-dim), color-mix(in srgb, var(--accent-dim) 20%, transparent)); text-align:center; }
+.org-scope-body { display:flex; flex-direction:column; align-items:center; width:100%; padding:0 22px 22px; }
+
+/* 3단계 프로젝트·팀 포함 범위 컨테이너 */
+.project-scope-enclosure { display:flex; flex-direction:column; align-items:center; min-width:270px; border:1.5px solid color-mix(in srgb, #38bdf8 42%, var(--border)); border-top:3px solid #38bdf8; border-radius:14px; background:color-mix(in srgb, #38bdf8 5%, var(--surface)); box-shadow:0 4px 14px rgba(0, 0, 0, 0.12); overflow:hidden; }
+.project-scope-header { display:grid; gap:7px; width:100%; padding:13px 15px; border-bottom:1px solid color-mix(in srgb, #38bdf8 22%, var(--border)); background:linear-gradient(180deg, color-mix(in srgb, #38bdf8 11%, var(--surface)), var(--surface)); text-align:left; }
+.project-scope-body { display:flex; flex-direction:column; align-items:center; width:100%; padding:0 14px 14px; }
 
 .node-card-head { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; }
-.top-admin-card .node-card-head, .organization-card .node-card-head { justify-content:center; }
+.top-admin-card .node-card-head, .org-scope-header .node-card-head { justify-content:center; }
 
 .stage-tag { padding:2px 8px; border-radius:999px; font-size:10px; font-weight:800; letter-spacing:.02em; }
 .top-tag { border:1px solid color-mix(in srgb, #f59e0b 45%, var(--border)); background:color-mix(in srgb, #f59e0b 14%, transparent); color:#f59e0b; }
@@ -501,8 +513,10 @@ function toggleExpandAll() {
 .manager-col::before, .manager-col::after, .member-col::before, .member-col::after { height:18px; }
 
 /* 4단계 총관리자 & 5단계 팀원 섹션 */
-.org-manager-section, .org-member-section { display:flex; flex-direction:column; align-items:center; width:100%; }
-.section-pill-header { display:inline-flex; align-items:center; gap:6px; padding:5px 10px; border:1px solid var(--border); border-radius:999px; background:var(--surface); margin-bottom:2px; }
+.tier-scope-box { display:flex; flex-direction:column; align-items:center; width:100%; padding:10px 12px 12px; border-radius:12px; border:1px solid var(--border); background:color-mix(in srgb, var(--surface-2) 70%, transparent); }
+.manager-scope-box { border-color:color-mix(in srgb, var(--accent-border) 75%, var(--border)); background:color-mix(in srgb, var(--accent-dim) 22%, var(--surface)); }
+.member-scope-box { border-color:var(--border); background:color-mix(in srgb, var(--surface-2) 85%, transparent); }
+.section-pill-header { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border:1px solid var(--border); border-radius:999px; background:var(--surface); margin-bottom:2px; }
 .section-pill-header small { color:var(--muted); font-size:11px; font-weight:700; }
 
 .manager-branches, .member-branches { position:relative; padding-top:16px; }
