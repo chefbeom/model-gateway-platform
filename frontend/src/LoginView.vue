@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import BaseModal from './BaseModal.vue'
 import LoginAuthSteps from './LoginAuthSteps.vue'
 import { accountTierLabel, authenticate, normalizeTotpDigits, verifyTotp, type Session, type User } from './api'
@@ -9,6 +9,7 @@ const props = defineProps<{
   mfaRequired?: boolean
   pendingAccessToken?: string
   pendingUser?: User | null
+  sessionNotice?: string
 }>()
 
 const emit = defineEmits<{
@@ -90,8 +91,39 @@ function cancelMfaStep() {
   localMfaSession.value = null
   mfaCode.value = ''
   message.value = ''
+  verificationMode.value = 'totp'
   emit('cancelMfa')
 }
+
+function onSessionExpired() {
+  if (!inMfaStep.value) return
+  localMfaSession.value = null
+  mfaCode.value = ''
+  verificationMode.value = 'totp'
+  if (props.sessionNotice === undefined && !message.value) {
+    message.value = '2차 인증 세션이 만료되었거나 서버와 연결할 수 없습니다. 1단계 로그인부터 다시 진행하세요.'
+  }
+}
+
+watch(() => props.mfaRequired, (next, prev) => {
+  if (prev && !next) {
+    localMfaSession.value = null
+    mfaCode.value = ''
+    verificationMode.value = 'totp'
+  }
+})
+
+onMounted(() => {
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('aiconnect:session-expired', onSessionExpired)
+  }
+})
+
+onUnmounted(() => {
+  if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+    window.removeEventListener('aiconnect:session-expired', onSessionExpired)
+  }
+})
 
 function switchAuthMode() {
   mode.value = mode.value === 'login' ? 'bootstrap' : 'login'
@@ -194,6 +226,7 @@ function useEmergencyToken() {
             <h2>{{ mode === 'login' ? '1차 로그인 진행' : '첫 관리자를 생성합니다' }}</h2>
             <p>{{ mode === 'login' ? '아이디(이메일)와 비밀번호를 확인한 뒤 2단계 QR 2차 확인·최종 승인으로 이어집니다.' : '비어 있는 설치에서 한 번만 실행할 수 있습니다.' }}</p>
           </div>
+          <p v-if="sessionNotice && !message" class="inline-alert" role="status">{{ sessionNotice }}</p>
           <form class="login-form" @submit.prevent="submit">
             <label>이메일 주소<input v-model.trim="email" type="email" autocomplete="username" placeholder="admin@example.com" required /></label>
             <label>비밀번호<input v-model="password" type="password" autocomplete="current-password" placeholder="12자 이상 입력" minlength="12" required /></label>

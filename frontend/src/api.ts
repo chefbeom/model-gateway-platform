@@ -205,10 +205,70 @@ export function normalizeSession(raw: Session): Session {
   }
 }
 
+export type SessionExpiredReason = 'expired' | 'server_unavailable' | 'invalidated'
+
+const replacedAccessTokens = new Map<string, string>()
+
 function dispatchWindowEvent<T>(name: string, detail?: T): void {
+  if (name === 'aiconnect:session-expired') {
+    replacedAccessTokens.clear()
+  }
   if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
     window.dispatchEvent(new CustomEvent<T>(name, detail === undefined ? undefined : { detail }))
   }
+}
+
+export function notifySessionExpired(reason: SessionExpiredReason = 'expired'): void {
+  dispatchWindowEvent<{ reason: SessionExpiredReason }>('aiconnect:session-expired', { reason })
+}
+
+export function isServerUnavailableStatus(status: number): boolean {
+  return status === 502 || status === 503 || status === 504
+}
+
+async function hasJsonBody(response: Response): Promise<boolean> {
+  try {
+    const target = typeof response.clone === 'function' ? response.clone() : response
+    const parsed = await target.json()
+    return parsed !== null && typeof parsed === 'object'
+  } catch {
+    return false
+  }
+}
+
+function serverUnavailableError(message: string, status?: number): ApiError {
+  const error = new Error(message) as ApiError
+  error.code = 'SERVER_UNAVAILABLE'
+  error.status = status
+  return error
+}
+
+function isServerUnavailableError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const candidate = error as { code?: unknown; status?: unknown }
+  return candidate.code === 'SERVER_UNAVAILABLE'
+    || (typeof candidate.status === 'number' && isServerUnavailableStatus(candidate.status))
+}
+
+function resolveAccessToken(token?: string): string | undefined {
+  if (!token) return token
+  let current = token
+  for (let i = 0; i < 8; i++) {
+    const next = replacedAccessTokens.get(current)
+    if (!next) break
+    current = next
+  }
+  if (current === token) return token
+  if (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('aiconnect.accessToken') === current) {
+    return current
+  }
+  return token
+}
+
+function resolveAdminAuth(auth: AdminAuth): AdminAuth {
+  if (!auth.accessToken) return auth
+  const resolved = resolveAccessToken(auth.accessToken)
+  return resolved === auth.accessToken ? auth : { ...auth, accessToken: resolved }
 }
 
 function adminHeaders(auth: AdminAuth): HeadersInit {
@@ -279,10 +339,21 @@ export async function authenticate(
 
 export function refreshAuthentication(): Promise<Session> {
   if (refreshInFlight) return refreshInFlight
+  const previousToken = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('aiconnect.accessToken') : null
   refreshInFlight = fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' })
+    .catch(() => {
+      throw serverUnavailableError('인증 서버와의 연결이 끊어졌습니다.')
+    })
     .then(async response => {
+      if (isServerUnavailableStatus(response.status) || (response.status >= 500 && !(await hasJsonBody(response)))) {
+        throw serverUnavailableError('인증 서버와 연결할 수 없습니다.', response.status)
+      }
       if (!response.ok) throw await responseError(response, '관리자 세션을 갱신할 수 없습니다.')
-      return persistSession(await response.json() as Session)
+      const nextSession = persistSession(await response.json() as Session)
+      if (previousToken && previousToken !== nextSession.accessToken) {
+        replacedAccessTokens.set(previousToken, nextSession.accessToken)
+      }
+      return nextSession
     })
     .finally(() => { refreshInFlight = null })
   return refreshInFlight
@@ -292,24 +363,109 @@ export async function logout(): Promise<void> {
   await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' })
 }
 
+const NON_SESSION_401_CODES = new Set([
+  'INVALID_TOTP_CODE',
+  'TOTP_CODE_ALREADY_USED',
+  'INVALID_RECOVERY_CODE',
+  'TOTP_CODE_REQUIRED'
+])
+
+async function isServerUnavailableResponse(response: Response): Promise<boolean> {
+  return isServerUnavailableStatus(response.status) || (response.status >= 500 && !(await hasJsonBody(response)))
+}
+
+async function sendWithSessionGuard(
+  send: (overrideAccessToken?: string) => Promise<Response>,
+  options: {
+    allowRefresh: boolean
+    platformTokenPresent?: boolean
+    networkMessage: string
+    parseNonSession401?: (response: Response) => Promise<Error | null>
+  }
+): Promise<Response> {
+  const invoke = async (overrideToken?: string): Promise<Response> => {
+    let response: Response
+    try {
+      response = await send(overrideToken)
+    } catch {
+      notifySessionExpired('server_unavailable')
+      throw serverUnavailableError(options.networkMessage)
+    }
+    if (await isServerUnavailableResponse(response)) {
+      notifySessionExpired('server_unavailable')
+      throw serverUnavailableError('서버 점검 중이거나 연결이 종료되었습니다.', response.status)
+    }
+    return response
+  }
+
+  const first = await invoke()
+  if (first.status !== 401) return first
+
+  if (!options.allowRefresh) {
+    if (options.platformTokenPresent) notifySessionExpired('invalidated')
+    return first
+  }
+
+  let cachedNonOtpError: Error | null = null
+  if (options.parseNonSession401) {
+    cachedNonOtpError = await options.parseNonSession401(first)
+    if (cachedNonOtpError) throw cachedNonOtpError
+  }
+
+  let session: Session
+  try {
+    session = await refreshAuthentication()
+  } catch (refreshError) {
+    notifySessionExpired(isServerUnavailableError(refreshError) ? 'server_unavailable' : 'expired')
+    throw refreshError
+  }
+
+  const retried = await invoke(session.accessToken)
+  if (retried.status === 401) {
+    if (options.parseNonSession401) {
+      const retryErr = await options.parseNonSession401(retried)
+      if (retryErr) throw retryErr
+    }
+    notifySessionExpired('invalidated')
+  }
+  return retried
+}
+
+async function fetchTotpAuth(url: string, accessToken: string, fallback: string, payload?: unknown): Promise<Response> {
+  let consumed401Error: ApiError | null = null
+  const response = await sendWithSessionGuard(
+    overrideToken => fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${overrideToken ?? resolveAccessToken(accessToken) ?? accessToken}`
+      },
+      credentials: 'include',
+      ...(payload !== undefined ? { body: JSON.stringify(payload) } : {})
+    }),
+    {
+      allowRefresh: true,
+      networkMessage: '서버에 연결할 수 없어 2차 인증을 진행할 수 없습니다.',
+      parseNonSession401: async res => {
+        const err = await responseError(res, fallback)
+        if (err.code && NON_SESSION_401_CODES.has(err.code)) return err
+        consumed401Error = err
+        return null
+      }
+    }
+  )
+  if (response.status === 401 && consumed401Error) throw consumed401Error
+  if (!response.ok) throw await responseError(response, fallback)
+  return response
+}
+
 export async function setupTotp(accessToken: string): Promise<TotpSetup> {
-  const response = await fetch('/api/auth/totp/setup', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
-    credentials: 'include'
-  })
-  if (!response.ok) throw await responseError(response, 'TOTP 설정 정보를 생성하지 못했습니다.')
+  const response = await fetchTotpAuth('/api/auth/totp/setup', accessToken, 'TOTP 설정 정보를 생성하지 못했습니다.')
   return await response.json() as TotpSetup
 }
 
 export async function enrollTotp(accessToken: string, code: string): Promise<TotpEnrollResponse> {
-  const response = await fetch('/api/auth/totp/enroll', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
-    credentials: 'include',
-    body: JSON.stringify({ code })
-  })
-  if (!response.ok) throw await responseError(response, 'TOTP 등록 인증에 실패했습니다.')
+  const response = await fetchTotpAuth('/api/auth/totp/enroll', accessToken, 'TOTP 등록 인증에 실패했습니다.', { code })
   const result = await response.json() as TotpEnrollResponse
   return {
     session: normalizeSession(result.session),
@@ -318,13 +474,7 @@ export async function enrollTotp(accessToken: string, code: string): Promise<Tot
 }
 
 export async function verifyTotp(accessToken: string, code: string): Promise<Session> {
-  const response = await fetch('/api/auth/totp/verify', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
-    credentials: 'include',
-    body: JSON.stringify({ code })
-  })
-  if (!response.ok) throw await responseError(response, '2차 인증 코드가 올바르지 않습니다.')
+  const response = await fetchTotpAuth('/api/auth/totp/verify', accessToken, '2차 인증 코드가 올바르지 않습니다.', { code })
   return persistSession(await response.json() as Session)
 }
 
@@ -355,26 +505,24 @@ export async function acceptAccountInvitation(payload: {
 }
 
 async function fetchAdmin(path: string, auth: AdminAuth, init: RequestInit): Promise<Response> {
-  return fetch(scopedPath(path, auth, init), {
+  const resolved = resolveAdminAuth(auth)
+  return fetch(scopedPath(path, resolved, init), {
     ...init,
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...adminHeaders(auth), ...(init.headers ?? {}) }
+    headers: { 'Content-Type': 'application/json', ...adminHeaders(resolved), ...(init.headers ?? {}) }
   })
 }
 
 /** Makes an authenticated admin request without consuming the response body (used for SSE relays). */
 export async function adminResponse(path: string, auth: AdminAuth, init: RequestInit = {}): Promise<Response> {
-  let response = await fetchAdmin(path, auth, init)
-  if (response.status === 401 && auth.accessToken) {
-    try {
-      const session = await refreshAuthentication()
-      response = await fetchAdmin(path, { accessToken: session.accessToken }, init)
-    } catch (error) {
-      dispatchWindowEvent('aiconnect:session-expired')
-      throw error
+  return sendWithSessionGuard(
+    overrideToken => fetchAdmin(path, overrideToken ? { accessToken: overrideToken } : auth, init),
+    {
+      allowRefresh: Boolean(auth.accessToken),
+      platformTokenPresent: Boolean(auth.platformToken),
+      networkMessage: '서버와의 연결이 끊어져 세션을 종료합니다.'
     }
-  }
-  return response
+  )
 }
 
 export async function adminFetch<T>(path: string, auth: AdminAuth, init: RequestInit = {}): Promise<T> {

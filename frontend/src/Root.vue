@@ -135,7 +135,32 @@ function acceptPlatformToken(token: string) {
   }
 }
 
+const sessionNotice = ref('')
+let jwtRefreshTimer: ReturnType<typeof setTimeout> | null = null
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null
+let sessionCheckInFlight: Promise<boolean> | null = null
+let monitorArmed = false
+let lastFocusCheckAt = 0
+
+function clearJwtRefreshTimer() {
+  if (jwtRefreshTimer !== null) {
+    clearTimeout(jwtRefreshTimer)
+    jwtRefreshTimer = null
+  }
+}
+
+function sessionExpiredNotice(reason?: string): string {
+  if (reason === 'server_unavailable') {
+    return '서버와의 연결이 끊어졌거나 종료되어 안전하게 로그아웃되었습니다. 서버 상태를 확인한 뒤 다시 로그인하세요.'
+  }
+  if (reason === 'invalidated') {
+    return '서버 재배포 또는 인증 정보 변경으로 세션이 만료되었습니다. 다시 로그인하세요.'
+  }
+  return '로그인 세션이 만료되어 로그아웃되었습니다. 다시 로그인하세요.'
+}
+
 function clearSession() {
+  clearJwtRefreshTimer()
   accessToken.value = ''
   platformToken.value = ''
   user.value = null
@@ -145,6 +170,18 @@ function clearSession() {
     sessionStorage.removeItem('aiconnect.user')
     sessionStorage.removeItem('aiconnect.mfaState')
     sessionStorage.removeItem('aiconnect.platformToken')
+    sessionStorage.removeItem('aiconnect.setup.organizationId')
+  }
+}
+
+function expireSession(reason?: string) {
+  const hadSession = Boolean(accessToken.value || platformToken.value)
+  clearSession()
+  if (!registerRoute.value.isRegister) {
+    setLocationHash('')
+  }
+  if (hadSession || reason) {
+    sessionNotice.value = sessionExpiredNotice(reason)
   }
 }
 
@@ -153,6 +190,7 @@ async function signOut() {
     if (accessToken.value) await logout()
   } finally {
     clearSession()
+    sessionNotice.value = ''
     setLocationHash('')
   }
 }
@@ -199,18 +237,283 @@ function onMfaRequiredEvent(event: Event) {
   }
 }
 
-function onSessionExpiredEvent() {
-  clearSession()
+function onSessionExpiredEvent(event?: Event) {
+  const reason = event && typeof event === 'object' && 'detail' in event
+    ? (event as CustomEvent<{ reason?: string }>).detail?.reason
+    : undefined
+  expireSession(reason)
 }
 
 function onHashChange() {
   currentHash.value = window.location?.hash ?? ''
 }
 
+function parseJwtExpiryMs(token: string): number | null {
+  try {
+    const parts = token.split('.')
+    if (parts.length !== 3) return null
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4)
+    const nodeBuffer = (globalThis as { Buffer?: { from: (value: string, encoding: string) => { toString: (encoding: string) => string } } }).Buffer
+    const raw = typeof atob === 'function'
+      ? atob(padded)
+      : nodeBuffer
+        ? nodeBuffer.from(padded, 'base64').toString('utf8')
+        : ''
+    if (!raw) return null
+    const payload = JSON.parse(raw) as { exp?: unknown }
+    return typeof payload.exp === 'number' && Number.isFinite(payload.exp) ? payload.exp * 1000 : null
+  } catch {
+    return null
+  }
+}
+
+function isServerUnavailableFailure(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const candidate = error as { code?: unknown; status?: unknown }
+  return candidate.code === 'SERVER_UNAVAILABLE'
+    || candidate.status === 502
+    || candidate.status === 503
+    || candidate.status === 504
+}
+
+async function readJsonSafely(response: Response): Promise<{ ok: boolean; value: unknown }> {
+  try {
+    const target = typeof response.clone === 'function' ? response.clone() : response
+    const value = await target.json()
+    return { ok: value !== null && typeof value === 'object', value }
+  } catch {
+    return { ok: false, value: null }
+  }
+}
+
+async function isServerDownResponse(response: Response): Promise<boolean> {
+  if (response.status === 502 || response.status === 503 || response.status === 504) return true
+  if (response.status >= 500) {
+    const parsed = await readJsonSafely(response)
+    return !parsed.ok
+  }
+  return false
+}
+
+function scheduleJwtRefresh() {
+  clearJwtRefreshTimer()
+  if (!accessToken.value || platformToken.value) return
+  const expMs = parseJwtExpiryMs(accessToken.value)
+  if (expMs === null) return
+  const remainingMs = expMs - Date.now()
+  const leadMs = remainingMs > 0 ? Math.min(25_000, Math.floor(remainingMs * 0.25)) : 0
+  const delay = remainingMs <= 0 ? 0 : Math.max(1000, Math.min(remainingMs - leadMs, 2_147_483_647))
+  const boundWindow = typeof window !== 'undefined' ? window : null
+  jwtRefreshTimer = setTimeout(() => {
+    if (typeof window === 'undefined' || window !== boundWindow) return
+    void verifyActiveSession(true)
+  }, delay)
+  ;(jwtRefreshTimer as { unref?: () => void }).unref?.()
+}
+
+function verifyActiveSession(forceRefresh = false): Promise<boolean> {
+  if (sessionCheckInFlight) return sessionCheckInFlight
+  sessionCheckInFlight = (async () => {
+    const expectedPlatformToken = platformToken.value
+    if (expectedPlatformToken) {
+      let response: Response
+      try {
+        response = await fetch('/api/admin/organizations', {
+          headers: { 'Content-Type': 'application/json', 'X-Admin-Token': expectedPlatformToken },
+          credentials: 'include'
+        })
+      } catch {
+        if (platformToken.value === expectedPlatformToken) expireSession('server_unavailable')
+        return false
+      }
+      if (await isServerDownResponse(response)) {
+        if (platformToken.value === expectedPlatformToken) expireSession('server_unavailable')
+        return false
+      }
+      if (response.status === 401 || response.status === 403) {
+        if (platformToken.value === expectedPlatformToken) expireSession('invalidated')
+        return false
+      }
+      if (!response.ok) {
+        if (platformToken.value === expectedPlatformToken) expireSession('server_unavailable')
+        return false
+      }
+      const parsed = await readJsonSafely(response)
+      if (!parsed.ok) {
+        if (platformToken.value === expectedPlatformToken) expireSession('invalidated')
+        return false
+      }
+      return true
+    }
+
+    const expectedAccessToken = accessToken.value
+    if (!expectedAccessToken) return true
+
+    const expMs = parseJwtExpiryMs(expectedAccessToken)
+    let needsRefresh = forceRefresh || (expMs !== null && Date.now() >= expMs)
+
+    if (!needsRefresh) {
+      let response: Response
+      try {
+        response = await fetch('/api/portal/session', {
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${expectedAccessToken}` },
+          credentials: 'include'
+        })
+      } catch {
+        if (accessToken.value === expectedAccessToken) expireSession('server_unavailable')
+        return false
+      }
+      if (await isServerDownResponse(response)) {
+        if (accessToken.value === expectedAccessToken) expireSession('server_unavailable')
+        return false
+      }
+      if (response.ok) {
+        const parsed = await readJsonSafely(response)
+        const data = parsed.ok ? (parsed.value as { platformAdmin?: boolean; accountTier?: string; totpEnabled?: boolean; mfaState?: string }) : null
+        if (!data || typeof data.mfaState !== 'string') {
+          if (accessToken.value === expectedAccessToken) expireSession('invalidated')
+          return false
+        }
+        if (accessToken.value === expectedAccessToken) {
+          if (user.value) {
+            user.value = {
+              ...user.value,
+              platformAdmin: typeof data.platformAdmin === 'boolean' ? data.platformAdmin : user.value.platformAdmin,
+              accountTier: (data.accountTier as typeof user.value.accountTier) ?? user.value.accountTier,
+              totpEnabled: typeof data.totpEnabled === 'boolean' ? data.totpEnabled : user.value.totpEnabled
+            }
+          }
+          mfaState.value = data.mfaState as typeof mfaState.value
+          if (typeof sessionStorage !== 'undefined') {
+            if (user.value) sessionStorage.setItem('aiconnect.user', JSON.stringify(user.value))
+            sessionStorage.setItem('aiconnect.mfaState', mfaState.value)
+          }
+          scheduleJwtRefresh()
+        }
+        return true
+      }
+      if (response.status === 403) {
+        const parsed = await readJsonSafely(response)
+        const code = parsed.ok ? (parsed.value as { code?: unknown }).code : undefined
+        if (code === 'TOTP_ENROLLMENT_REQUIRED' || code === 'TOTP_VERIFICATION_REQUIRED') {
+          if (accessToken.value === expectedAccessToken) {
+            const nextMfa = code === 'TOTP_ENROLLMENT_REQUIRED' ? 'ENROLLMENT_REQUIRED' : 'VERIFICATION_REQUIRED'
+            if (user.value) {
+              user.value = { ...user.value, totpEnabled: code === 'TOTP_VERIFICATION_REQUIRED' }
+            }
+            mfaState.value = nextMfa
+            if (typeof sessionStorage !== 'undefined') {
+              if (user.value) sessionStorage.setItem('aiconnect.user', JSON.stringify(user.value))
+              sessionStorage.setItem('aiconnect.mfaState', nextMfa)
+            }
+            scheduleJwtRefresh()
+          }
+          return true
+        }
+        if (accessToken.value === expectedAccessToken) expireSession('invalidated')
+        return false
+      }
+      if (response.status === 401) {
+        needsRefresh = true
+      } else {
+        if (accessToken.value === expectedAccessToken) expireSession('server_unavailable')
+        return false
+      }
+    }
+
+    if (needsRefresh) {
+      if (accessToken.value !== expectedAccessToken) return true
+      try {
+        acceptSession(await refreshAuthentication())
+        sessionNotice.value = ''
+        scheduleJwtRefresh()
+        return true
+      } catch (error) {
+        if (accessToken.value === expectedAccessToken) {
+          expireSession(isServerUnavailableFailure(error) ? 'server_unavailable' : 'expired')
+        }
+        return false
+      }
+    }
+    return true
+  })().finally(() => {
+    sessionCheckInFlight = null
+  })
+  return sessionCheckInFlight
+}
+
+function armSessionMonitor() {
+  if (monitorArmed || typeof window === 'undefined') return
+  monitorArmed = true
+  const boundWindow = window
+  const boundDocument = typeof document !== 'undefined' ? document : null
+
+  const triggerCheck = () => {
+    if (detachIfStaleWindow()) return
+    if (checkingSession.value || (!accessToken.value && !platformToken.value)) return
+    const now = Date.now()
+    if (now - lastFocusCheckAt < 5000) return
+    lastFocusCheckAt = now
+    void verifyActiveSession()
+  }
+
+  const onVisibilityChange = () => {
+    if (boundDocument && boundDocument.visibilityState === 'visible') {
+      triggerCheck()
+    }
+  }
+
+  const onSessionUpdated = () => {
+    if (detachIfStaleWindow()) return
+    sessionNotice.value = ''
+    scheduleJwtRefresh()
+  }
+
+  const detachIfStaleWindow = (): boolean => {
+    if (typeof window !== 'undefined' && window === boundWindow) return false
+    if (heartbeatTimer !== null) {
+      clearInterval(heartbeatTimer)
+      heartbeatTimer = null
+    }
+    clearJwtRefreshTimer()
+    boundWindow.removeEventListener('aiconnect:session', onSessionUpdated)
+    boundWindow.removeEventListener('focus', triggerCheck)
+    if (boundDocument && typeof boundDocument.removeEventListener === 'function') {
+      boundDocument.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+    return true
+  }
+
+  boundWindow.addEventListener('aiconnect:session', onSessionUpdated)
+  boundWindow.addEventListener('focus', triggerCheck)
+  if (boundDocument && typeof boundDocument.addEventListener === 'function') {
+    boundDocument.addEventListener('visibilitychange', onVisibilityChange)
+  }
+
+  heartbeatTimer = setInterval(() => {
+    if (detachIfStaleWindow()) return
+    if (!checkingSession.value && (accessToken.value || platformToken.value)) {
+      void verifyActiveSession()
+    }
+  }, 30_000)
+  ;(heartbeatTimer as { unref?: () => void }).unref?.()
+}
+
 async function restoreSession() {
   applyPreferences()
-  if (platformToken.value) {
+  armSessionMonitor()
+  if (registerRoute.value.isRegister) {
+    clearSession()
     checkingSession.value = false
+    return
+  }
+  if (platformToken.value) {
+    try {
+      await verifyActiveSession()
+    } finally {
+      checkingSession.value = false
+    }
     return
   }
   if (
@@ -220,17 +523,18 @@ async function restoreSession() {
     && typeof user.value.totpEnabled === 'boolean'
     && Boolean(user.value.accountTier)
   ) {
-    checkingSession.value = false
-    return
-  }
-  if (registerRoute.value.isRegister) {
-    clearSession()
-    checkingSession.value = false
+    try {
+      await verifyActiveSession()
+    } finally {
+      checkingSession.value = false
+    }
     return
   }
   clearSession()
   try {
     acceptSession(await refreshAuthentication())
+    sessionNotice.value = ''
+    scheduleJwtRefresh()
   } catch {
     clearSession()
   } finally {
@@ -261,7 +565,7 @@ onBeforeUnmount(() => {
   </div>
   <ConsoleShell
     v-else-if="activeView === 'console'"
-    :key="accessToken || platformToken"
+    :key="platformToken ? `platform:${platformToken}` : `${user?.id ?? 'guest'}:${mfaState}`"
     :user="user"
     :platform-token-session="Boolean(platformToken)"
     :theme="theme"
@@ -293,6 +597,7 @@ onBeforeUnmount(() => {
     :mfa-required="activeView === 'login-mfa'"
     :pending-access-token="accessToken"
     :pending-user="user"
+    :session-notice="sessionNotice"
     @authenticated="acceptSession"
     @platform-token="acceptPlatformToken"
     @toggle-theme="toggleTheme"

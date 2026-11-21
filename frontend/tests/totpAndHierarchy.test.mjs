@@ -569,9 +569,16 @@ test('Root routes fail-closed: blocks ConsoleShell until TOTP verified and mount
     '\\./ConsoleShell\\.vue': stubModuleUrl('export default defineComponent({ name: "ConsoleShell", props: ["user", "platformTokenSession", "theme", "fontScale"], setup: p => () => h("div", { "data-view": "console" }, p.platformTokenSession ? "CONSOLE_PLATFORM_TOKEN" : "CONSOLE_USER") })'),
     '\\./TotpOnboardingView\\.vue': stubModuleUrl('export default defineComponent({ name: "TotpOnboardingView", props: ["accessToken", "user", "theme"], setup: () => () => h("div", { "data-view": "totp-onboarding" }, "TOTP_ONBOARDING_VIEW") })'),
     '\\./InviteRegistrationView\\.vue': stubModuleUrl('export default defineComponent({ name: "InviteRegistrationView", props: ["initialCode", "theme"], setup: p => () => h("div", { "data-view": "invite-register" }, "INVITE_REG:" + (p.initialCode || "")) })'),
-    '\\./LoginView\\.vue': stubModuleUrl('export default defineComponent({ name: "LoginView", props: ["theme", "mfaRequired", "pendingAccessToken", "pendingUser"], setup: p => () => h("div", { "data-view": "login" }, p.mfaRequired ? "LOGIN_MFA_STEP" : "LOGIN_STEP") })')
+    '\\./LoginView\\.vue': stubModuleUrl('export default defineComponent({ name: "LoginView", props: ["theme", "mfaRequired", "pendingAccessToken", "pendingUser", "sessionNotice"], setup: p => () => h("div", { "data-view": "login" }, p.mfaRequired ? "LOGIN_MFA_STEP" : (p.sessionNotice ? "LOGIN_STEP:" + p.sessionNotice : "LOGIN_STEP")) })')
   }
   const { default: Root } = await compileVueComponent('../src/Root.vue', 'root-routing-test', stubs)
+
+  const errJson = (status, payload) => ({
+    ok: false,
+    status,
+    text: async () => JSON.stringify(payload),
+    json: async () => payload
+  })
 
   // 1. #register?code=ABC123 -> InviteRegistrationView
   await withDomGlobals(async () => {
@@ -585,6 +592,10 @@ test('Root routes fail-closed: blocks ConsoleShell until TOTP verified and mount
 
   // 2. ENROLLMENT_REQUIRED -> TotpOnboardingView (never ConsoleShell)
   await withDomGlobals(async () => {
+    globalThis.fetch = async url => {
+      if (url === '/api/portal/session') return errJson(403, { code: 'TOTP_ENROLLMENT_REQUIRED', message: 'Enrollment required' })
+      throw new Error(`Unexpected fetch: ${url}`)
+    }
     const { renderer, root, textContent } = createMemoryDom()
     const app = renderer.createApp(Root)
     app.mount(root)
@@ -599,6 +610,10 @@ test('Root routes fail-closed: blocks ConsoleShell until TOTP verified and mount
 
   // 3. VERIFICATION_REQUIRED -> LoginView MFA step (never ConsoleShell)
   await withDomGlobals(async () => {
+    globalThis.fetch = async url => {
+      if (url === '/api/portal/session') return errJson(403, { code: 'TOTP_VERIFICATION_REQUIRED', message: 'Verification required' })
+      throw new Error(`Unexpected fetch: ${url}`)
+    }
     const { renderer, root, textContent } = createMemoryDom()
     const app = renderer.createApp(Root)
     app.mount(root)
@@ -613,6 +628,10 @@ test('Root routes fail-closed: blocks ConsoleShell until TOTP verified and mount
 
   // 4. VERIFIED + totpEnabled: true -> ConsoleShell
   await withDomGlobals(async () => {
+    globalThis.fetch = async url => {
+      if (url === '/api/portal/session') return okJson({ platformAdmin: false, accountTier: 'GENERAL_USER', totpEnabled: true, mfaState: 'VERIFIED', memberships: [] })
+      throw new Error(`Unexpected fetch: ${url}`)
+    }
     const { renderer, root, textContent } = createMemoryDom()
     const app = renderer.createApp(Root)
     app.mount(root)
@@ -627,6 +646,10 @@ test('Root routes fail-closed: blocks ConsoleShell until TOTP verified and mount
 
   // 5. Emergency platformToken -> ConsoleShell preserved
   await withDomGlobals(async () => {
+    globalThis.fetch = async url => {
+      if (url === '/api/admin/organizations') return okJson([])
+      throw new Error(`Unexpected fetch: ${url}`)
+    }
     const { renderer, root, textContent } = createMemoryDom()
     const app = renderer.createApp(Root)
     app.mount(root)
@@ -635,6 +658,305 @@ test('Root routes fail-closed: blocks ConsoleShell until TOTP verified and mount
     app.unmount()
   }, {
     'aiconnect.platformToken': 'break-glass-admin-token'
+  })
+})
+
+test('Root and api cleanly exit to LoginView on time expiration, server shutdown, and redeployment invalidation', async () => {
+  const mountCounts = { console: 0 }
+  const stubs = {
+    '\\./ConsoleShell\\.vue': stubModuleUrl('export default defineComponent({ name: "ConsoleShell", props: ["user", "platformTokenSession", "theme", "fontScale"], setup: p => () => h("div", { "data-view": "console" }, p.platformTokenSession ? "CONSOLE_PLATFORM_TOKEN" : "CONSOLE_USER") })'),
+    '\\./TotpOnboardingView\\.vue': stubModuleUrl('export default defineComponent({ name: "TotpOnboardingView", props: ["accessToken", "user", "theme"], setup: () => () => h("div", { "data-view": "totp-onboarding" }, "TOTP_ONBOARDING_VIEW") })'),
+    '\\./InviteRegistrationView\\.vue': stubModuleUrl('export default defineComponent({ name: "InviteRegistrationView", props: ["initialCode", "theme"], setup: p => () => h("div", { "data-view": "invite-register" }, "INVITE_REG:" + (p.initialCode || "")) })'),
+    '\\./LoginView\\.vue': stubModuleUrl('export default defineComponent({ name: "LoginView", props: ["theme", "mfaRequired", "pendingAccessToken", "pendingUser", "sessionNotice"], setup: p => () => h("div", { "data-view": "login" }, p.mfaRequired ? "LOGIN_MFA_STEP" : (p.sessionNotice ? "LOGIN_STEP:" + p.sessionNotice : "LOGIN_STEP")) })')
+  }
+  const { default: Root } = await compileVueComponent('../src/Root.vue', 'root-expiration-test', stubs)
+  const { default: LoginView } = await compileVueComponent('../src/LoginView.vue', 'login-expiration-test', { '\\./BaseModal\\.vue': baseModalStubUrl })
+  const api = await import(typeScriptModuleUrl('../src/api.ts'))
+
+  const makeJwt = offsetSeconds => {
+    const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')
+    const payload = Buffer.from(JSON.stringify({ sub: 'u1', exp: Math.floor(Date.now() / 1000) + offsetSeconds })).toString('base64url')
+    return `${header}.${payload}.sig`
+  }
+  const errJson = (status, payload) => ({
+    ok: false,
+    status,
+    text: async () => JSON.stringify(payload),
+    json: async () => payload
+  })
+  const sampleUser = { id: 'u1', email: 'u@x.com', platformAdmin: false, accountTier: 'GENERAL_USER', totpEnabled: true }
+
+  // A. Expired JWT + failed refresh on page load -> cleanly exits to LoginView, clears storage & hash
+  await withDomGlobals(async () => {
+    const calls = []
+    globalThis.fetch = async url => {
+      calls.push(url)
+      if (url === '/api/auth/refresh') return errJson(401, { code: 'REFRESH_TOKEN_REQUIRED', message: 'Expired' })
+      throw new Error(`Unexpected fetch: ${url}`)
+    }
+    const { renderer, root, textContent } = createMemoryDom()
+    const app = renderer.createApp(Root)
+    app.mount(root)
+    await flush()
+    assert.match(textContent(root), /^LOGIN_STEP:.*만료/)
+    assert.equal(globalThis.sessionStorage.getItem('aiconnect.accessToken'), null)
+    assert.equal(globalThis.sessionStorage.getItem('aiconnect.setup.organizationId'), null)
+    assert.equal(globalThis.window.location.hash, '')
+    assert.deepEqual(calls, ['/api/auth/refresh'])
+    app.unmount()
+  }, {
+    'aiconnect.accessToken': makeJwt(-30),
+    'aiconnect.mfaState': 'VERIFIED',
+    'aiconnect.user': JSON.stringify(sampleUser),
+    'aiconnect.setup.organizationId': 'org-1'
+  }, '#projects')
+
+  // B. Locally expired JWT recovers silently when refresh token is still valid
+  await withDomGlobals(async () => {
+    const freshJwt = makeJwt(900)
+    globalThis.fetch = async url => {
+      if (url === '/api/auth/refresh') return okJson({ accessToken: freshJwt, user: sampleUser, mfaState: 'VERIFIED' })
+      if (url === '/api/portal/session') return okJson({ platformAdmin: false, accountTier: 'GENERAL_USER', totpEnabled: true, mfaState: 'VERIFIED', memberships: [] })
+      throw new Error(`Unexpected fetch: ${url}`)
+    }
+    const { renderer, root, textContent } = createMemoryDom()
+    const app = renderer.createApp(Root)
+    app.mount(root)
+    await flush()
+    assert.equal(textContent(root), 'CONSOLE_USER')
+    assert.equal(globalThis.sessionStorage.getItem('aiconnect.accessToken'), freshJwt)
+    app.unmount()
+  }, {
+    'aiconnect.accessToken': makeJwt(-15),
+    'aiconnect.mfaState': 'VERIFIED',
+    'aiconnect.user': JSON.stringify(sampleUser)
+  }, '#projects')
+
+  // C. Server shutdown / unreachable (network TypeError or 503) on reload -> cleanly exits to LoginView
+  for (const failureMode of ['network', '503']) {
+    await withDomGlobals(async () => {
+      globalThis.fetch = async url => {
+        if (url === '/api/portal/session') {
+          if (failureMode === 'network') throw new TypeError('Failed to fetch')
+          return { ok: false, status: 503, text: async () => 'Service Unavailable', json: async () => { throw new SyntaxError('html') } }
+        }
+        throw new Error(`Unexpected fetch: ${url}`)
+      }
+      const { renderer, root, textContent } = createMemoryDom()
+      const app = renderer.createApp(Root)
+      app.mount(root)
+      await flush()
+      assert.match(textContent(root), /^LOGIN_STEP:.*연결이 끊어졌거나 종료/)
+      assert.equal(globalThis.sessionStorage.getItem('aiconnect.accessToken'), null)
+      assert.equal(globalThis.window.location.hash, '')
+      app.unmount()
+    }, {
+      'aiconnect.accessToken': makeJwt(600),
+      'aiconnect.mfaState': 'VERIFIED',
+      'aiconnect.user': JSON.stringify(sampleUser)
+    }, '#dashboard')
+  }
+
+  // D. Stale / redeployed platformToken rejected with 401 -> cleanly exits to LoginView
+  await withDomGlobals(async () => {
+    globalThis.fetch = async url => {
+      if (url === '/api/admin/organizations') return errJson(401, { code: 'ADMIN_AUTH_REQUIRED', message: 'Invalid token' })
+      throw new Error(`Unexpected fetch: ${url}`)
+    }
+    const { renderer, root, textContent } = createMemoryDom()
+    const app = renderer.createApp(Root)
+    app.mount(root)
+    await flush()
+    assert.match(textContent(root), /^LOGIN_STEP:.*재배포 또는 인증 정보 변경/)
+    assert.equal(globalThis.sessionStorage.getItem('aiconnect.platformToken'), null)
+    assert.equal(globalThis.window.location.hash, '')
+    app.unmount()
+  }, {
+    'aiconnect.platformToken': 'stale-break-glass-token'
+  }, '#platform-admin')
+
+  // E. Active ConsoleShell exits immediately when adminFetch fails after refresh (redeploy/expiry) or 502 server shutdown
+  for (const mode of ['redeploy-401', 'gateway-502']) {
+    const initialJwt = makeJwt(600)
+    await withDomGlobals(async () => {
+      let failRequests = false
+      globalThis.fetch = async url => {
+        if (url === '/api/portal/session' && !failRequests) {
+          return okJson({ platformAdmin: false, accountTier: 'GENERAL_USER', totpEnabled: true, mfaState: 'VERIFIED', memberships: [] })
+        }
+        if (mode === 'redeploy-401') {
+          if (url === '/api/admin/organizations' || url === '/api/auth/refresh') {
+            return errJson(401, { code: 'INVALID_ACCESS_TOKEN', message: 'Invalid' })
+          }
+        }
+        if (mode === 'gateway-502') {
+          return { ok: false, status: 502, text: async () => 'Bad Gateway', json: async () => { throw new SyntaxError('html') } }
+        }
+        throw new Error(`Unexpected fetch: ${url}`)
+      }
+      const { renderer, root, textContent } = createMemoryDom()
+      const app = renderer.createApp(Root)
+      app.mount(root)
+      await flush()
+      assert.equal(textContent(root), 'CONSOLE_USER')
+
+      failRequests = true
+      await assert.rejects(() => api.adminFetch('/api/admin/organizations', { accessToken: initialJwt }))
+      await flush()
+      assert.match(textContent(root), /^LOGIN_STEP:/)
+      assert.equal(globalThis.sessionStorage.getItem('aiconnect.accessToken'), null)
+      assert.equal(globalThis.window.location.hash, '')
+      app.unmount()
+    }, {
+      'aiconnect.accessToken': initialJwt,
+      'aiconnect.mfaState': 'VERIFIED',
+      'aiconnect.user': JSON.stringify(sampleUser)
+    }, '#projects')
+  }
+
+  // Wait: ensure live active session seeded with real non-expired JWT also works cleanly on focus event when server goes down or revokes platformToken
+  await withDomGlobals(async () => {
+    let alive = true
+    globalThis.fetch = async url => {
+      if (url === '/api/admin/organizations') {
+        if (alive) return okJson([])
+        return errJson(401, { code: 'ADMIN_AUTH_REQUIRED', message: 'Rotated' })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }
+    const { renderer, root, textContent } = createMemoryDom()
+    const app = renderer.createApp(Root)
+    app.mount(root)
+    await flush()
+    assert.equal(textContent(root), 'CONSOLE_PLATFORM_TOKEN')
+
+    alive = false
+    globalThis.window.dispatchEvent(new globalThis.CustomEvent('focus'))
+    await flush()
+    assert.match(textContent(root), /^LOGIN_STEP:.*재배포 또는 인증 정보 변경/)
+    assert.equal(globalThis.sessionStorage.getItem('aiconnect.platformToken'), null)
+    assert.equal(globalThis.window.location.hash, '')
+    app.unmount()
+  }, {
+    'aiconnect.platformToken': 'active-platform-token'
+  }, '#infrastructure')
+
+  // F. Silent token rotation preserves mount without unmounting and resolves stale auth token on subsequent adminFetch
+  {
+    const jwt1 = makeJwt(600)
+    const jwt2 = makeJwt(900)
+    await withDomGlobals(async () => {
+      const sentAuthHeaders = []
+      const trackedConsoleStub = stubModuleUrl('export default defineComponent({ name: "ConsoleShell", props: ["user", "platformTokenSession", "theme", "fontScale"], setup() { globalThis.__consoleMounts = (globalThis.__consoleMounts || 0) + 1; return () => h("div", "CONSOLE_STABLE") } })')
+      const { default: TrackedRoot } = await compileVueComponent('../src/Root.vue', 'root-stable-mount-test', {
+        ...stubs,
+        '\\./ConsoleShell\\.vue': trackedConsoleStub
+      })
+      globalThis.__consoleMounts = 0
+      globalThis.fetch = async (url, init = {}) => {
+        if (url === '/api/portal/session') return okJson({ platformAdmin: false, accountTier: 'GENERAL_USER', totpEnabled: true, mfaState: 'VERIFIED', memberships: [] })
+        if (url === '/api/auth/refresh') return okJson({ accessToken: jwt2, user: sampleUser, mfaState: 'VERIFIED' })
+        if (url === '/api/admin/organizations') {
+          sentAuthHeaders.push(init.headers?.Authorization)
+          return okJson([])
+        }
+        throw new Error(`Unexpected fetch: ${url}`)
+      }
+      const { renderer, root, textContent } = createMemoryDom()
+      const app = renderer.createApp(TrackedRoot)
+      app.mount(root)
+      await flush()
+      assert.equal(textContent(root), 'CONSOLE_STABLE')
+      assert.equal(globalThis.__consoleMounts, 1)
+
+      await api.refreshAuthentication()
+      await flush()
+      assert.equal(globalThis.__consoleMounts, 1)
+      assert.equal(globalThis.sessionStorage.getItem('aiconnect.accessToken'), jwt2)
+
+      await api.adminFetch('/api/admin/organizations', { accessToken: jwt1 })
+      assert.deepEqual(sentAuthHeaders, [`Bearer ${jwt2}`])
+      app.unmount()
+      delete globalThis.__consoleMounts
+    }, {
+      'aiconnect.accessToken': jwt1,
+      'aiconnect.mfaState': 'VERIFIED',
+      'aiconnect.user': JSON.stringify(sampleUser)
+    })
+  }
+
+  // G. Pre-MFA LoginView Step 2: wrong OTP code stays on Step 2; expired session returns to Step 1
+  await withDomGlobals(async () => {
+    let phase = 'wrong-otp'
+    const expiredEvents = []
+    globalThis.window.addEventListener('aiconnect:session-expired', e => expiredEvents.push(e.detail?.reason))
+    globalThis.fetch = async url => {
+      if (url === '/api/auth/login') {
+        return okJson({ accessToken: 'pre-mfa-jwt', user: sampleUser, mfaState: 'VERIFICATION_REQUIRED' })
+      }
+      if (url === '/api/auth/totp/verify') {
+        if (phase === 'wrong-otp') return errJson(401, { code: 'INVALID_TOTP_CODE', message: '6자리 코드가 틀렸습니다.' })
+        return errJson(401, { code: 'INVALID_ACCESS_TOKEN', message: 'Pre-MFA session expired' })
+      }
+      if (url === '/api/auth/refresh') {
+        return errJson(401, { code: 'REFRESH_TOKEN_REQUIRED', message: 'Expired' })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }
+    const { renderer, root, walk, textContent } = createMemoryDom()
+    const app = renderer.createApp({ render: () => h(LoginView, { theme: 'dark' }) })
+    app.mount(root)
+    await flush()
+
+    const loginInputs = walk(root, el => el.tag === 'input')
+    loginInputs[0].value = 'u@x.com'
+    loginInputs[0].dispatch('input')
+    loginInputs[1].value = 'ValidPassword123!'
+    loginInputs[1].dispatch('input')
+    await nextTick()
+    walk(root, el => el.tag === 'form')[0].dispatch('submit')
+    await flush()
+    assert.match(textContent(root), /STEP 2 · QR 2차 확인 및 최종 승인/)
+
+    // Wrong OTP -> remains on Step 2, no session-expired event
+    const otpInput1 = walk(root, el => el.tag === 'input')[0]
+    otpInput1.value = '000000'
+    otpInput1.dispatch('input')
+    await nextTick()
+    walk(root, el => el.tag === 'form')[0].dispatch('submit')
+    await flush()
+    assert.equal(expiredEvents.length, 0)
+    assert.match(textContent(root), /STEP 2 · QR 2차 확인 및 최종 승인/)
+    assert.match(textContent(root), /6자리 코드가 틀렸습니다/)
+
+    // Expired pre-MFA session -> dispatches session-expired and returns to Step 1
+    phase = 'expired-session'
+    const otpInput2 = walk(root, el => el.tag === 'input')[0]
+    otpInput2.value = '123456'
+    otpInput2.dispatch('input')
+    await nextTick()
+    walk(root, el => el.tag === 'form')[0].dispatch('submit')
+    await flush()
+    assert.deepEqual(expiredEvents, ['expired'])
+    assert.match(textContent(root), /STEP 1 · 아이디 · 비밀번호 로그인/)
+    app.unmount()
+  })
+
+  // H. TotpOnboardingView pre-MFA setupTotp / enrollTotp 401 or 503 exits cleanly to LoginView
+  await withDomGlobals(async () => {
+    const expiredEvents = []
+    globalThis.window.addEventListener('aiconnect:session-expired', e => expiredEvents.push(e.detail?.reason))
+    globalThis.fetch = async url => {
+      if (url === '/api/auth/totp/setup') return errJson(401, { code: 'INVALID_ACCESS_TOKEN', message: 'Expired' })
+      if (url === '/api/auth/refresh') return errJson(401, { code: 'REFRESH_TOKEN_REQUIRED', message: 'Expired' })
+      throw new Error(`Unexpected fetch: ${url}`)
+    }
+    await assert.rejects(() => api.setupTotp('expired-onboarding-jwt'))
+    assert.deepEqual(expiredEvents, ['expired'])
+
+    globalThis.fetch = async () => ({ ok: false, status: 503, text: async () => 'Down', json: async () => { throw new SyntaxError('html') } })
+    await assert.rejects(() => api.enrollTotp('onboarding-jwt', '123456'))
+    assert.deepEqual(expiredEvents, ['expired', 'server_unavailable'])
   })
 })
 
