@@ -4,9 +4,11 @@ import com.aiconnect.llmgateway.domain.*;
 import com.aiconnect.llmgateway.identity.*;
 import com.aiconnect.llmgateway.repository.*;
 import com.aiconnect.llmgateway.service.*;
+import com.aiconnect.llmgateway.team.Team;
 import com.aiconnect.llmgateway.team.TeamAccessService;
 import com.aiconnect.llmgateway.team.TeamMember;
 import com.aiconnect.llmgateway.team.TeamMemberRepository;
+import com.aiconnect.llmgateway.team.TeamRepository;
 import com.aiconnect.llmgateway.web.ApiException;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -37,6 +39,7 @@ public class DeveloperPortalController {
     private final OrganizationMemberRepository memberships;
     private final ProjectRepository projects;
     private final ProjectMembershipRepository projectMemberships;
+    private final TeamRepository teams;
     private final TeamMemberRepository teamMembers;
     private final AppUserRepository users;
     private final ProjectServiceAccessRepository serviceAccess;
@@ -49,7 +52,7 @@ public class DeveloperPortalController {
 
     public DeveloperPortalController(OrganizationRepository organizations, OrganizationMemberRepository memberships,
                                     ProjectRepository projects, ProjectMembershipRepository projectMemberships,
-                                    TeamMemberRepository teamMembers, AppUserRepository users,
+                                    TeamRepository teams, TeamMemberRepository teamMembers, AppUserRepository users,
                                     ProjectServiceAccessRepository serviceAccess, LlmServiceRepository services,
                                     ApiKeyRepository apiKeys, ApiKeyService apiKeyService, TeamAccessService access,
                                     @Value("${gateway.internal-base-url:}") String internalBaseUrl,
@@ -58,6 +61,7 @@ public class DeveloperPortalController {
         this.memberships = memberships;
         this.projects = projects;
         this.projectMemberships = projectMemberships;
+        this.teams = teams;
         this.teamMembers = teamMembers;
         this.users = users;
         this.serviceAccess = serviceAccess;
@@ -330,7 +334,10 @@ public class DeveloperPortalController {
                 .thenComparing(RelationshipUserView::email, String.CASE_INSENSITIVE_ORDER));
         boolean projectCanIssue = "ACTIVE".equalsIgnoreCase(project.getStatus())
                 && access.canIssueProjectApiKeys(actor, project.getId());
-        return new RelationshipProjectView(project.getId(), project.getName(), project.getStatus(), projectCanIssue, managers, members);
+        String teamName = project.getTeamId() != null
+                ? teams.findById(project.getTeamId()).map(Team::getName).orElse(null)
+                : null;
+        return new RelationshipProjectView(project.getId(), project.getName(), teamName, project.getStatus(), projectCanIssue, managers, members);
     }
 
     private static boolean containsCurrentUser(List<RelationshipUserView> list) {
@@ -345,6 +352,7 @@ public class DeveloperPortalController {
     public record RelationshipProjectView(
             UUID id,
             String name,
+            String teamName,
             String status,
             boolean canIssueApiKeys,
             List<RelationshipUserView> managers,

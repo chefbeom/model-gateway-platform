@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: AIConnect LLM Service Platform API
-  version: 0.2.0
+  version: 0.3.0
   description: Hardware-independent LLM control plane and OpenAI-compatible data plane.
 servers:
   - url: https://llm.example.com
@@ -588,6 +588,415 @@ paths:
       responses:
         '200': { description: Request metadata for the authenticated API key }
         '404': { $ref: '#/components/responses/ApiError' }
+  /api/auth/totp/setup:
+    post:
+      tags: [Authentication]
+      summary: Begin TOTP MFA setup and return provisioning URI
+      security: [{ AdminBearer: [] }]
+      responses: { '200': { description: TOTP secret and otpauth URI }, '401': { $ref: '#/components/responses/ApiError' } }
+  /api/auth/totp/enroll:
+    post:
+      tags: [Authentication]
+      summary: Confirm initial TOTP code, activate MFA, and issue recovery codes
+      security: [{ AdminBearer: [] }]
+      responses: { '200': { description: MFA-verified session and recovery codes }, '400': { $ref: '#/components/responses/ApiError' } }
+  /api/auth/totp/verify:
+    post:
+      tags: [Authentication]
+      summary: Verify TOTP or recovery code to upgrade an authenticated session
+      security: [{ AdminBearer: [] }]
+      responses: { '200': { $ref: '#/components/responses/AuthSession' }, '401': { $ref: '#/components/responses/ApiError' } }
+  /api/auth/invitations/inspect:
+    post:
+      tags: [Authentication]
+      summary: Validate a one-time invitation code and return scoped metadata
+      responses: { '200': { description: Invitation metadata }, '404': { $ref: '#/components/responses/ApiError' } }
+  /api/auth/invitations/accept:
+    post:
+      tags: [Authentication]
+      summary: Register an invited user account and enter TOTP enrollment state
+      responses: { '200': { $ref: '#/components/responses/AuthSession' }, '400': { $ref: '#/components/responses/ApiError' } }
+  /api/portal/session:
+    get:
+      tags: [Control plane]
+      summary: Inspect current authenticated account tier, MFA status, and memberships
+      security: [{ AdminBearer: [] }]
+      responses: { '200': { description: Session tier and membership summary }, '401': { $ref: '#/components/responses/ApiError' } }
+  /api/portal/connection:
+    get:
+      tags: [Control plane]
+      summary: List advertised internal and external OpenAI SDK gateway URLs
+      security: [{ AdminBearer: [] }]
+      responses: { '200': { description: Deployment-aware connection endpoints } }
+  /api/portal/organizations/{organizationId}/projects:
+    get:
+      tags: [Control plane]
+      summary: List projects accessible to the authenticated portal user
+      security: [{ AdminBearer: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrganizationId' }]
+      responses: { '200': { description: Scoped portal project list } }
+  /api/portal/organizations/{organizationId}/relationship:
+    get:
+      tags: [Control plane]
+      summary: Get hierarchical organization relationship view with top admins, projects, managers, and members
+      security: [{ AdminBearer: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrganizationId' }]
+      responses: { '200': { description: Hierarchical organization relationship payload }, '403': { $ref: '#/components/responses/ApiError' } }
+  /api/portal/projects/{projectId}/api-keys:
+    get:
+      tags: [Control plane]
+      summary: List API keys visible to the portal user in a project
+      security: [{ AdminBearer: [] }]
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      responses: { '200': { description: Project API key summaries } }
+    post:
+      tags: [Control plane]
+      summary: Issue a project API key within delegated permission and boundary constraints
+      security: [{ AdminBearer: [] }]
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      responses: { '200': { description: Newly issued API key secret }, '403': { $ref: '#/components/responses/ApiError' } }
+  /api/portal/projects/{projectId}/api-keys/temporary:
+    post:
+      tags: [Control plane]
+      summary: Issue a short-lived project API key for playground verification
+      security: [{ AdminBearer: [] }]
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      responses: { '200': { description: Temporary API key secret } }
+  /api/portal/projects/{projectId}/api-keys/{apiKeyId}:
+    delete:
+      tags: [Control plane]
+      summary: Revoke an active API key in a project
+      security: [{ AdminBearer: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ProjectId' }
+        - { name: apiKeyId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses: { '204': { description: API key revoked } }
+  /api/portal/projects/{projectId}/api-keys/{apiKeyId}/record:
+    delete:
+      tags: [Control plane]
+      summary: Delete a revoked API key record from history
+      security: [{ AdminBearer: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ProjectId' }
+        - { name: apiKeyId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses: { '204': { description: Revoked API key record deleted } }
+  /api/portal/projects/{projectId}/connection-requests:
+    get:
+      tags: [Control plane]
+      summary: List connection registration requests submitted for a project
+      security: [{ AdminBearer: [] }]
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      responses: { '200': { description: Project connection requests } }
+    post:
+      tags: [Control plane]
+      summary: Submit a runtime or external-provider connection request for platform admin review
+      security: [{ AdminBearer: [] }]
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      responses: { '200': { description: Created connection registration request } }
+  /api/portal/organizations/{organizationId}/usage-overview:
+    get:
+      tags: [Usage]
+      summary: Get role-scoped usage overview within an organization
+      security: [{ AdminBearer: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrganizationId' }]
+      responses: { '200': { description: Scoped usage totals and available projects } }
+  /api/portal/organizations/{organizationId}/usage-overview/requests:
+    get:
+      tags: [Usage]
+      summary: List role-scoped request history within an organization
+      security: [{ AdminBearer: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrganizationId' }]
+      responses: { '200': { description: Scoped request summaries } }
+  /api/portal/organizations/{organizationId}/usage-overview/requests/{requestId}:
+    get:
+      tags: [Usage]
+      summary: Get role-scoped request detail
+      security: [{ AdminBearer: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrganizationId' }
+        - { name: requestId, in: path, required: true, schema: { type: string } }
+      responses: { '200': { description: Scoped request detail } }
+  /api/portal/organizations/{organizationId}/usage-overview/own-key-quotas:
+    get:
+      tags: [Usage]
+      summary: List spend quotas attached directly to keys issued by the caller
+      security: [{ AdminBearer: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrganizationId' }]
+      responses: { '200': { description: Own-key spend quotas } }
+  /api/admin/platform/account-invitations:
+    get:
+      tags: [Control plane]
+      summary: List platform-wide account invitations
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      responses: { '200': { description: Account invitations } }
+    post:
+      tags: [Control plane]
+      summary: Issue a one-time invitation code for a project director or general user
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      responses: { '200': { description: Issued invitation code and link } }
+  /api/admin/platform/account-invitations/{invitationId}/revoke:
+    post:
+      tags: [Control plane]
+      summary: Revoke a pending platform invitation
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ name: invitationId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '204': { description: Invitation revoked } }
+  /api/admin/organizations/{organizationId}/account-invitations:
+    get:
+      tags: [Control plane]
+      summary: List organization or project-scoped invitations
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrganizationId' }]
+      responses: { '200': { description: Scoped invitations } }
+    post:
+      tags: [Control plane]
+      summary: Issue a project-scoped general user invitation
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrganizationId' }]
+      responses: { '200': { description: Issued invitation code and link } }
+  /api/admin/organizations/{organizationId}/account-invitations/{invitationId}/revoke:
+    post:
+      tags: [Control plane]
+      summary: Revoke a pending organization invitation
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrganizationId' }
+        - { name: invitationId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses: { '204': { description: Invitation revoked } }
+  /api/admin/platform/projects/{projectId}/managers:
+    get:
+      tags: [Control plane]
+      summary: List assigned managers for a project
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      responses: { '200': { description: Assigned project managers } }
+  /api/admin/platform/projects/{projectId}/managers/{userId}:
+    put:
+      tags: [Control plane]
+      summary: Explicitly assign a project director as project manager
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ProjectId' }
+        - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses: { '200': { description: Project manager assigned } }
+    delete:
+      tags: [Control plane]
+      summary: Revoke a project manager and cascade keys, invitations, and scope
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ProjectId' }
+        - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses: { '204': { description: Project manager revoked } }
+  /api/admin/projects/{projectId}/members:
+    get:
+      tags: [Control plane]
+      summary: List project members and API-key issuance delegation flags
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      responses: { '200': { description: Project members } }
+  /api/admin/projects/{projectId}/members/{userId}:
+    patch:
+      tags: [Control plane]
+      summary: Update API-key issuance delegation for a project member
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ProjectId' }
+        - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses: { '200': { description: Updated project member delegation } }
+    delete:
+      tags: [Control plane]
+      summary: Revoke a member from a project and invalidate project-scoped credentials
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ProjectId' }
+        - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses: { '204': { description: Project member revoked } }
+  /api/admin/platform/projects/{projectId}/quota-ceiling:
+    get:
+      tags: [Control plane]
+      summary: Get platform administrator quota ceilings for a project
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      responses: { '200': { description: Project quota ceiling } }
+    put:
+      tags: [Control plane]
+      summary: Set platform administrator RPM and monthly token ceilings for a project
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      responses: { '200': { description: Updated project quota ceiling } }
+  /api/admin/projects/{projectId}/spend-quotas:
+    get:
+      tags: [Control plane]
+      summary: List admin ceilings and sub-quotas for a project
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      responses: { '200': { description: Project spend quota overview } }
+    post:
+      tags: [Control plane]
+      summary: Create a spend sub-quota within administrator ceilings
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      responses: { '200': { description: Created spend quota } }
+  /api/admin/platform/runtime-endpoints/{endpointId}/trust:
+    get:
+      tags: [Control plane]
+      summary: Inspect runtime endpoint trust classification and expiry
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/EndpointId' }]
+      responses: { '200': { description: Runtime trust attestation } }
+    put:
+      tags: [Control plane]
+      summary: Classify a runtime endpoint as INTERNAL or EXTERNAL_NO_RETENTION
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/EndpointId' }]
+      responses: { '200': { description: Updated runtime trust attestation } }
+  /api/admin/platform/runtime-endpoints/{endpointId}/trust/revoke:
+    post:
+      tags: [Control plane]
+      summary: Immediately revoke runtime endpoint trust classification
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/EndpointId' }]
+      responses: { '204': { description: Runtime trust revoked } }
+  /api/admin/platform/projects/{projectId}/runtime-approvals/{endpointId}:
+    get:
+      tags: [Control plane]
+      summary: Inspect project-level approval for a classified runtime endpoint
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ProjectId' }
+        - { $ref: '#/components/parameters/EndpointId' }
+      responses: { '200': { description: Project runtime approval state } }
+    put:
+      tags: [Control plane]
+      summary: Grant or update project-level runtime endpoint approval
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ProjectId' }
+        - { $ref: '#/components/parameters/EndpointId' }
+      responses: { '204': { description: Project runtime approval updated } }
+    delete:
+      tags: [Control plane]
+      summary: Revoke project-level runtime endpoint approval
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ProjectId' }
+        - { $ref: '#/components/parameters/EndpointId' }
+      responses: { '204': { description: Project runtime approval deleted } }
+  /api/admin/platform/connection-requests:
+    get:
+      tags: [Control plane]
+      summary: List pending and decided runtime/provider connection registration requests
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      responses: { '200': { description: Connection registration requests } }
+  /api/admin/platform/connection-requests/{id}/decision:
+    post:
+      tags: [Control plane]
+      summary: Approve or reject a connection registration request
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '200': { description: Decided connection registration request } }
+  /api/admin/organizations/{organizationId}/data-protection:
+    get:
+      tags: [Control plane]
+      summary: Get organization-level sensitive-data protection policy
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrganizationId' }]
+      responses: { '200': { description: Organization data-protection policy } }
+    put:
+      tags: [Control plane]
+      summary: Update organization-level sensitive-data protection policy
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrganizationId' }]
+      responses: { '200': { description: Updated organization data-protection policy } }
+  /api/admin/projects/{projectId}/data-protection:
+    get:
+      tags: [Control plane]
+      summary: Get project-level sensitive-data protection policy
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      responses: { '200': { description: Project data-protection policy } }
+    put:
+      tags: [Control plane]
+      summary: Update project-level sensitive-data protection policy
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/ProjectId' }]
+      responses: { '200': { description: Updated project data-protection policy } }
+  /api/admin/services/{serviceId}/data-protection:
+    get:
+      tags: [Control plane]
+      summary: Get logical service sensitive-data protection policy
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/ServiceId' }]
+      responses: { '200': { description: Logical service data-protection policy } }
+    put:
+      tags: [Control plane]
+      summary: Update logical service sensitive-data protection policy
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/ServiceId' }]
+      responses: { '200': { description: Updated logical service data-protection policy } }
+  /api/admin/platform/overview:
+    get:
+      tags: [Control plane]
+      summary: Get platform-wide inventory counts
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      responses: { '200': { description: Global resource counts } }
+  /api/admin/platform/organizations:
+    get:
+      tags: [Control plane]
+      summary: List all organizations with summary counts
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      responses: { '200': { description: Platform organization summaries } }
+  /api/admin/platform/users:
+    get:
+      tags: [Control plane]
+      summary: List all platform user accounts
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      responses: { '200': { description: Platform users } }
+  /api/admin/platform/users/{userId}:
+    patch:
+      tags: [Control plane]
+      summary: Enable or disable a user account and revoke active tokens/keys on disable
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ name: userId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '200': { description: Updated platform user } }
+    delete:
+      tags: [Control plane]
+      summary: Permanently delete a user account after explicit email confirmation
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: confirmation, in: query, required: true, schema: { type: string } }
+      responses: { '204': { description: Platform user deleted } }
+  /api/admin/platform/users/{userId}/totp-reset:
+    post:
+      tags: [Control plane]
+      summary: Reset a user's TOTP secret and force re-enrollment on next login
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ name: userId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '204': { description: TOTP reset } }
+  /api/admin/platform/teams:
+    get:
+      tags: [Control plane]
+      summary: List all teams across organizations
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      responses: { '200': { description: Platform teams } }
+  /api/admin/platform/api-keys:
+    get:
+      tags: [Control plane]
+      summary: List all API keys across organizations and projects
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      responses: { '200': { description: Platform API keys } }
+  /api/beta/invitations/redeem:
+    post:
+      tags: [Authentication]
+      summary: Redeem a beta invitation through the dedicated beta ingress
+      responses: { '200': { description: Scoped beta API key }, '404': { $ref: '#/components/responses/ApiError' } }
+  /api/beta/operator/services:
+    get:
+      tags: [Control plane]
+      summary: List beta services accessible to the platform admin or assigned operator
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      responses: { '200': { description: Accessible beta services } }
 components:
   securitySchemes:
     ProjectApiKey: { type: http, scheme: bearer, bearerFormat: sk_llmg_... }

@@ -34,7 +34,6 @@ const busy = ref(false)
 const message = ref('')
 
 const teamOpen = ref(false)
-const userOpen = ref(false)
 const inviteOpen = ref(false)
 const memberOpen = ref(false)
 const memberRemoveOpen = ref(false)
@@ -47,7 +46,6 @@ const memberRole = ref<TeamRole>('DEVELOPER')
 const memberForRemoval = ref<{ userId: string; email: string; role: TeamRole } | null>(null)
 const teamDeletionPreview = ref<TeamDeletionPreview | null>(null)
 const userRemovalPreview = ref<UserRemovalPreview | null>(null)
-const userForm = ref({ email: '', password: '', organizationRole: 'DEVELOPER' as OrganizationUser['organizationRole'], teamId: '', teamRole: 'DEVELOPER' as TeamRole })
 
 const inviteForm = ref({
   targetTier: 'GENERAL_USER' as 'GENERAL_USER' | 'PROJECT_DIRECTOR',
@@ -282,33 +280,6 @@ async function resetUserTotp(user: OrganizationUser) {
   }
 }
 
-function openUserCreate() {
-  userForm.value = { email: '', password: '', organizationRole: 'DEVELOPER', teamId: selectedId.value, teamRole: 'DEVELOPER' }
-  userOpen.value = true
-}
-
-async function createUser() {
-  if (!userForm.value.email || userForm.value.password.length < 12) return
-  busy.value = true
-  try {
-    await adminFetch(`/api/admin/organizations/${props.organizationId}/users`, props.auth, {
-      method: 'POST',
-      body: JSON.stringify({
-        ...userForm.value,
-        teamId: userForm.value.teamId || null,
-        teamRole: userForm.value.teamId ? userForm.value.teamRole : null
-      })
-    })
-    userOpen.value = false
-    await load()
-    message.value = '조직 사용자를 추가했습니다.'
-  } catch (error) {
-    fail(error, '사용자 추가에 실패했습니다.')
-  } finally {
-    busy.value = false
-  }
-}
-
 function openMemberAdd() {
   memberUserId.value = availableUsers.value[0]?.id ?? ''
   memberRole.value = 'DEVELOPER'
@@ -442,7 +413,6 @@ onMounted(() => {
       </div>
       <div class="hero-actions">
         <button class="secondary-button" :disabled="!organizationId" @click="openInviteCreate">+ 초대 코드/링크 발급</button>
-        <button class="secondary-button" :disabled="!organizationId" @click="openUserCreate">+ 직접 사용자 추가</button>
         <button class="primary-button" :disabled="!organizationId" @click="teamOpen = true">+ 팀 생성</button>
       </div>
     </div>
@@ -689,7 +659,6 @@ onMounted(() => {
     </BaseModal>
 
     <BaseModal :open="teamOpen" title="새 팀 만들기" description="프로젝트 소유권과 구성원 권한을 나누는 회사 내부 팀 또는 부서를 등록합니다." size="sm" @close="teamOpen = false"><label class="field">팀 이름<input v-model.trim="teamName" maxlength="120" placeholder="AI Platform Team" @keyup.enter="createTeam" /></label><template #footer><button class="secondary-button" @click="teamOpen = false">취소</button><button class="primary-button" :disabled="busy || !teamName" @click="createTeam">팀 생성</button></template></BaseModal>
-    <BaseModal :open="userOpen" title="조직 사용자 추가" description="사용자는 조직 역할과 선택한 팀 역할에 따라 필요한 기능만 볼 수 있습니다." @close="userOpen = false"><div class="modal-form"><label class="field">이메일<input v-model.trim="userForm.email" type="email" placeholder="developer@company.com" /></label><label class="field">임시 비밀번호<input v-model="userForm.password" type="password" minlength="12" placeholder="12자 이상" /></label><label class="field">조직 역할<select v-model="userForm.organizationRole"><option value="DEVELOPER">Developer</option><option value="ORGANIZATION_ADMIN">Organization Admin</option></select></label><label class="field">팀<select v-model="userForm.teamId"><option value="">팀 미지정</option><option v-for="team in teams" :key="team.id" :value="team.id">{{ team.name }}</option></select></label><label v-if="userForm.teamId" class="field">팀 역할<select v-model="userForm.teamRole"><option value="TEAM_ADMIN">Team Admin</option><option value="PROJECT_OWNER">Project Owner</option><option value="DEVELOPER">Developer</option><option value="AUDITOR">Auditor</option></select></label></div><template #footer><button class="secondary-button" @click="userOpen = false">취소</button><button class="primary-button" :disabled="busy || !userForm.email || userForm.password.length < 12" @click="createUser">사용자 추가</button></template></BaseModal>
     <BaseModal :open="memberOpen" title="팀 구성원 배정" description="조직에 이미 등록된 사용자를 현재 팀에 연결합니다. 조직 권한은 바뀌지 않습니다." size="sm" @close="memberOpen = false"><div class="modal-form"><label class="field">사용자<select v-model="memberUserId"><option value="">사용자 선택</option><option v-for="user in availableUsers" :key="user.id" :value="user.id">{{ user.email }} · {{ user.organizationRole }}</option></select></label><label class="field">팀 역할<select v-model="memberRole"><option value="TEAM_ADMIN">Team Admin</option><option value="PROJECT_OWNER">Project Owner</option><option value="DEVELOPER">Developer</option><option value="AUDITOR">Auditor</option></select></label></div><template #footer><button class="secondary-button" @click="memberOpen = false">취소</button><button class="primary-button" :disabled="busy || !memberUserId" @click="addMember">구성원 배정</button></template></BaseModal>
     <BaseModal :open="memberRemoveOpen" title="팀 구성원 제거" description="이 작업은 선택한 팀 배정만 해제합니다." size="sm" @close="memberRemoveOpen = false"><div class="impact-box"><b>{{ memberForRemoval?.email }}</b><p>조직 계정, 다른 팀 배정, API 키는 유지됩니다.</p></div><template #footer><button class="secondary-button" @click="memberRemoveOpen = false">취소</button><button class="danger-button" :disabled="busy" @click="removeMember">팀에서 제거</button></template></BaseModal>
     <BaseModal :open="teamDeleteOpen" title="팀 및 부서 삭제" description="아래 영향 범위를 확인한 뒤에만 삭제를 진행하세요." size="lg" @close="teamDeleteOpen = false"><template v-if="teamDeletionPreview"><div class="impact-box danger"><b>{{ teamDeletionPreview.teamName }}</b><p>{{ teamDeletionPreview.behavior }}</p><div class="impact-counts"><span>구성원 {{ teamDeletionPreview.members.length }}명</span><span>프로젝트 {{ teamDeletionPreview.projects.length }}개</span><span>삭제할 API 키 {{ teamDeletionPreview.apiKeys.length }}개</span></div></div><section class="impact-section"><h3>영향받는 프로젝트</h3><div v-if="teamDeletionPreview.projects.length" class="impact-list"><div v-for="project in teamDeletionPreview.projects" :key="project.id"><b>{{ project.name }}</b><small>{{ project.status }} → 조직 공용 · SUSPENDED / API 키 {{ project.apiKeyCount }}개 제거</small></div></div><p v-else class="muted-copy">연결된 프로젝트가 없습니다.</p></section><section class="impact-section"><h3>삭제할 API 키 등록 위치</h3><div v-if="teamDeletionPreview.apiKeys.length" class="impact-list"><div v-for="key in teamDeletionPreview.apiKeys" :key="key.id"><b>{{ key.projectName }} · {{ key.name }}</b><small><code>{{ key.keyPrefix }}</code> · {{ key.status }}</small></div></div><p v-else class="muted-copy">삭제할 API 키가 없습니다.</p></section></template><template #footer><button class="secondary-button" @click="teamDeleteOpen = false">취소</button><button class="danger-button" :disabled="busy" @click="deleteTeam">팀 삭제 및 API 키 제거</button></template></BaseModal>

@@ -21,7 +21,9 @@ function compileVueComponent(relativePath, id, extraReplacements = {}) {
     .replace(/from ['"]\.\/quotaVisualization['"]/g, 'from ' + JSON.stringify(typeScriptModuleUrl('../src/quotaVisualization.ts')))
     .replace(/from ['"]\.\/externalCapabilities['"]/g, 'from ' + JSON.stringify(typeScriptModuleUrl('../src/externalCapabilities.ts')))
   for (const [pattern, replacementUrl] of Object.entries(extraReplacements)) {
-    script = script.replace(new RegExp(`from ['"]${pattern}['"]`, 'g'), 'from ' + JSON.stringify(replacementUrl))
+    script = script
+      .replace(new RegExp(`from ['"]${pattern}['"]`, 'g'), 'from ' + JSON.stringify(replacementUrl))
+      .replace(new RegExp(`import\\(['"]${pattern}['"]\\)`, 'g'), `import(${JSON.stringify(replacementUrl)})`)
   }
   return import('data:text/javascript;base64,' + Buffer.from(script).toString('base64'))
 }
@@ -1212,6 +1214,98 @@ test('relationship renders top tier, organization, managers, members and compact
       await nextTick()
       assert.doesNotMatch(textContent(root), /member4@aiconnect\.test/)
       assert.doesNotMatch(textContent(root), /project-five/)
+    } finally {
+      app.unmount()
+    }
+  })
+})
+
+test('relationship supports team chip, search/filter modes, compact density, and project navigation', async () => {
+  const { default: Relationship } = await compileVueComponent('../src/WorkspaceRelationship.vue', 'relationship-expansion-test')
+  await withDomGlobals(async () => {
+    const opened = []
+    globalThis.fetch = async () => okJson({
+      organizationId: 'org-1',
+      organizationName: 'Calen-Ledger-Project',
+      topUsers: [
+        { userId: 'u-admin', email: 'admin@aiconnect.test', accountTier: 'SYSTEM_ADMIN', role: 'SYSTEM_ADMIN', roleLabel: '시스템 관리자', canIssueApiKeys: true, currentUser: false }
+      ],
+      projects: [
+        {
+          id: 'p-1',
+          name: 'calen-ledger-ai',
+          teamName: 'Core Platform Team',
+          status: 'ACTIVE',
+          canIssueApiKeys: true,
+          managers: [
+            { userId: 'u-dir', email: 'director@aiconnect.test', accountTier: 'PROJECT_DIRECTOR', role: 'MANAGER', roleLabel: '프로젝트 총관리자', canIssueApiKeys: true, currentUser: true }
+          ],
+          members: [
+            { userId: 'u-dev', email: 'alice@aiconnect.test', accountTier: 'GENERAL_USER', role: 'MEMBER', roleLabel: '팀원', canIssueApiKeys: true, currentUser: false }
+          ]
+        },
+        {
+          id: 'p-2',
+          name: 'orphan-sandbox',
+          teamName: null,
+          status: 'ACTIVE',
+          canIssueApiKeys: false,
+          managers: [],
+          members: [
+            { userId: 'u-bob', email: 'bob@aiconnect.test', accountTier: 'GENERAL_USER', role: 'MEMBER', roleLabel: '팀원', canIssueApiKeys: false, currentUser: false }
+          ]
+        }
+      ]
+    })
+
+    const { renderer, root, walk, textContent, setInput } = createMemoryDom()
+    const app = renderer.createApp({
+      render: () => h(Relationship, {
+        organizationId: 'org-1',
+        organizationName: 'Calen-Ledger-Project',
+        auth: { accessToken: 'token' },
+        canNavigateProject: true,
+        onOpenProject: id => opened.push(id)
+      })
+    })
+    try {
+      app.mount(root)
+      await flush()
+
+      assert.match(textContent(root), /팀: Core Platform Team/)
+
+      // Project navigation button emits project id
+      const openBtn = walk(root, el => el.tag === 'button' && textContent(el).includes('프로젝트 열기'))[0]
+      assert.ok(openBtn)
+      openBtn.props.onClick()
+      assert.deepEqual(opened, ['p-1'])
+
+      // Compact mode toggles .compact class on .org-chart-tree
+      const compactBtn = walk(root, el => el.tag === 'button' && textContent(el).includes('컴팩트 보기'))[0]
+      compactBtn.props.onClick()
+      await nextTick()
+      assert.equal(walk(root, el => typeof el.props?.class === 'string' && el.props.class.split(' ').includes('compact')).length, 1)
+
+      // Filter: 내 소속만 shows only p-1
+      walk(root, el => el.tag === 'button' && textContent(el).includes('내 소속만'))[0].props.onClick()
+      await nextTick()
+      assert.match(textContent(root), /calen-ledger-ai/)
+      assert.doesNotMatch(textContent(root), /orphan-sandbox/)
+
+      // Filter: 총관리자 미배정 shows only p-2
+      walk(root, el => el.tag === 'button' && textContent(el).includes('총관리자 미배정'))[0].props.onClick()
+      await nextTick()
+      assert.doesNotMatch(textContent(root), /calen-ledger-ai/)
+      assert.match(textContent(root), /orphan-sandbox/)
+
+      // Back to 전체 and search by member email
+      walk(root, el => el.tag === 'button' && textContent(el).includes('전체 ('))[0].props.onClick()
+      await nextTick()
+      const searchInput = walk(root, el => el.tag === 'input' && el.props['aria-label'] === '관계도 검색')[0]
+      await setInput(searchInput, 'alice@aiconnect.test')
+      await nextTick()
+      assert.match(textContent(root), /calen-ledger-ai/)
+      assert.doesNotMatch(textContent(root), /orphan-sandbox/)
     } finally {
       app.unmount()
     }

@@ -15,6 +15,7 @@ type RelationshipUser = {
 type RelationshipProject = {
   id: string
   name: string
+  teamName?: string | null
   status: string
   canIssueApiKeys: boolean
   managers: RelationshipUser[]
@@ -35,6 +36,8 @@ type RelationshipResponse = {
   projects?: LegacyOrStructuredProject[]
 }
 
+type FilterMode = 'all' | 'mine' | 'unassigned'
+
 const MAX_VISIBLE_TOP_USERS = 2
 const MAX_VISIBLE_PROJECTS = 4
 const MAX_VISIBLE_MANAGERS = 2
@@ -47,7 +50,10 @@ const props = defineProps<{
   roleLabel?: string
   auth: AdminAuth
   standalone?: boolean
+  canNavigateProject?: boolean
 }>()
+
+const emit = defineEmits<{ openProject: [projectId: string] }>()
 
 const projects = ref<RelationshipProject[]>([])
 const topUsers = ref<RelationshipUser[]>([])
@@ -60,6 +66,9 @@ const projectsExpanded = ref(false)
 const expandedManagers = ref<Record<string, boolean>>({})
 const expandedMembers = ref<Record<string, boolean>>({})
 const collapsedProjects = ref<Record<string, boolean>>({})
+const searchQuery = ref('')
+const filterMode = ref<FilterMode>('all')
+const compactMode = ref(false)
 
 let sequence = 0
 
@@ -67,11 +76,18 @@ function normalizeProject(project: LegacyOrStructuredProject): RelationshipProje
   return {
     id: project.id,
     name: project.name,
+    teamName: project.teamName ?? null,
     status: project.status,
     canIssueApiKeys: Boolean(project.canIssueApiKeys),
     managers: Array.isArray(project.managers) ? project.managers : [],
     members: Array.isArray(project.members) ? project.members : []
   }
+}
+
+function resetFiltersAndExpansion() {
+  resetExpansion()
+  searchQuery.value = ''
+  filterMode.value = 'all'
 }
 
 function resetExpansion() {
@@ -114,7 +130,7 @@ async function load() {
 }
 
 watch(() => props.organizationId, () => {
-  resetExpansion()
+  resetFiltersAndExpansion()
 })
 
 watch(() => [props.organizationId, props.auth.accessToken, props.auth.platformToken], () => void load(), { immediate: true })
@@ -131,10 +147,33 @@ const displayTopUsers = computed<RelationshipUser[]>(() => {
   }]
 })
 
+function userMatchesQuery(user: RelationshipUser, query: string): boolean {
+  return user.email.toLowerCase().includes(query) || (user.roleLabel ?? '').toLowerCase().includes(query)
+}
+
+function projectHeaderMatchesQuery(project: RelationshipProject, query: string): boolean {
+  return project.name.toLowerCase().includes(query) || (project.teamName ?? '').toLowerCase().includes(query)
+}
+
+const filteredProjects = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase()
+  return projects.value.filter(project => {
+    if (filterMode.value === 'mine') {
+      const belongsToMe = project.managers.some(u => u.currentUser) || project.members.some(u => u.currentUser)
+      if (!belongsToMe) return false
+    } else if (filterMode.value === 'unassigned') {
+      if (project.managers.length > 0) return false
+    }
+    if (!q) return true
+    if (projectHeaderMatchesQuery(project, q)) return true
+    return project.managers.some(u => userMatchesQuery(u, q)) || project.members.some(u => userMatchesQuery(u, q))
+  })
+})
+
 const hasAnyCompaction = computed(() =>
   displayTopUsers.value.length > MAX_VISIBLE_TOP_USERS
-  || projects.value.length > MAX_VISIBLE_PROJECTS
-  || projects.value.some(p => p.managers.length > MAX_VISIBLE_MANAGERS || p.members.length > MAX_VISIBLE_MEMBERS)
+  || filteredProjects.value.length > MAX_VISIBLE_PROJECTS
+  || filteredProjects.value.some(p => p.managers.length > MAX_VISIBLE_MANAGERS || p.members.length > MAX_VISIBLE_MEMBERS)
 )
 
 const visibleTopUsers = computed(() =>
@@ -145,8 +184,8 @@ const visibleTopUsers = computed(() =>
 
 const visibleProjects = computed(() =>
   expandAll.value || projectsExpanded.value
-    ? projects.value
-    : projects.value.slice(0, MAX_VISIBLE_PROJECTS)
+    ? filteredProjects.value
+    : filteredProjects.value.slice(0, MAX_VISIBLE_PROJECTS)
 )
 
 const uniqueManagerCount = computed(() =>
@@ -157,16 +196,30 @@ const uniqueMemberCount = computed(() =>
   new Set(projects.value.flatMap(p => p.members.map(m => m.userId))).size
 )
 
+function scopedManagers(project: RelationshipProject): RelationshipUser[] {
+  const q = searchQuery.value.trim().toLowerCase()
+  if (!q || projectHeaderMatchesQuery(project, q)) return project.managers
+  return project.managers.filter(u => userMatchesQuery(u, q))
+}
+
+function scopedMembers(project: RelationshipProject): RelationshipUser[] {
+  const q = searchQuery.value.trim().toLowerCase()
+  if (!q || projectHeaderMatchesQuery(project, q)) return project.members
+  return project.members.filter(u => userMatchesQuery(u, q))
+}
+
 function visibleManagers(project: RelationshipProject): RelationshipUser[] {
+  const list = scopedManagers(project)
   return expandAll.value || expandedManagers.value[project.id]
-    ? project.managers
-    : project.managers.slice(0, MAX_VISIBLE_MANAGERS)
+    ? list
+    : list.slice(0, MAX_VISIBLE_MANAGERS)
 }
 
 function visibleMembers(project: RelationshipProject): RelationshipUser[] {
+  const list = scopedMembers(project)
   return expandAll.value || expandedMembers.value[project.id]
-    ? project.members
-    : project.members.slice(0, MAX_VISIBLE_MEMBERS)
+    ? list
+    : list.slice(0, MAX_VISIBLE_MEMBERS)
 }
 
 function isProjectCollapsed(projectId: string): boolean {
@@ -257,8 +310,61 @@ function toggleExpandAll() {
         </div>
       </div>
 
+      <div class="relationship-toolbar" role="region" aria-label="관계도 검색 및 필터">
+        <div class="search-box">
+          <span class="search-icon" aria-hidden="true">⌕</span>
+          <input
+            v-model.trim="searchQuery"
+            type="search"
+            aria-label="관계도 검색"
+            placeholder="프로젝트 · 팀 · 이메일 · 역할 검색"
+          />
+          <button
+            v-if="searchQuery"
+            type="button"
+            class="clear-search-btn"
+            @click="searchQuery = ''"
+          >
+            초기화
+          </button>
+        </div>
+        <div class="filter-pills" role="group" aria-label="프로젝트 필터">
+          <button
+            type="button"
+            class="filter-pill"
+            :class="{ active: filterMode === 'all' }"
+            @click="filterMode = 'all'"
+          >
+            전체 ({{ projects.length }})
+          </button>
+          <button
+            type="button"
+            class="filter-pill"
+            :class="{ active: filterMode === 'mine' }"
+            @click="filterMode = 'mine'"
+          >
+            내 소속만
+          </button>
+          <button
+            type="button"
+            class="filter-pill"
+            :class="{ active: filterMode === 'unassigned' }"
+            @click="filterMode = 'unassigned'"
+          >
+            총관리자 미배정
+          </button>
+        </div>
+        <button
+          type="button"
+          class="secondary-button density-toggle"
+          @click="compactMode = !compactMode"
+        >
+          {{ compactMode ? '기본 크기' : '컴팩트 보기' }}
+        </button>
+      </div>
+
       <div class="org-chart-scroll">
-        <div class="org-chart-tree">
+        <div class="org-chart-tree" :class="{ compact: compactMode }">
           <!-- 1단계: 최고 등급 · 상위 관리자 -->
           <div class="org-level top-level">
             <div class="org-node-card top-admin-card">
@@ -301,7 +407,7 @@ function toggleExpandAll() {
 
             <!-- 3~5단계: 조직 범위 내부의 프로젝트 분기 -> 프로젝트 총관리자 -> 팀원 -->
             <div class="org-scope-body">
-              <template v-if="projects.length">
+              <template v-if="filteredProjects.length">
                 <div class="org-vertical-stem" aria-hidden="true"></div>
 
                 <ul class="org-tree-branches project-branches">
@@ -310,6 +416,7 @@ function toggleExpandAll() {
                       <div class="project-scope-header">
                         <div class="node-card-head">
                           <span class="stage-tag project-tag">3단계 · 프로젝트 · 팀 범위</span>
+                          <span v-if="item.teamName" class="team-chip">팀: {{ item.teamName }}</span>
                           <span class="project-state" :class="{ paused: item.status !== 'ACTIVE' }">
                             {{ item.status === 'ACTIVE' ? '활성' : item.status === 'SUSPENDED' ? '중지' : item.status }}
                           </span>
@@ -318,9 +425,19 @@ function toggleExpandAll() {
                         <span class="project-perm">{{ item.canIssueApiKeys ? 'API 키 발급 가능' : 'API 키 발급 권한 없음' }}</span>
                         <div class="project-card-foot">
                           <small>총관리자 {{ item.managers.length }}명 · 팀원 {{ item.members.length }}명</small>
-                          <button type="button" class="collapse-toggle" @click="toggleProjectCollapse(item.id)">
-                            {{ isProjectCollapsed(item.id) ? `구성원 펼치기 (${item.managers.length + item.members.length}명)` : '구성원 접기' }}
-                          </button>
+                          <div class="project-foot-actions">
+                            <button
+                              v-if="canNavigateProject"
+                              type="button"
+                              class="open-project-btn"
+                              @click="emit('openProject', item.id)"
+                            >
+                              프로젝트 열기 →
+                            </button>
+                            <button type="button" class="collapse-toggle" @click="toggleProjectCollapse(item.id)">
+                              {{ isProjectCollapsed(item.id) ? `구성원 펼치기 (${item.managers.length + item.members.length}명)` : '구성원 접기' }}
+                            </button>
+                          </div>
                         </div>
                       </div>
 
@@ -331,9 +448,9 @@ function toggleExpandAll() {
                         <div class="tier-scope-box manager-scope-box org-manager-section">
                           <div class="section-pill-header">
                             <span class="stage-tag manager-tag">4단계 · 프로젝트 총관리자</span>
-                            <small>{{ item.managers.length }}명</small>
+                            <small>{{ scopedManagers(item).length }}명</small>
                           </div>
-                          <template v-if="item.managers.length">
+                          <template v-if="scopedManagers(item).length">
                             <ul class="org-tree-branches manager-branches">
                               <li v-for="manager in visibleManagers(item)" :key="manager.userId" class="org-branch-col manager-col">
                                 <div class="org-person-box manager-box">
@@ -348,12 +465,12 @@ function toggleExpandAll() {
                               </li>
                             </ul>
                             <button
-                              v-if="item.managers.length > MAX_VISIBLE_MANAGERS && !expandAll"
+                              v-if="scopedManagers(item).length > MAX_VISIBLE_MANAGERS && !expandAll"
                               type="button"
                               class="more-toggle centered-toggle"
                               @click="toggleExpandedManagers(item.id)"
                             >
-                              {{ expandedManagers[item.id] ? '총관리자 접기' : `+ 외 ${item.managers.length - MAX_VISIBLE_MANAGERS}명 총관리자 더보기` }}
+                              {{ expandedManagers[item.id] ? '총관리자 접기' : `+ 외 ${scopedManagers(item).length - MAX_VISIBLE_MANAGERS}명 총관리자 더보기` }}
                             </button>
                           </template>
                           <div v-else class="org-empty-box">
@@ -367,9 +484,9 @@ function toggleExpandAll() {
                         <div class="tier-scope-box member-scope-box org-member-section">
                           <div class="section-pill-header">
                             <span class="stage-tag member-tag">5단계 · 팀원</span>
-                            <small>{{ item.members.length }}명</small>
+                            <small>{{ scopedMembers(item).length }}명</small>
                           </div>
-                          <template v-if="item.members.length">
+                          <template v-if="scopedMembers(item).length">
                             <ul class="org-tree-branches member-branches">
                               <li v-for="member in visibleMembers(item)" :key="member.userId" class="org-branch-col member-col">
                                 <div class="org-person-box member-box">
@@ -386,12 +503,12 @@ function toggleExpandAll() {
                               </li>
                             </ul>
                             <button
-                              v-if="item.members.length > MAX_VISIBLE_MEMBERS && !expandAll"
+                              v-if="scopedMembers(item).length > MAX_VISIBLE_MEMBERS && !expandAll"
                               type="button"
                               class="more-toggle centered-toggle"
                               @click="toggleExpandedMembers(item.id)"
                             >
-                              {{ expandedMembers[item.id] ? '팀원 접기' : `+ 외 ${item.members.length - MAX_VISIBLE_MEMBERS}명 팀원 더보기` }}
+                              {{ expandedMembers[item.id] ? '팀원 접기' : `+ 외 ${scopedMembers(item).length - MAX_VISIBLE_MEMBERS}명 팀원 더보기` }}
                             </button>
                           </template>
                           <div v-else class="org-empty-box">
@@ -403,16 +520,20 @@ function toggleExpandAll() {
                   </li>
                 </ul>
 
-                <div v-if="projects.length > MAX_VISIBLE_PROJECTS && !expandAll" class="projects-more-wrap">
+                <div v-if="filteredProjects.length > MAX_VISIBLE_PROJECTS && !expandAll" class="projects-more-wrap">
                   <button
                     type="button"
                     class="more-projects-toggle"
                     @click="projectsExpanded = !projectsExpanded"
                   >
-                    {{ projectsExpanded ? '프로젝트 목록 접기' : `+ 외 ${projects.length - MAX_VISIBLE_PROJECTS}개 프로젝트 더보기 (전체 ${projects.length}개)` }}
+                    {{ projectsExpanded ? '프로젝트 목록 접기' : `+ 외 ${filteredProjects.length - MAX_VISIBLE_PROJECTS}개 프로젝트 더보기 (전체 ${filteredProjects.length}개)` }}
                   </button>
                 </div>
               </template>
+              <div v-else-if="projects.length" class="relationship-message empty-chart">
+                <p>검색 조건과 일치하는 프로젝트나 구성원이 없습니다.</p>
+                <button type="button" class="secondary-button" @click="resetFiltersAndExpansion">필터 초기화</button>
+              </div>
               <div v-else class="relationship-message empty-chart">이 조직에서 접근 가능한 프로젝트가 없습니다.</div>
             </div>
           </div>
@@ -545,7 +666,30 @@ function toggleExpandAll() {
 .more-toggle:hover, .more-projects-toggle:hover { background:var(--accent-dim); }
 
 .relationship-message { padding:24px; color:var(--muted); font-size:13px; line-height:1.6; }
-.relationship-message.empty-chart { text-align:center; padding:24px 16px; }
+.relationship-message.empty-chart { text-align:center; padding:24px 16px; display:grid; justify-items:center; gap:10px; }
+
+.relationship-toolbar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; padding:10px 14px; border:1px solid var(--border); border-radius:12px; background:var(--surface-2); }
+.search-box { display:flex; align-items:center; gap:8px; flex:1; min-width:220px; padding:6px 10px; border:1px solid var(--border); border-radius:9px; background:var(--surface); }
+.search-box input { width:100%; border:none; background:transparent; color:var(--text); font-size:12px; outline:none; padding:0; }
+.search-icon { color:var(--muted); font-size:12px; }
+.clear-search-btn { border:none; background:transparent; color:var(--accent-strong); font-size:11px; font-weight:700; cursor:pointer; padding:2px 4px; flex:none; }
+.filter-pills { display:flex; align-items:center; flex-wrap:wrap; gap:6px; }
+.filter-pill { padding:6px 10px; border:1px solid var(--border); border-radius:999px; background:var(--surface); color:var(--muted); font-size:11px; font-weight:700; cursor:pointer; }
+.filter-pill.active { border-color:var(--accent-border); background:var(--accent-dim); color:var(--accent-strong); }
+.density-toggle { flex:none; }
+.team-chip { padding:2px 7px; border-radius:999px; border:1px solid var(--border); background:var(--surface-2); color:var(--muted); font-size:10px; font-weight:700; }
+.project-foot-actions { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.open-project-btn { padding:4px 9px; border:1px solid var(--accent-border); border-radius:7px; background:var(--accent-dim); color:var(--accent-strong); font-size:10px; font-weight:800; cursor:pointer; }
+.open-project-btn:hover { filter:brightness(1.08); }
+
+.org-chart-tree.compact .org-vertical-stem { height:14px; }
+.org-chart-tree.compact .project-col { padding:16px 8px 0; }
+.org-chart-tree.compact .project-scope-enclosure { min-width:220px; }
+.org-chart-tree.compact .project-scope-header { padding:10px 12px; }
+.org-chart-tree.compact .project-scope-body { padding:0 10px 10px; }
+.org-chart-tree.compact .org-person-box { width:144px; padding:8px; }
+.org-chart-tree.compact .member-box { width:132px; }
+.org-chart-tree.compact .person-avatar { width:22px; height:22px; font-size:10px; }
 
 @media (max-width:600px) {
   .relationship-header { flex-wrap:wrap; align-items:flex-start; padding:18px; }

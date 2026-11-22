@@ -27,7 +27,12 @@ class OpenApiContractTest {
                     "/api/admin/services/{serviceId}",
                     "/api/admin/services/{serviceId}/targets",
                     "/api/admin/organizations/{organizationId}/requests",
-                    "/api/me/usage");
+                    "/api/me/usage",
+                    "/api/auth/totp/setup",
+                    "/api/auth/invitations/accept",
+                    "/api/portal/organizations/{organizationId}/relationship",
+                    "/api/admin/projects/{projectId}/members",
+                    "/api/admin/platform/runtime-endpoints/{endpointId}/trust");
             assertThat(paths).hasSizeGreaterThanOrEqualTo(20);
 
             Map<String, Object> components = (Map<String, Object>) contract.get("components");

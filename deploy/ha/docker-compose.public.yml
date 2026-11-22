@@ -1,0 +1,25 @@
+# Production public HTTPS ingress overlay. Requires aiconnect-public-firewall.service
+# (nftables Cloudflare-only guard) and verified TLS/AOP mount paths.
+services:
+  public-ingress:
+    container_name: aiconnect-public
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "${AICONNECT_PUBLIC_BIND_ADDRESS:?set OCI private IP}:443:443"
+    volumes:
+      - ./public-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./public-proxy-headers.conf:/etc/nginx/aiconnect/public-proxy-headers.conf:ro
+      - ./public-v1-locations.conf:/etc/nginx/aiconnect/public-v1-locations.conf:ro
+      - ${AICONNECT_CF_REALIP_CONF:?set path to verified Cloudflare real-IP configuration}:/etc/nginx/aiconnect/cf-realip.conf:ro
+      - ${AICONNECT_ORIGIN_CERT:?set path to origin certificate}:/etc/nginx/aiconnect/tls/origin.crt:ro
+      - ${AICONNECT_ORIGIN_KEY:?set path to origin private key}:/etc/nginx/aiconnect/tls/origin.key:ro
+      - ${AICONNECT_AOP_CA_CERT:?set path to the validated AOP client CA certificate}:/etc/nginx/aiconnect/aop-client-ca.pem:ro
+    depends_on:
+      api-1:
+        condition: service_healthy
+      api-2:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    networks: [internal]

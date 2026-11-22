@@ -1,28 +1,28 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import BaseModal from './BaseModal.vue'
 import DateTimePreferences from './DateTimePreferences.vue'
-import AuditLogPage from './AuditLogPage.vue'
 import DashboardPage from './DashboardPage.vue'
-import DeveloperPortalPage from './DeveloperPortalPage.vue'
-import DevDocsPage from './DevDocsPage.vue'
-import InfrastructurePage from './InfrastructurePage.vue'
-import SystemStructurePage from './SystemStructurePage.vue'
-import ExternalProvidersPage from './ExternalProvidersPage.vue'
-import ServicesPage from './ServicesPage.vue'
 import ProjectsPage from './ProjectsPage.vue'
-import TeamsPage from './TeamsPage.vue'
-import ObservabilityPage from './ObservabilityPage.vue'
-import NotificationsPage from './NotificationsPage.vue'
-import UsagePage from './UsagePage.vue'
-import QuotaPage from './QuotaPage.vue'
 import ScopedOverviewPage from './ScopedOverviewPage.vue'
-import DataProtectionPage from './DataProtectionPage.vue'
-import ApiPlaygroundPage from './ApiPlaygroundPage.vue'
-import ModelPlaygroundPage from './ModelPlaygroundPage.vue'
-import PlatformAdminPage from './PlatformAdminPage.vue'
-import BetaOperatorPage from './BetaOperatorPage.vue'
-import WorkspaceRelationship from './WorkspaceRelationship.vue'
+const AuditLogPage = defineAsyncComponent(() => import('./AuditLogPage.vue'))
+const DeveloperPortalPage = defineAsyncComponent(() => import('./DeveloperPortalPage.vue'))
+const DevDocsPage = defineAsyncComponent(() => import('./DevDocsPage.vue'))
+const InfrastructurePage = defineAsyncComponent(() => import('./InfrastructurePage.vue'))
+const SystemStructurePage = defineAsyncComponent(() => import('./SystemStructurePage.vue'))
+const ExternalProvidersPage = defineAsyncComponent(() => import('./ExternalProvidersPage.vue'))
+const ServicesPage = defineAsyncComponent(() => import('./ServicesPage.vue'))
+const TeamsPage = defineAsyncComponent(() => import('./TeamsPage.vue'))
+const ObservabilityPage = defineAsyncComponent(() => import('./ObservabilityPage.vue'))
+const NotificationsPage = defineAsyncComponent(() => import('./NotificationsPage.vue'))
+const UsagePage = defineAsyncComponent(() => import('./UsagePage.vue'))
+const QuotaPage = defineAsyncComponent(() => import('./QuotaPage.vue'))
+const DataProtectionPage = defineAsyncComponent(() => import('./DataProtectionPage.vue'))
+const ApiPlaygroundPage = defineAsyncComponent(() => import('./ApiPlaygroundPage.vue'))
+const ModelPlaygroundPage = defineAsyncComponent(() => import('./ModelPlaygroundPage.vue'))
+const PlatformAdminPage = defineAsyncComponent(() => import('./PlatformAdminPage.vue'))
+const BetaOperatorPage = defineAsyncComponent(() => import('./BetaOperatorPage.vue'))
+const WorkspaceRelationship = defineAsyncComponent(() => import('./WorkspaceRelationship.vue'))
 import {
   accountTierLabel,
   adminFetch,
@@ -207,6 +207,10 @@ function openModelPlayground(targetId: string) {
   page.value = allowedTarget
   sidebarOpen.value = false
   searchOpen.value = false
+}
+function openRelationshipProject(projectId: string) {
+  if (projectId) sessionStorage.setItem('aiconnect.setup.projectId', projectId)
+  navigate(isOrgOrPlatformAdmin.value || isProjectDirector.value ? 'projects' : 'portal')
 }
 function selectOrganization(id: string) {
   if (id !== organizationId.value && !busy.value) closeAccount()
@@ -445,7 +449,7 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
         <ApiPlaygroundPage v-else-if="page === 'playground'" :organization-id="organizationId" :auth="auth" />
         <ModelPlaygroundPage v-else-if="isOrgOrPlatformAdmin && page === 'model-playground'" :organization-id="organizationId" :auth="auth" :initial-target-id="playgroundInitialTargetId" />
         <DevDocsPage v-else-if="page === 'docs'" @navigate="navigate" />
-        <WorkspaceRelationship v-else-if="page === 'relationship'" :organization-id="organizationId" :organization-name="currentOrganization?.name" :user-name="profileName" :role-label="profileRole" :auth="auth" standalone />
+        <WorkspaceRelationship v-else-if="page === 'relationship'" :organization-id="organizationId" :organization-name="currentOrganization?.name" :user-name="profileName" :role-label="profileRole" :auth="auth" standalone :can-navigate-project="true" @open-project="openRelationshipProject" />
         <DeveloperPortalPage v-else :organization-id="organizationId" :auth="auth" />
       </main>
     </div>

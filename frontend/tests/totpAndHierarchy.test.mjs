@@ -1163,6 +1163,7 @@ test('TeamsPage issues GENERAL_USER invitations, revokes pending invites, guards
       app.mount(root)
       await flush()
 
+      assert.doesNotMatch(textContent(root), /\+ 직접 사용자 추가/)
       const resetBtns = walk(root, el => el.tag === 'button' && textContent(el).includes('TOTP 초기화'))
       assert.equal(resetBtns.length, 2)
       resetBtns[1].props.onClick()

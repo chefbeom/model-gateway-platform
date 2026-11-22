@@ -23,3 +23,37 @@
 `aiconnect-public-limited.service`는 **일부 IP만 허용하는 시험용** 컨테이너를 방화벽 서비스 이후에 시작한다. 이 서비스는 정식 공개 구성이나 전체 서버 HA를 의미하지 않는다. 현재 시험용 허용 IP와 컨테이너 생성 절차는 운영 서버에서 수동 관리되고 있어, 정식 공개 전 버전 관리된 구성·검증·복구 절차가 별도로 필요하다.
 
 롤백은 공개 입구를 먼저 중단한 뒤 방화벽 상태를 조정한다. 예: `systemctl stop aiconnect-public-limited.service`. Tailscale 관리 입구와 데이터 서버 연결은 유지하고, 원본 443을 보호하는 규칙을 제거한 상태로 공개 입구를 실행하지 않는다. AOP CA 개인키, 클라이언트 개인키, Origin 서버 키는 root 전용으로 보호하고 오프호스트 암호화 백업·복구 및 인증서 만료 전 교체를 검증해야 한다.
+
+## 정식 공개 전환(Cutover) 및 점검 기준
+
+### 1. 사전 점검 완료 항목 (`100.100.9.74`)
+- **Cloudflare Origin CA 인증서**: `/etc/aiconnect/public-tls/origin.crt` (`2026-11-20` ~ `2041-11-16 GMT`)
+- **전용 AOP 클라이언트 CA**: `/etc/aiconnect/aop-zone/ca.crt` (`CN=AIConnect AOP Root CA`, `2026-11-20` ~ `2031-11-19 GMT`, `ssl_verify_client on`)
+- **방화벽 및 일일 IP 동기화**: `aiconnect-public-firewall.service` (`inet aiconnect_public_guard` nftables 테이블 활성) 및 `aiconnect-public-firewall-refresh.timer` (`daily`, `/opt/aiconnect-public-staging/cf-realip.conf` 원자적 갱신·프록시 리로드)
+- **비공개 경계 및 계정 초대 전용 원칙**: API(`8080`), 관리 LB(`100.100.9.74:80`), DB/Redis 포트는 인터넷에 비공개이며, 공개 HTTPS 입구(`public-nginx.conf`)에서 `/api/auth/bootstrap`, `/api/admin/users`, `/actuator/`를 차단해 초대 기반 계정 가입 + TOTP 2FA만 허용한다.
+- **보안 응답 헤더**: `Strict-Transport-Security`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Permissions-Policy` 및 `proxy_cookie_flags aiconnect_refresh secure httponly samesite=strict` 적용.
+
+### 2. 정식 공개 전환(IP 허용 목록 해제) 절차
+버전 관리된 공개 Compose 오버레이(`deploy/ha/docker-compose.public.yml`)와 systemd 유닛(`deploy/ha/aiconnect-public-ingress.service`)을 사용하여 제한 시험용 컨테이너(`aiconnect-public-limited`)에서 정식 공개 입구(`aiconnect-public`)로 전환한다.
+
+```bash
+# 1. 기존 제한 시험용 및 스테이징 입구 중지·비활성화
+sudo systemctl disable --now aiconnect-public-limited.service
+sudo docker stop aiconnect-public-staging || true
+
+# 2. 정식 공개 컨테이너 생성 (AICONNECT_PUBLIC_BIND_ADDRESS=<OCI_PRIVATE_IP>, 인증서/realip 환경변수 설정 필수)
+cd /opt/aiconnect/deploy/ha
+docker compose -p aiconnect-ha \
+  --env-file .env --env-file .env.external-data --env-file /etc/aiconnect/public-ingress.env \
+  -f docker-compose.yml -f docker-compose.external-monitoring.yml -f docker-compose.external-data.yml -f docker-compose.public.yml \
+  up -d --no-deps --no-build public-ingress
+
+# 3. systemd 등록 및 활성화
+sudo install -m 644 /opt/aiconnect/deploy/ha/aiconnect-public-ingress.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now aiconnect-public-ingress.service
+```
+
+### 3. 전환 직후 검증 및 롤백
+- **검증**: 외부 비허용 IP에서 `https://www.aiconnectgateway.com/` 및 `https://api.aiconnectgateway.com/v1/models` 접근, `/api/auth/bootstrap` · `/api/admin/users` · `/actuator/health` `404` 차단, Origin `443` 직접 접속(AOP 미첨부) 차단(`400`/`drop`), `Strict-Transport-Security` 헤더 및 `aiconnect_refresh` `Secure; HttpOnly; SameSite=Strict` 쿠키 확인.
+- **롤백**: `sudo systemctl disable --now aiconnect-public-ingress.service` 후 필요 시 `sudo systemctl enable --now aiconnect-public-limited.service`로 즉시 원복한다.
