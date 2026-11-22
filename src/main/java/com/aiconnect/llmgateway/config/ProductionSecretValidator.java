@@ -29,6 +29,21 @@ public class ProductionSecretValidator implements InitializingBean {
     @Override
     public void afterPropertiesSet() {
         if (allowInsecureDevelopmentSecrets || environment.acceptsProfiles(Profiles.of("integration", "test"))) return;
+        if ("true".equalsIgnoreCase(environment.getProperty("aiconnect.security.external-url.allow-loopback-test-server"))) {
+            throw new IllegalStateException("aiconnect.security.external-url.allow-loopback-test-server must be false outside test profiles.");
+        }
+        String dbPassword = environment.getProperty("spring.datasource.password");
+        if ("aiconnect".equalsIgnoreCase(dbPassword)) {
+            throw new IllegalStateException("DB_PASSWORD must not use the default password in production.");
+        }
+        String sharedStateProvider = environment.getProperty("aiconnect.deployment.shared-state-provider");
+        if ("REDIS".equalsIgnoreCase(sharedStateProvider)) {
+            String redisPassword = environment.getProperty("spring.data.redis.password");
+            if (redisPassword == null || redisPassword.isBlank() || redisPassword.length() < 12
+                    || redisPassword.toLowerCase(Locale.ROOT).contains("change-me")) {
+                throw new IllegalStateException("REDIS_PASSWORD must be set to a strong password when Redis shared state is enabled.");
+            }
+        }
         Map<String, String> secrets = new LinkedHashMap<>();
         secrets.put("ADMIN_API_TOKEN", gateway.adminToken());
         secrets.put("API_KEY_PEPPER", gateway.apiKeyPepper());
@@ -46,7 +61,7 @@ public class ProductionSecretValidator implements InitializingBean {
     }
 
     private boolean unsafe(String value) {
-        if (value == null || value.isBlank() || value.length() < 24) return true;
+        if (value == null || value.isBlank() || value.length() < 32) return true;
         String normalized = value.toLowerCase(Locale.ROOT);
         return normalized.contains("change-me")
                 || normalized.contains("development-only")

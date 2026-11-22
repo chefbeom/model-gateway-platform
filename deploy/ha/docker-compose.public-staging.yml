@@ -2,6 +2,7 @@
 # reviewing the production ingress controls and testing the complete flow.
 services:
   public-ingress-staging:
+    container_name: aiconnect-public-staging
     image: nginx:1.27-alpine
     restart: unless-stopped
     ports:

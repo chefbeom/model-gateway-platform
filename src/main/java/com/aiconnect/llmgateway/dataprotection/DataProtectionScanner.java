@@ -5,13 +5,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
 
 import java.net.URI;
-import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.Iterator;
-import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
 /**
@@ -23,22 +23,31 @@ public class DataProtectionScanner {
     private static final int MAX_NODES = 10_000;
     private static final int MAX_DEPTH = 64;
     private static final int MAX_TEXT_CHARS = 2_000_000;
+    private static final int MAX_CUSTOM_REGEX_STEPS = 100_000;
+    private static final int MAX_PATTERN_CACHE_SIZE = 256;
     private static final class Budget { int nodes; int chars; boolean exhausted; }
     private static final Pattern SECRET = Pattern.compile(
-            "(?i)(sk-[A-Za-z0-9]{20,}|sk_llmg_[A-Za-z0-9._-]+|AKIA[0-9A-Z]{16}|-----BEGIN (?:RSA|EC|OPENSSH|PRIVATE) KEY-----|(?:api[_-]?key|secret|password|token)\\s*[:=]\\s*[^\\s,;]{8,})");
-    private static final Pattern EMAIL = Pattern.compile("(?i)\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b");
+            "(?i)(sk-(?:proj-|svcacct-|admin-|ant-)?[A-Za-z0-9_-]{20,}|sk_llmg_[A-Za-z0-9._-]+|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]+|AIza[0-9A-Za-z_-]{35}|-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----|(?:api[_-]?key|secret|password|token)\\s*[:=]\\s*[^\\s,;]{8,})");
+    private static final Pattern EMAIL = Pattern.compile(
+            "(?i)(?<![A-Z0-9._%+-])[A-Z0-9._%+-]++@[A-Z0-9-]++(?:\\.[A-Z0-9-]++)*\\.[A-Z]{2,}\\b");
     private static final Pattern PHONE = Pattern.compile("(?:\\+?82[- .]?)?0?1[016789][- .]?\\d{3,4}[- .]?\\d{4}");
     private static final Pattern RESIDENT_NUMBER = Pattern.compile("\\b\\d{6}-?[1-4]\\d{6}\\b");
     private static final Pattern CARD_NUMBER = Pattern.compile("\\b(?:\\d[ -]?){13,19}\\b");
     private static final Pattern CONFIDENTIAL = Pattern.compile("(?i)(confidential|internal[- ]only|trade secret|private|\\uAE30\\uBC00|\\uB300\\uC678\\uBE44|\\uC601\\uC5C5\\uBE44\\uBC00)");
     private static final Pattern MEDIA_DATA = Pattern.compile("(?i)^data:(?:(?:image|audio|video)/[^;,]+|application/(?:pdf|octet-stream))(?:;|,)");
+    private static final Pattern STRICT_BASE64_MEDIA_DATA = Pattern.compile(
+            "(?i)^data:(?:(?:image|audio|video)/[a-z0-9.+-]+|application/(?:pdf|octet-stream));base64,[A-Za-z0-9+/=\\s]+$");
+    private static final Set<String> MEDIA_DATA_FIELDS = Set.of(
+            "url", "file", "image", "audio", "video", "data", "attachment", "image_url", "file_data"
+    );
     private static final Set<String> STRUCTURAL_FIELDS = Set.of(
             "model", "stream", "temperature", "top_p", "top_k", "n", "seed", "max_tokens",
             "max_completion_tokens", "presence_penalty", "frequency_penalty", "logprobs",
-            "parallel_tool_calls", "user", "service_tier"
+            "parallel_tool_calls", "service_tier"
     );
 
     private final ObjectMapper objectMapper;
+    private final Map<String, Pattern> customPatternCache = new ConcurrentHashMap<>();
 
     public DataProtectionScanner(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
@@ -62,8 +71,8 @@ public class DataProtectionScanner {
         if (node.isTextual()) {
             String value = node.textValue();
             if (value == null || value.isBlank()) return;
-            // Inline media is binary, not inspectable text. Its policy is controlled by detectMedia.
-            if (MEDIA_DATA.matcher(value).find()) {
+            // Inline base64 media in explicit media fields is binary; never skip general text fields.
+            if (isMediaDataField(fieldName) && STRICT_BASE64_MEDIA_DATA.matcher(value).matches()) {
                 if (policy.detectMedia()) add(DataClassification.UNKNOWN_MEDIA, classifications, counts);
                 return;
             }
@@ -80,11 +89,16 @@ public class DataProtectionScanner {
             if (policy.detectConfidential() && CONFIDENTIAL.matcher(bounded).find()) add(DataClassification.CONFIDENTIAL, classifications, counts);
             if (policy.detectMedia() && isMedia(fieldName, bounded)) add(DataClassification.UNKNOWN_MEDIA, classifications, counts);
             for (String custom : policy.customPatterns()) {
+                if (custom == null || custom.isBlank()) continue;
                 try {
-                    if (!custom.isBlank() && Pattern.compile(custom).matcher(bounded).find()) {
+                    Pattern compiled = compileCached(custom);
+                    if (compiled.matcher(new BoundedCharSequence(bounded, MAX_CUSTOM_REGEX_STEPS)).find()) {
                         add(DataClassification.CONFIDENTIAL, classifications, counts);
                         break;
                     }
+                } catch (StepBudgetExceededException stepLimit) {
+                    add(DataClassification.SCAN_INCOMPLETE, classifications, counts);
+                    break;
                 } catch (RuntimeException ignored) {
                     // A malformed administrator pattern must not break an AI request.
                 }
@@ -106,6 +120,51 @@ public class DataProtectionScanner {
                 }
             }
         }
+    }
+
+    private Pattern compileCached(String regex) {
+        if (customPatternCache.size() >= MAX_PATTERN_CACHE_SIZE && !customPatternCache.containsKey(regex)) {
+            customPatternCache.clear();
+        }
+        return customPatternCache.computeIfAbsent(regex, Pattern::compile);
+    }
+
+    private boolean isMediaDataField(String fieldName) {
+        if (fieldName == null || fieldName.isBlank()) return false;
+        int dot = fieldName.lastIndexOf('.');
+        String leaf = (dot >= 0 ? fieldName.substring(dot + 1) : fieldName).toLowerCase(Locale.ROOT);
+        return MEDIA_DATA_FIELDS.contains(leaf);
+    }
+
+    private static final class StepBudgetExceededException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+    }
+
+    private static final class BoundedCharSequence implements CharSequence {
+        private final CharSequence delegate;
+        private final int[] remainingSteps;
+
+        private BoundedCharSequence(CharSequence delegate, int maxSteps) {
+            this(delegate, new int[]{maxSteps});
+        }
+
+        private BoundedCharSequence(CharSequence delegate, int[] remainingSteps) {
+            this.delegate = delegate;
+            this.remainingSteps = remainingSteps;
+        }
+
+        @Override public int length() { return delegate.length(); }
+
+        @Override public char charAt(int index) {
+            if (--remainingSteps[0] < 0) throw new StepBudgetExceededException();
+            return delegate.charAt(index);
+        }
+
+        @Override public CharSequence subSequence(int start, int end) {
+            return new BoundedCharSequence(delegate.subSequence(start, end), remainingSteps);
+        }
+
+        @Override public String toString() { return delegate.toString(); }
     }
 
     private boolean isMedia(String fieldName, String value) {

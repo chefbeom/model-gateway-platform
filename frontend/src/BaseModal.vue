@@ -148,7 +148,7 @@ const exampleByLabel: Record<string, string> = {
   'Chat ID': '-1001234567890',
   'Bot Token': '123456:ABC•••',
   '노드 이름': 'gpu-node-01',
-  'Endpoint URL': 'http://100.100.9.74:1234',
+  'Endpoint URL': 'http://100.64.0.10:1234',
   '설명': 'OCI GPU 서버 · 운영팀',
   'LM Studio API Token': 'lmstudio-token-•••',
   'Endpoint 활성화': 'ON',
@@ -215,7 +215,7 @@ const exampleByLabel: Record<string, string> = {
   'max_completion_tokens': '4096',
   '연결 제한 시간(초)': '3',
   '응답 제한 시간(초)': '300',
-  '허용 호스트': '100.100.9.74, api.openai.com',
+  '허용 호스트': '100.64.0.10, api.openai.com',
   'Provider Model ID': 'gpt-5.6-luna',
   '입력 단가 / 1M (USD)': '$0.20',
   '출력 단가 / 1M (USD)': '$1.20'

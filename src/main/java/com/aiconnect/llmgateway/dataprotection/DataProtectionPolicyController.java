@@ -77,9 +77,16 @@ public class DataProtectionPolicyController {
     }
 
     @GetMapping("/projects/{projectId}/api-keys/{apiKeyId}/data-protection")
-    public PolicyView apiKey(@PathVariable UUID projectId, @PathVariable UUID apiKeyId) {
+    public PolicyView apiKey(@PathVariable UUID projectId, @PathVariable UUID apiKeyId, HttpServletRequest http) {
         ApiKey key = key(projectId, apiKeyId);
         Project project = loadProject(projectId);
+        if (access != null && !isOrganizationOrPlatformAdmin(http, project.getOrganizationId())) {
+            AuthPrincipal actor = CurrentActor.principal().orElse(null);
+            if (actor == null || (!access.canManageProject(actor, projectId) && !actor.userId().equals(key.getIssuedByUserId()))) {
+                throw new ApiException(HttpStatus.FORBIDDEN, "PROJECT_ACCESS_DENIED",
+                        "Only a project manager or the API key issuer may view this key's data protection policy.");
+            }
+        }
         return viewOrDefault(project.getOrganizationId(), DataProtectionScopeType.API_KEY, key.getId());
     }
 

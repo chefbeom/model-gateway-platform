@@ -1,4 +1,9 @@
 node_modules
 dist
+tests
+.env
+.env.*
+*.pem
+*.key
 *.bak*
 *.log

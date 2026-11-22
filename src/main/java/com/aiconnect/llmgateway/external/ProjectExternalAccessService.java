@@ -48,7 +48,14 @@ public class ProjectExternalAccessService {
                     "The provider belongs to another organization.");
         }
         ProjectExternalAccess item = access.findByProjectIdAndProviderId(projectId, providerId)
-                .map(existing -> { existing.request(actorId, reason); return existing; })
+                .map(existing -> {
+                    if (existing.isActive() || existing.getStatus() == ExternalAccessStatus.REQUESTED) {
+                        throw new ApiException(HttpStatus.CONFLICT, "EXTERNAL_ACCESS_ALREADY_ACTIVE",
+                                "External provider access is already approved or pending review.");
+                    }
+                    existing.request(actorId, reason);
+                    return existing;
+                })
                 .orElseGet(() -> new ProjectExternalAccess(projectId, providerId, actorId, reason));
         item = access.save(item);
         audit.record(project.getOrganizationId(), actorId, "EXTERNAL_ACCESS_REQUESTED", "PROJECT_EXTERNAL_ACCESS",

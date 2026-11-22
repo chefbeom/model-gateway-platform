@@ -105,6 +105,11 @@ public class ControlPlaneService {
         if (endpoints.existsByBaseUrl(baseUrl)) {
             throw new ApiException(HttpStatus.CONFLICT, "RUNTIME_ENDPOINT_ALREADY_EXISTS", "The runtime Base URL is already registered.");
         }
+        if (request.apiToken() != null && !request.apiToken().isBlank()
+                && request.apiToken().chars().anyMatch(ch -> ch < 0x20 || ch == 0x7F)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_RUNTIME_TOKEN",
+                    "Runtime API token contains invalid control characters.");
+        }
         try {
             return endpoints.saveAndFlush(new RuntimeEndpoint(request.nodeId(), request.displayName(), request.runtimeType(), baseUrl,
                     secretCipher.encrypt(request.apiToken()), request.inputPricePerMillion(), request.outputPricePerMillion(), request.currency()));

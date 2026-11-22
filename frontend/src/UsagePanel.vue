@@ -9,7 +9,7 @@ type Currency = 'KRW' | 'USD'
 type Usage = { requestCount: number; inputTokens: number; outputTokens: number; estimatedCost: number; estimatedCostByCurrency?: Record<string, number>; failedRequests: number }
 type RequestItem = { requestId: string; serviceKey?: string; serviceDisplayName?: string; deploymentDisplayName?: string; stream: boolean; status: string; inputTokens?: number; outputTokens?: number; estimatedCost?: number; costCurrency?: Currency; latencyMs?: number; failoverCount: number; httpStatus?: number; errorCode?: string; startedAt: string; reasoningEffort?: string | null; requestedServiceTier?: string | null; actualServiceTier?: string | null }
 
-const apiKey = ref(sessionStorage.getItem('aiconnect.consumerApiKey') ?? '')
+const apiKey = ref('')
 const usage = ref<Usage | null>(null)
 const requests = ref<RequestItem[]>([])
 const message = ref('프로젝트 API 키를 입력하면 사용량과 요청 이력을 확인할 수 있습니다.')
@@ -26,7 +26,6 @@ async function api<T>(path: string): Promise<T> {
 async function loadUsage() {
   busy.value = true
   try {
-    sessionStorage.setItem('aiconnect.consumerApiKey', apiKey.value)
     const [summary, history] = await Promise.all([api<Usage>('/api/me/usage'), api<RequestItem[]>('/api/me/requests')])
     usage.value = summary; requests.value = history; message.value = `최근 ${history.length}개 요청을 불러왔습니다.`
   } catch (error) { message.value = error instanceof Error ? error.message : '사용량 조회 실패' }

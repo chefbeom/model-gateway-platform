@@ -4,7 +4,7 @@ import ConsoleShell from './ConsoleShell.vue'
 import InviteRegistrationView from './InviteRegistrationView.vue'
 import LoginView from './LoginView.vue'
 import TotpOnboardingView from './TotpOnboardingView.vue'
-import { logout, normalizeSession, refreshAuthentication, type MfaState, type Session, type User } from './api'
+import { clearReplacedAccessTokens, logout, normalizeSession, refreshAuthentication, type MfaState, type Session, type User } from './api'
 
 type Theme = 'dark' | 'light'
 type FontScale = '100' | '115' | '125' | '135'
@@ -37,7 +37,9 @@ const user = ref<User | null>(readStoredUser())
 const accessToken = ref(typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('aiconnect.accessToken') ?? '' : '')
 const mfaState = ref<MfaState | ''>(readStoredMfaState())
 const platformToken = ref(typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('aiconnect.platformToken') ?? '' : '')
+const platformSessionVersion = ref(0)
 const currentHash = ref(typeof window !== 'undefined' ? window.location?.hash ?? '' : '')
+const pendingInviteCode = ref(parseRegisterHash(currentHash.value).code)
 const theme = ref<Theme>(initialTheme())
 const fontScale = ref<FontScale>(initialFontScale())
 
@@ -123,6 +125,7 @@ function acceptSession(raw: Session) {
 }
 
 function acceptPlatformToken(token: string) {
+  platformSessionVersion.value += 1
   platformToken.value = token
   accessToken.value = ''
   user.value = null
@@ -161,16 +164,25 @@ function sessionExpiredNotice(reason?: string): string {
 
 function clearSession() {
   clearJwtRefreshTimer()
+  clearReplacedAccessTokens()
   accessToken.value = ''
   platformToken.value = ''
   user.value = null
   mfaState.value = ''
   if (typeof sessionStorage !== 'undefined') {
-    sessionStorage.removeItem('aiconnect.accessToken')
-    sessionStorage.removeItem('aiconnect.user')
-    sessionStorage.removeItem('aiconnect.mfaState')
-    sessionStorage.removeItem('aiconnect.platformToken')
-    sessionStorage.removeItem('aiconnect.setup.organizationId')
+    for (const key of [
+      'aiconnect.accessToken',
+      'aiconnect.user',
+      'aiconnect.mfaState',
+      'aiconnect.platformToken',
+      'aiconnect.consumerApiKey',
+      'aiconnect.setup.organizationId',
+      'aiconnect.setup.projectId',
+      'aiconnect.portal.projectId',
+      'aiconnect.requestExplorerOrganization'
+    ]) {
+      sessionStorage.removeItem(key)
+    }
   }
 }
 
@@ -187,7 +199,7 @@ function expireSession(reason?: string) {
 
 async function signOut() {
   try {
-    if (accessToken.value) await logout()
+    if (!platformToken.value) await logout()
   } finally {
     clearSession()
     sessionNotice.value = ''
@@ -196,6 +208,7 @@ async function signOut() {
 }
 
 function onInviteRegistered(session: Session) {
+  pendingInviteCode.value = ''
   acceptSession(session)
   setLocationHash('')
 }
@@ -206,16 +219,18 @@ function onTotpEnrollmentCompleted(session: Session) {
 
 async function openRegisterFromLogin() {
   try {
-    if (accessToken.value) await logout()
+    if (!platformToken.value) await logout()
   } catch {
     // Ignore logout failures while switching to invite registration.
   } finally {
     clearSession()
+    pendingInviteCode.value = ''
     setLocationHash('#register')
   }
 }
 
 function backToLoginFromRegister() {
+  pendingInviteCode.value = ''
   setLocationHash('')
 }
 
@@ -244,8 +259,21 @@ function onSessionExpiredEvent(event?: Event) {
   expireSession(reason)
 }
 
+function captureAndScrubInviteCode(rawHash: string) {
+  const parsed = parseRegisterHash(rawHash)
+  if (parsed.isRegister && parsed.code) {
+    pendingInviteCode.value = parsed.code
+    if (typeof window !== 'undefined' && window.history?.replaceState && window.location) {
+      window.history.replaceState(null, '', window.location.pathname + '#register')
+      currentHash.value = '#register'
+    }
+  }
+}
+
 function onHashChange() {
-  currentHash.value = window.location?.hash ?? ''
+  const next = window.location?.hash ?? ''
+  currentHash.value = next
+  captureAndScrubInviteCode(next)
 }
 
 function parseJwtExpiryMs(token: string): number | null {
@@ -543,6 +571,7 @@ async function restoreSession() {
 }
 
 onMounted(() => {
+  captureAndScrubInviteCode(currentHash.value)
   window.addEventListener('aiconnect:session', onSessionEvent)
   window.addEventListener('aiconnect:mfa-required', onMfaRequiredEvent)
   window.addEventListener('aiconnect:session-expired', onSessionExpiredEvent)
@@ -565,7 +594,7 @@ onBeforeUnmount(() => {
   </div>
   <ConsoleShell
     v-else-if="activeView === 'console'"
-    :key="platformToken ? `platform:${platformToken}` : `${user?.id ?? 'guest'}:${mfaState}`"
+    :key="platformToken ? `platform:${platformSessionVersion}` : `${user?.id ?? 'guest'}:${mfaState}`"
     :user="user"
     :platform-token-session="Boolean(platformToken)"
     :theme="theme"
@@ -585,7 +614,7 @@ onBeforeUnmount(() => {
   />
   <InviteRegistrationView
     v-else-if="activeView === 'invite-register'"
-    :initial-code="registerRoute.code"
+    :initial-code="pendingInviteCode || registerRoute.code"
     :theme="theme"
     @registered="onInviteRegistered"
     @back-to-login="backToLoginFromRegister"

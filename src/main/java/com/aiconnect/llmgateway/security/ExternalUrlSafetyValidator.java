@@ -44,6 +44,10 @@ public class ExternalUrlSafetyValidator {
         this.dnsResolver = Objects.requireNonNull(dnsResolver, "dnsResolver must not be null");
     }
 
+    public boolean isAllowLoopbackTestServer() {
+        return allowLoopbackTestServer;
+    }
+
     /** Validates syntax, host rules, and any resolvable IP addresses at provider registration/update time. */
     public String validateAndNormalizeBaseUrl(String rawUrl) {
         ParsedBaseUrl parsed = parseAndValidateUri(rawUrl, false);
@@ -137,7 +141,10 @@ public class ExternalUrlSafetyValidator {
     }
 
     private void validateHostName(String host, boolean runtimeMode) {
-        if ("metadata.google.internal".equals(host) || "metadata.goog".equals(host) || "instance-data".equals(host)) {
+        if ("metadata.google.internal".equals(host)
+                || "metadata.goog".equals(host)
+                || "metadata".equals(host)
+                || "instance-data".equals(host)) {
             throw forbiddenUrl(runtimeMode);
         }
         if (!runtimeMode && ("localhost".equals(host)
@@ -227,6 +234,9 @@ public class ExternalUrlSafetyValidator {
         if (b0 == 169 && b1 == 254) {
             throw forbiddenUrl(runtimeMode);
         }
+        if (b0 == 100 && b1 == 100 && b2 == 100 && u(addr[3]) == 200) {
+            throw forbiddenUrl(runtimeMode);
+        }
         if (b0 >= 224) {
             throw forbiddenUrl(runtimeMode);
         }
@@ -270,6 +280,10 @@ public class ExternalUrlSafetyValidator {
             checkIpv4(new byte[]{addr[12], addr[13], addr[14], addr[15]}, runtimeMode);
             return;
         }
+        if (isAllZero(addr, 0, 8) && u(addr[8]) == 0xFF && u(addr[9]) == 0xFF && u(addr[10]) == 0x00 && u(addr[11]) == 0x00) {
+            checkIpv4(new byte[]{addr[12], addr[13], addr[14], addr[15]}, runtimeMode);
+            return;
+        }
         if (isAllZero(addr, 0, 12) && !isAllZero(addr, 12, 16)) {
             if (isAllZero(addr, 0, 15) && u(addr[15]) == 1) {
                 if (!runtimeMode && !allowLoopbackTestServer) {
@@ -297,6 +311,16 @@ public class ExternalUrlSafetyValidator {
         if (b0 == 0xFF) {
             throw forbiddenUrl(runtimeMode);
         }
+        if (b0 == 0x20 && b1 == 0x01 && b2 == 0x00 && b3 == 0x00) {
+            throw forbiddenUrl(runtimeMode);
+        }
+        if (b0 == 0x20 && b1 == 0x02) {
+            throw forbiddenUrl(runtimeMode);
+        }
+        if (b0 == 0x00 && b1 == 0x64 && b2 == 0xFF && b3 == 0x9B
+                && ((b4 == 0x00 && b5 == 0x00 && isAllZero(addr, 6, 12)) || (b4 == 0x00 && b5 == 0x01))) {
+            throw forbiddenUrl(runtimeMode);
+        }
         if (runtimeMode) {
             return;
         }
@@ -304,16 +328,6 @@ public class ExternalUrlSafetyValidator {
             throw forbiddenUrl(false);
         }
         if (b0 == 0x01 && b1 == 0x00 && isAllZero(addr, 2, 8)) {
-            throw forbiddenUrl(false);
-        }
-        if (b0 == 0x20 && b1 == 0x01 && b2 == 0x00 && b3 == 0x00) {
-            throw forbiddenUrl(false);
-        }
-        if (b0 == 0x20 && b1 == 0x02) {
-            throw forbiddenUrl(false);
-        }
-        if (b0 == 0x00 && b1 == 0x64 && b2 == 0xFF && b3 == 0x9B
-                && ((b4 == 0x00 && b5 == 0x00 && isAllZero(addr, 6, 12)) || (b4 == 0x00 && b5 == 0x01))) {
             throw forbiddenUrl(false);
         }
     }

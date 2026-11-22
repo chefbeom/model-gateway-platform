@@ -616,8 +616,8 @@ export const devDocs: DocPage[] = [
           { title: '전체 스택 시작', text: 'MariaDB, Gateway, Frontend, Nginx, Prometheus, Grafana를 빌드하고 Health Check를 기다립니다.' },
           { title: '최초 관리자 생성', text: '입력한 이메일과 비밀번호로 빈 설치의 플랫폼 관리자를 생성하고 접속 주소를 출력합니다.' }
         ] },
-        { type: 'code', language: 'bash', title: 'LM Studio 경로까지 검사', code: 'AICONNECT_LM_STUDIO_URL=http://100.92.170.22:1234 \\\n  ./quickstart_standalone.sh' },
-        { type: 'code', language: 'bash', title: '신뢰된 사내 LAN에서 직접 접속', code: 'AICONNECT_LAN_IP=192.168.35.101 \\\n  ./quickstart_standalone.sh --lan\n# 관리 화면: http://192.168.35.101\n# OpenAI Base URL: http://192.168.35.101/v1' },
+        { type: 'code', language: 'bash', title: 'LM Studio 경로까지 검사', code: 'AICONNECT_LM_STUDIO_URL=http://100.64.0.20:1234 \\\n  ./quickstart_standalone.sh' },
+        { type: 'code', language: 'bash', title: '신뢰된 사내 LAN에서 직접 접속', code: 'AICONNECT_LAN_IP=192.0.2.10 \\\n  ./quickstart_standalone.sh --lan\n# 관리 화면: http://192.0.2.10\n# OpenAI Base URL: http://192.0.2.10/v1' },
         { type: 'code', language: 'bash', title: '설치 직후 상태 점검', code: 'docker compose ps\n# 키 없이 /v1/models의 401은 인증 경로 도달 확인용입니다.\n# 모델 준비 상태는 인증된 요청으로 별도 검증하세요.\ncurl -i http://127.0.0.1/v1/models\ntailscale status' },
         { type: 'callout', tone: 'success', title: 'LAN 모드는 실제 접속 주소로 최초 관리자를 생성합니다', text: '--lan 실행 시 127.0.0.1이 아니라 AICONNECT_LAN_IP로 지정한 URL을 사용해 Bootstrap합니다. 내부 PC에서는 출력된 관리 화면과 /v1 Base URL을 그대로 사용합니다.' },
         { type: 'callout', tone: 'warning', title: 'LAN HTTP 모드는 인터넷에 공개하면 안 됩니다', text: '--lan은 HTTP 로그인을 위해 AUTH_COOKIE_SECURE=false를 설정하고 Nginx를 지정한 내부 IP에 바인딩합니다. 신뢰된 사내 대역만 방화벽으로 허용하고 외부 공개 시에는 HTTPS와 Secure Cookie로 복귀하세요.' },

@@ -78,24 +78,8 @@ public class UserAdminController {
     public OrganizationUserView createOrganizationUser(HttpServletRequest httpRequest,
                                                        @PathVariable UUID organizationId,
                                                        @Valid @RequestBody CreateOrganizationUser request) {
-        boolean platformAdmin = isPlatformAdmin(httpRequest);
-        if (request.organizationRole() == OrganizationRole.ORGANIZATION_ADMIN && !platformAdmin) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "ACCOUNT_TIER_FORBIDDEN",
-                    "Only a system administrator can create a project director.");
-        }
-        AccountTier targetTier = request.organizationRole() == OrganizationRole.ORGANIZATION_ADMIN
-                ? AccountTier.PROJECT_DIRECTOR
-                : AccountTier.GENERAL_USER;
-        AppUser user = identity.createUser(request.email(), request.password(), false, targetTier, CurrentActor.userIdOrNull());
-        OrganizationMember membership = identity.grantMembership(organizationId, user.getId(), request.organizationRole());
-        if (request.teamId() != null) {
-            teams.grantMembership(organizationId, request.teamId(), user.getId(),
-                    request.teamRole() == null ? TeamRole.DEVELOPER : request.teamRole());
-        }
-        audit.record(organizationId, CurrentActor.userIdOrNull(), "ORGANIZATION_USER_CREATED", "APP_USER", user.getId(),
-                Map.of("organizationRole", membership.getRole().name(), "teamId", String.valueOf(request.teamId())));
-        return new OrganizationUserView(user.getId(), user.getEmail(), membership.getRole(),
-                AccountTier.effectiveFor(user).name(), user.isTotpEnabled(), request.teamId(), request.teamRole());
+        throw new ApiException(HttpStatus.GONE, "DIRECT_USER_CREATION_DISABLED",
+                "Direct user creation is disabled; issue an account invitation instead.");
     }
 
     @PostMapping("/organizations/{organizationId}/users/{userId}/totp-reset")
@@ -160,9 +144,9 @@ public class UserAdminController {
     @PutMapping("/organizations/{organizationId}/members/{userId}")
     public MemberView grantMembership(HttpServletRequest httpRequest, @PathVariable UUID organizationId,
                                       @PathVariable UUID userId, @Valid @RequestBody SetMembership request) {
-        if (request.role() == OrganizationRole.ORGANIZATION_ADMIN && !isPlatformAdmin(httpRequest)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "ACCOUNT_TIER_FORBIDDEN",
-                    "Only a system administrator can assign organization administrator roles.");
+        if (!isPlatformAdmin(httpRequest)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "PLATFORM_ADMIN_REQUIRED",
+                    "Platform administrator permission is required.");
         }
         OrganizationMember member = identity.grantMembership(organizationId, userId, request.role());
         audit.record(organizationId, CurrentActor.userIdOrNull(), "MEMBERSHIP_GRANTED", "ORGANIZATION_MEMBER", userId,

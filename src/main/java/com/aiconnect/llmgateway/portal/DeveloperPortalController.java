@@ -16,7 +16,9 @@ import jakarta.validation.constraints.Size;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Max;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
@@ -142,19 +144,21 @@ public class DeveloperPortalController {
     }
 
     @PostMapping("/projects/{projectId}/api-keys")
-    public IssuedApiKey issueApiKey(@PathVariable UUID projectId, @Valid @RequestBody CreateApiKey request) {
+    public ResponseEntity<IssuedApiKey> issueApiKey(@PathVariable UUID projectId, @Valid @RequestBody CreateApiKey request) {
         AuthPrincipal actor = actor();
         requireProjectView(actor, projectId);
         requireApiKeyIssuancePermission(actor, projectId);
-        return apiKeyService.issue(projectId, request.name(), request.expiresAt(), actor.userId(), request.dataBoundaryPolicy());
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(apiKeyService.issue(projectId, request.name(), request.expiresAt(), actor.userId(), request.dataBoundaryPolicy()));
     }
 
     @PostMapping("/projects/{projectId}/api-keys/temporary")
-    public IssuedApiKey issueTemporaryApiKey(@PathVariable UUID projectId, @Valid @RequestBody CreateTemporaryApiKey request) {
+    public ResponseEntity<IssuedApiKey> issueTemporaryApiKey(@PathVariable UUID projectId, @Valid @RequestBody CreateTemporaryApiKey request) {
         AuthPrincipal actor = actor();
         requireProjectView(actor, projectId);
         requireApiKeyIssuancePermission(actor, projectId);
-        return apiKeyService.issueTemporary(projectId, request.name(), request.durationSeconds(), actor.userId(), request.dataBoundaryPolicy());
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(apiKeyService.issueTemporary(projectId, request.name(), request.durationSeconds(), actor.userId(), request.dataBoundaryPolicy()));
     }
 
     @DeleteMapping("/projects/{projectId}/api-keys/{apiKeyId}")

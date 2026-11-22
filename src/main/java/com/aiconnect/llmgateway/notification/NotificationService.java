@@ -10,13 +10,18 @@ import com.aiconnect.llmgateway.domain.RuntimeEndpoint;
 import com.aiconnect.llmgateway.repository.InferenceNodeRepository;
 import com.aiconnect.llmgateway.security.ExternalUrlSafetyValidator;
 import com.aiconnect.llmgateway.service.SecretCipher;
+import com.aiconnect.llmgateway.web.ApiException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
 
 import java.math.BigDecimal;
+import java.net.SocketTimeoutException;
+import java.net.http.HttpTimeoutException;
 import java.util.Locale;
 import java.util.Map;
 
@@ -62,7 +67,7 @@ public class NotificationService {
                 send(channel, message);
                 delivery.succeed();
             } catch (RuntimeException exception) {
-                delivery.fail(exception.getMessage());
+                delivery.fail(safeDeliveryError(exception));
             }
             usageAlertDeliveries.save(delivery);
         }
@@ -77,7 +82,7 @@ public class NotificationService {
                 send(channel, message);
                 delivery.succeed();
             } catch (RuntimeException exception) {
-                delivery.fail(exception.getMessage());
+                delivery.fail(safeDeliveryError(exception));
             }
             deliveries.save(delivery);
         }
@@ -105,5 +110,30 @@ public class NotificationService {
 
     private String decimal(BigDecimal value) {
         return String.format(Locale.ROOT, "%.2f", value);
+    }
+
+    private String safeDeliveryError(RuntimeException exception) {
+        if (exception instanceof RestClientResponseException rce) {
+            return "HTTP_" + rce.getStatusCode().value();
+        }
+        if (exception instanceof IllegalStateException
+                && exception.getMessage() != null
+                && exception.getMessage().startsWith("Notification webhook redirect was rejected")) {
+            return exception.getMessage();
+        }
+        if (exception instanceof ResourceAccessException) {
+            Throwable cause = exception.getCause();
+            while (cause != null) {
+                if (cause instanceof SocketTimeoutException || cause instanceof HttpTimeoutException) {
+                    return "NETWORK_TIMEOUT";
+                }
+                cause = cause.getCause();
+            }
+            return "NETWORK_ERROR";
+        }
+        if (exception instanceof ApiException ae) {
+            return ae.getCode();
+        }
+        return "DELIVERY_FAILED";
     }
 }

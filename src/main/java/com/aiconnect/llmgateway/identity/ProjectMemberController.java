@@ -56,8 +56,15 @@ public class ProjectMemberController {
 
     @GetMapping
     @Transactional(readOnly = true)
-    public List<ProjectMemberView> list(@PathVariable UUID projectId) {
-        requireProject(projectId);
+    public List<ProjectMemberView> list(@PathVariable UUID projectId, HttpServletRequest http) {
+        Project project = requireProject(projectId);
+        if (!isOrganizationOrPlatformAdmin(http, project.getOrganizationId())) {
+            AuthPrincipal actor = CurrentActor.principal().orElse(null);
+            if (actor == null || !access.canManageProject(actor, projectId)) {
+                throw new ApiException(HttpStatus.FORBIDDEN, "PROJECT_ACCESS_DENIED",
+                        "Only a project manager or administrator may list project members.");
+            }
+        }
         return memberships.findByIdProjectId(projectId).stream()
                 .map(membership -> toView(projectId, membership))
                 .sorted(Comparator.comparing((ProjectMemberView v) -> v.role() == ProjectMembership.Role.MANAGER ? 0 : 1)

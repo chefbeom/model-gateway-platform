@@ -51,6 +51,7 @@ fi
 if [[ -f "$staging/cf-realip.conf" ]]; then
   cp "$staging/cf-realip.conf" "$tmp/realip.old"
   cp "$tmp/realip.conf" "$staging/cf-realip.conf"
+  chmod 644 "$staging/cf-realip.conf"
   for proxy in aiconnect-public-staging aiconnect-public-limited aiconnect-public; do
     if [[ "$(docker inspect -f '{{.State.Running}}' "$proxy" 2>/dev/null || true)" == true ]]; then
       if ! docker exec "$proxy" nginx -t >/dev/null 2>&1 || ! docker exec "$proxy" nginx -s reload >/dev/null 2>&1; then

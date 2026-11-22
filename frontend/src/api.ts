@@ -209,6 +209,10 @@ export type SessionExpiredReason = 'expired' | 'server_unavailable' | 'invalidat
 
 const replacedAccessTokens = new Map<string, string>()
 
+export function clearReplacedAccessTokens(): void {
+  replacedAccessTokens.clear()
+}
+
 function dispatchWindowEvent<T>(name: string, detail?: T): void {
   if (name === 'aiconnect:session-expired') {
     replacedAccessTokens.clear()
@@ -340,7 +344,11 @@ export async function authenticate(
 export function refreshAuthentication(): Promise<Session> {
   if (refreshInFlight) return refreshInFlight
   const previousToken = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('aiconnect.accessToken') : null
-  refreshInFlight = fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' })
+  refreshInFlight = fetch('/api/auth/refresh', {
+    method: 'POST',
+    headers: { 'X-AIConnect-Auth-Client': '1' },
+    credentials: 'include'
+  })
     .catch(() => {
       throw serverUnavailableError('인증 서버와의 연결이 끊어졌습니다.')
     })
@@ -360,7 +368,11 @@ export function refreshAuthentication(): Promise<Session> {
 }
 
 export async function logout(): Promise<void> {
-  await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' })
+  await fetch('/api/auth/logout', {
+    method: 'POST',
+    headers: { 'X-AIConnect-Auth-Client': '1' },
+    credentials: 'include'
+  })
 }
 
 const NON_SESSION_401_CODES = new Set([

@@ -45,14 +45,20 @@ public class AuthController {
     }
 
     @PostMapping("/refresh")
-    public ResponseEntity<SessionResponse> refresh(@CookieValue(name = REFRESH_COOKIE, required = false) String refreshToken) {
+    public ResponseEntity<SessionResponse> refresh(@CookieValue(name = REFRESH_COOKIE, required = false) String refreshToken,
+                                                   HttpServletRequest request) {
+        assertSameOriginIfPresent(request);
         if (refreshToken == null || refreshToken.isBlank()) throw new ApiException(HttpStatus.UNAUTHORIZED, "REFRESH_TOKEN_REQUIRED", "A refresh token cookie is required.");
         return toResponse(identity.refresh(refreshToken));
     }
 
     @PostMapping("/logout")
-    public ResponseEntity<Void> logout(@CookieValue(name = REFRESH_COOKIE, required = false) String refreshToken) {
-        if (refreshToken != null) identity.logout(refreshToken);
+    public ResponseEntity<Void> logout(@CookieValue(name = REFRESH_COOKIE, required = false) String refreshToken,
+                                       HttpServletRequest request) {
+        assertSameOriginIfPresent(request);
+        if (refreshToken != null && !refreshToken.isBlank()) identity.logout(refreshToken);
+        Object rawSessionId = request.getAttribute("aiconnect.session-id");
+        if (rawSessionId instanceof UUID sessionId) identity.logoutSession(sessionId);
         return ResponseEntity.noContent().header(HttpHeaders.SET_COOKIE, expiredCookie().toString()).build();
     }
 
@@ -124,6 +130,45 @@ public class AuthController {
     private ResponseCookie expiredCookie() {
         return ResponseCookie.from(REFRESH_COOKIE, "").httpOnly(true).secure(properties.cookieSecure())
                 .sameSite("Strict").path("/api/auth").maxAge(0).build();
+    }
+
+    private void assertSameOriginIfPresent(HttpServletRequest request) {
+        String origin = request.getHeader("Origin");
+        if (origin == null || origin.isBlank()) {
+            return;
+        }
+        try {
+            java.net.URI originUri = java.net.URI.create(origin.trim());
+            String originHost = originUri.getHost();
+            if (originHost == null || originHost.isBlank()) {
+                throw new ApiException(HttpStatus.FORBIDDEN, "ORIGIN_MISMATCH", "Cross-origin auth request rejected.");
+            }
+            String expectedHostHeader = request.getHeader("Host");
+            String expectedHost;
+            int expectedPort = -1;
+            if (expectedHostHeader != null && !expectedHostHeader.isBlank()) {
+                java.net.URI hostUri = java.net.URI.create("https://" + expectedHostHeader.trim());
+                expectedHost = hostUri.getHost();
+                expectedPort = hostUri.getPort();
+            } else {
+                expectedHost = request.getServerName();
+                int serverPort = request.getServerPort();
+                if (serverPort > 0 && serverPort != 80 && serverPort != 443) {
+                    expectedPort = serverPort;
+                }
+            }
+            if (expectedHost == null || !originHost.equalsIgnoreCase(expectedHost)) {
+                throw new ApiException(HttpStatus.FORBIDDEN, "ORIGIN_MISMATCH", "Cross-origin auth request rejected.");
+            }
+            int originPort = originUri.getPort();
+            if ((expectedPort > 0 || originPort > 0) && originPort != expectedPort) {
+                throw new ApiException(HttpStatus.FORBIDDEN, "ORIGIN_MISMATCH", "Cross-origin auth request rejected.");
+            }
+        } catch (ApiException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ORIGIN_MISMATCH", "Cross-origin auth request rejected.");
+        }
     }
 
     private record SessionContext(UUID userId, UUID sessionId) { }

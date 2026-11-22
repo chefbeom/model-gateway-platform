@@ -76,8 +76,12 @@ public class ExternalProviderAdministrationService {
         if (providers.existsByOrganizationIdAndProviderTypeAndBaseUrl(organizationId, ExternalProviderType.OPENAI, normalizedUrl)) {
             throw new ApiException(HttpStatus.CONFLICT, "EXTERNAL_PROVIDER_URL_EXISTS", "This provider URL is already registered in the organization.");
         }
+        String validatedKey = requireText(apiKey, "EXTERNAL_PROVIDER_KEY_REQUIRED", "An API key is required.");
+        if (hasControlChars(validatedKey)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_PROVIDER_API_KEY", "API key contains invalid control characters.");
+        }
         ExternalProvider provider = providers.save(new ExternalProvider(organizationId, ExternalProviderType.OPENAI,
-                name, normalizedUrl, cipher.encrypt(requireText(apiKey, "EXTERNAL_PROVIDER_KEY_REQUIRED", "An API key is required."))));
+                name, normalizedUrl, cipher.encrypt(validatedKey)));
         audit.record(organizationId, CurrentActor.userIdOrNull(), "EXTERNAL_PROVIDER_CREATED", "EXTERNAL_PROVIDER",
                 provider.getId(), Map.of("displayName", provider.getDisplayName(), "providerType", provider.getProviderType().name()));
         return ProviderView.from(provider);
@@ -97,16 +101,21 @@ public class ExternalProviderAdministrationService {
                         "Changing a provider address requires a different API key; register a new provider if needed.");
             }
         }
+        boolean replaceKey = apiKey != null && !apiKey.isBlank();
+        if (replaceKey && hasControlChars(apiKey)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_PROVIDER_API_KEY", "API key contains invalid control characters.");
+        }
         boolean duplicate = providers.findByOrganizationIdOrderByDisplayNameAsc(provider.getOrganizationId()).stream()
                 .filter(item -> !item.getId().equals(providerId))
                 .anyMatch(item -> item.getDisplayName().equalsIgnoreCase(nextName)
                         || (item.getProviderType() == provider.getProviderType() && item.getBaseUrl().equalsIgnoreCase(nextUrl)));
         if (duplicate) throw new ApiException(HttpStatus.CONFLICT, "EXTERNAL_PROVIDER_DUPLICATE",
                 "Another external provider with the same name or URL already exists in this organization.");
-        provider.configure(nextName, nextUrl, apiKey == null ? null : cipher.encrypt(apiKey), apiKey != null && !apiKey.isBlank(), enabled);
+        boolean baseUrlChanged = !provider.getBaseUrl().equals(nextUrl);
+        provider.configure(nextName, nextUrl, replaceKey ? cipher.encrypt(apiKey) : null, replaceKey, enabled);
         providers.save(provider);
         audit.record(provider.getOrganizationId(), CurrentActor.userIdOrNull(), "EXTERNAL_PROVIDER_UPDATED", "EXTERNAL_PROVIDER",
-                provider.getId(), Map.of("displayName", provider.getDisplayName(), "enabled", provider.isEnabled(), "baseUrlChanged", !provider.getBaseUrl().equals(nextUrl)));
+                provider.getId(), Map.of("displayName", provider.getDisplayName(), "enabled", provider.isEnabled(), "baseUrlChanged", baseUrlChanged));
         return ProviderView.from(provider);
     }
 
@@ -451,6 +460,7 @@ public class ExternalProviderAdministrationService {
         return urlSafetyValidator.validateAndNormalizeBaseUrl(candidate);
     }
     private String requireText(String value, String code, String message) { if (value == null || value.isBlank()) throw new ApiException(HttpStatus.BAD_REQUEST, code, message); return value.trim(); }
+    private static boolean hasControlChars(String value) { return value != null && value.chars().anyMatch(ch -> ch < 0x20 || ch == 0x7F); }
     private ExternalProvider requireProvider(UUID id) { return providers.findById(id).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "EXTERNAL_PROVIDER_NOT_FOUND", "The external provider does not exist.")); }
     private void requireOrganization(UUID id) { if (!organizations.existsById(id)) throw new ApiException(HttpStatus.NOT_FOUND, "ORGANIZATION_NOT_FOUND", "The organization does not exist."); }
 

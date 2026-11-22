@@ -16,9 +16,12 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.UUID;
 import jakarta.servlet.http.HttpServletRequest;
 import com.aiconnect.llmgateway.domain.DataBoundaryPolicy;
+import com.aiconnect.llmgateway.domain.Project;
+import com.aiconnect.llmgateway.identity.AuthPrincipal;
 import com.aiconnect.llmgateway.identity.CurrentActor;
 import com.aiconnect.llmgateway.team.TeamAccessService;
 import com.aiconnect.llmgateway.repository.ProjectRepository;
+import com.aiconnect.llmgateway.web.ApiException;
 
 @RestController
 @RequestMapping("/api/admin/projects")
@@ -35,22 +38,45 @@ public class ProjectLifecycleController {
 
     @PatchMapping("/{projectId}")
     public ProjectLifecycleService.ProjectView update(@PathVariable UUID projectId, @Valid @RequestBody UpdateProject request, HttpServletRequest http) {
-        boolean platform = Boolean.TRUE.equals(http.getAttribute("aiconnect.platform-admin"));
-        boolean orgAdmin = projects.findById(projectId).map(project -> access.isOrganizationAdmin(CurrentActor.principal().orElse(null), project.getOrganizationId())).orElse(false);
         return lifecycle.update(projectId, request.name(), request.teamId(), request.externalAiBlocked(),
-                request.dataBoundaryPolicy(), request.maxDataBoundaryPolicy(), platform || orgAdmin);
+                request.dataBoundaryPolicy(), request.maxDataBoundaryPolicy(), isOrganizationOrPlatformAdmin(http, projectId));
     }
 
-    /** POST intentionally requires project-management permission; it does not mutate data. */
+    /** POST requires organization or platform administrator permission; it does not mutate data. */
     @PostMapping("/{projectId}/deletion-preview")
-    public ProjectLifecycleService.ProjectDeletionPreview deletionPreview(@PathVariable UUID projectId) {
+    public ProjectLifecycleService.ProjectDeletionPreview deletionPreview(@PathVariable UUID projectId, HttpServletRequest http) {
+        requireOrganizationOrPlatformAdmin(http, projectId);
         return lifecycle.deletionPreview(projectId);
     }
 
     @DeleteMapping("/{projectId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void delete(@PathVariable UUID projectId) {
+    public void delete(@PathVariable UUID projectId, HttpServletRequest http) {
+        requireOrganizationOrPlatformAdmin(http, projectId);
         lifecycle.delete(projectId);
+    }
+
+    private void requireOrganizationOrPlatformAdmin(HttpServletRequest http, UUID projectId) {
+        if (!isOrganizationOrPlatformAdmin(http, projectId)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ORGANIZATION_ADMIN_REQUIRED",
+                    "Only an organization or platform administrator may perform project lifecycle deletion.");
+        }
+    }
+
+    private boolean isOrganizationOrPlatformAdmin(HttpServletRequest http, UUID projectId) {
+        if (http != null && Boolean.TRUE.equals(http.getAttribute("aiconnect.platform-admin"))) {
+            return true;
+        }
+        AuthPrincipal actor = CurrentActor.principal().orElse(null);
+        if (actor != null && actor.platformAdmin()) {
+            return true;
+        }
+        Project project = projects.findById(projectId).orElse(null);
+        if (project == null) {
+            // Preserve 404 PROJECT_NOT_FOUND from the service when project does not exist.
+            return true;
+        }
+        return access.isOrganizationAdmin(actor, project.getOrganizationId());
     }
 
     public record UpdateProject(@NotBlank @Size(max = 120) String name, UUID teamId, Boolean externalAiBlocked,

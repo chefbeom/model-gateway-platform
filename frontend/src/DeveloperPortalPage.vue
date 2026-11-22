@@ -175,6 +175,11 @@ async function issueKey() {
   } finally { busy.value = false }
 }
 
+function closeSecretModal() {
+  secretOpen.value = false
+  issuedSecret.value = ''
+}
+
 function openRevocation(key: ApiKey) {
   keyToRevoke.value = key
   revocationOpen.value = true
@@ -351,12 +356,12 @@ onMounted(() => { void loadProjects(); void loadConnections() })
       <template #footer><button class="secondary-button" @click="keyOpen = false">취소</button><button class="primary-button" :disabled="busy || !keyName || exceedsDataBoundary(keyBoundaryPolicy, effectiveProjectBoundary)" @click="issueKey">키 발급</button></template>
     </BaseModal>
 
-    <BaseModal :open="secretOpen" title="API 키와 연결 정보를 준비했습니다" description="API 키 원문은 이 창을 닫으면 다시 표시할 수 없습니다." @close="secretOpen = false">
+    <BaseModal :open="secretOpen" title="API 키와 연결 정보를 준비했습니다" description="API 키 원문은 이 창을 닫으면 다시 표시할 수 없습니다." @close="closeSecretModal">
       <div class="connection-reveal">
         <div class="connection-value"><span>PROJECT API KEY</span><code>{{ issuedSecret }}</code><button class="secondary-button" @click="copyValue(issuedSecret, 'API 키')">복사</button></div>
         <IssuedConnectionGuide :endpoints="issuedConnections" :models="issuedModels" :connection-error="connectionError" />
       </div>
-      <template #footer><button class="primary-button" @click="secretOpen = false">안전하게 보관했습니다</button></template>
+      <template #footer><button class="primary-button" @click="closeSecretModal">안전하게 보관했습니다</button></template>
     </BaseModal>
 
     <BaseModal :open="revocationOpen" title="API 키 폐기" description="노출되었거나 더 이상 사용하지 않는 키는 즉시 무효화합니다." size="sm" @close="revocationOpen = false">

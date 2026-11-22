@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
@@ -42,6 +43,10 @@ public class NotificationChannelService {
         String sanitizedSecret = secret;
         if (type == NotificationChannelType.DISCORD_WEBHOOK) {
             sanitizedTarget = validator.validateAndNormalizeBaseUrl(target);
+            if (!validator.isAllowLoopbackTestServer() && !sanitizedTarget.toLowerCase(Locale.ROOT).startsWith("https://")) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "DISCORD_WEBHOOK_HTTPS_REQUIRED",
+                        "Discord webhook URL must use HTTPS.");
+            }
         } else {
             sanitizedTarget = validator.validateTelegramChatId(target);
             sanitizedSecret = validator.validateTelegramBotToken(secret);

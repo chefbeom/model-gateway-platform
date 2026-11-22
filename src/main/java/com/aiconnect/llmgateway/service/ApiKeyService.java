@@ -4,10 +4,13 @@ import com.aiconnect.llmgateway.config.GatewayProperties;
 import com.aiconnect.llmgateway.domain.ApiKey;
 import com.aiconnect.llmgateway.domain.ApiKeyStatus;
 import com.aiconnect.llmgateway.domain.DataBoundaryPolicy;
+import com.aiconnect.llmgateway.domain.Organization;
 import com.aiconnect.llmgateway.domain.Project;
 import com.aiconnect.llmgateway.repository.ApiKeyRepository;
+import com.aiconnect.llmgateway.repository.OrganizationRepository;
 import com.aiconnect.llmgateway.repository.ProjectRepository;
 import com.aiconnect.llmgateway.web.ApiException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -30,7 +33,9 @@ public class ApiKeyService {
     private final ApiKeyRepository apiKeys;
     private final ProjectRepository projects;
     private final GatewayProperties properties;
-    @org.springframework.beans.factory.annotation.Autowired
+    @Autowired(required = false)
+    private OrganizationRepository organizations;
+    @Autowired(required = false)
     private com.aiconnect.llmgateway.beta.BetaAccessService betaAccess;
 
     public ApiKeyService(ApiKeyRepository apiKeys, ProjectRepository projects, GatewayProperties properties) {
@@ -54,6 +59,7 @@ public class ApiKeyService {
                               DataBoundaryPolicy requestedBoundary) {
         Project project = projects.findById(projectId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "PROJECT_NOT_FOUND", "The project does not exist."));
+        assertOrganizationActive(project.getOrganizationId());
         if (!"ACTIVE".equalsIgnoreCase(project.getStatus())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "PROJECT_SUSPENDED",
                     "This project is suspended. Resume it before issuing a new API key.");
@@ -105,6 +111,7 @@ public class ApiKeyService {
         }
         Project project = projects.findById(key.getProjectId())
                 .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_API_KEY", "The API key project no longer exists."));
+        assertOrganizationActive(project.getOrganizationId());
         if (!"ACTIVE".equalsIgnoreCase(project.getStatus())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "PROJECT_SUSPENDED",
                     "This project is suspended by an administrator. API requests are temporarily blocked.");
@@ -149,5 +156,15 @@ public class ApiKeyService {
         byte[] value = new byte[bytes];
         RANDOM.nextBytes(value);
         return HexFormat.of().formatHex(value);
+    }
+
+    private void assertOrganizationActive(UUID organizationId) {
+        if (organizations == null || organizationId == null) return;
+        organizations.findById(organizationId).ifPresent(org -> {
+            if (!"ACTIVE".equalsIgnoreCase(org.getStatus())) {
+                throw new ApiException(HttpStatus.FORBIDDEN, "ORGANIZATION_SUSPENDED",
+                        "This organization is suspended by an administrator.");
+            }
+        });
     }
 }

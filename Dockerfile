@@ -13,5 +13,8 @@ RUN gradle test --no-daemon
 FROM eclipse-temurin:17-jre
 WORKDIR /app
 COPY --from=build /workspace/build/libs/aiconnect-0.1.0.jar app.jar
+RUN groupadd --system aiconnect && useradd --system --gid aiconnect --home-dir /app --shell /usr/sbin/nologin aiconnect \
+    && chown -R aiconnect:aiconnect /app
+USER aiconnect
 EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]

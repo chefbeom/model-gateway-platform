@@ -71,6 +71,10 @@ public class ProjectLifecycleService {
         DataBoundaryPolicy currentEffective = project.effectiveDataBoundaryPolicy();
 
         if (!mayClearBoundary) {
+            if (!java.util.Objects.equals(project.getTeamId(), teamId)) {
+                throw new ApiException(HttpStatus.FORBIDDEN, "PROJECT_TEAM_CHANGE_DENIED",
+                        "Only an organization or platform administrator may change a project's team assignment.");
+            }
             if (maxDataBoundaryPolicy != null && maxDataBoundaryPolicy != currentCeiling) {
                 throw new ApiException(HttpStatus.FORBIDDEN, "DATA_BOUNDARY_RELAXATION_DENIED",
                         "Only an organization or platform administrator may change the project maximum data boundary ceiling.");

@@ -59,7 +59,7 @@ public class AccessTokenService {
 
     private ParsedSession parseClaims(String token, boolean requireSession) {
         try {
-            String[] parts = token.split("\\.");
+            String[] parts = token.split("\\.", -1);
             if (parts.length != 3 || !MessageDigest.isEqual(decode(parts[2]), hmac(parts[0] + "." + parts[1]))) throw unauthorized();
             Map<String, Object> header = objectMapper.readValue(decode(parts[0]), new TypeReference<>() { });
             if (!"HS256".equals(header.get("alg")) || !"JWT".equals(header.get("typ"))) throw unauthorized();

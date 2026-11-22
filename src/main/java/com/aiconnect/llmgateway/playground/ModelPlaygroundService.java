@@ -344,9 +344,9 @@ public class ModelPlaygroundService {
                                 errorMessage = responseError(event, 502);
                             }
                             JsonNode delta = event.path("choices").path(0).path("delta").path("content");
-                            if (delta.isTextual()) assistantContent.append(delta.asText());
+                            if (delta.isTextual()) appendAssistantContent(assistantContent, delta.asText());
                             else if (delta.isArray()) delta.forEach(part -> {
-                                if (part.path("text").isTextual()) assistantContent.append(part.path("text").asText());
+                                if (part.path("text").isTextual()) appendAssistantContent(assistantContent, part.path("text").asText());
                             });
                             JsonNode usage = event.path("usage");
                             if (!usage.isMissingNode() && !usage.isNull()) {
@@ -516,11 +516,16 @@ public class ModelPlaygroundService {
     private String extractPdfText(byte[] bytes) {
         try (PDDocument document = Loader.loadPDF(bytes)) {
             if (document.getNumberOfPages() > MAX_PDF_PAGES) throw new ApiException(HttpStatus.PAYLOAD_TOO_LARGE, "PLAYGROUND_PDF_TOO_MANY_PAGES", "PDF는 최대 100페이지까지 테스트할 수 있습니다.");
-            String text = new PDFTextStripper().getText(document);
-            if (text == null || text.isBlank()) {
+            BoundedWriter writer = new BoundedWriter(MAX_PDF_TEXT_CHARS);
+            try {
+                new PDFTextStripper().writeText(document, writer);
+            } catch (PdfLimitReachedException ignored) {
+                // Stop stripping immediately once MAX_PDF_TEXT_CHARS is captured.
+            }
+            String text = writer.toString();
+            if (text.isBlank()) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "PLAYGROUND_PDF_TEXT_NOT_FOUND", "PDF에서 텍스트를 추출하지 못했습니다. 스캔 PDF는 OCR 처리 후 이미지로 첨부해 주세요.");
             }
-            if (text.length() > MAX_PDF_TEXT_CHARS) text = text.substring(0, MAX_PDF_TEXT_CHARS);
             return text;
         } catch (ApiException exception) {
             throw exception;
@@ -728,10 +733,16 @@ public class ModelPlaygroundService {
     }
 
     private String safeMessage(RuntimeUnavailableException exception) {
-        Throwable cause = exception.getCause();
-        String detail = cause == null ? null : cause.getMessage();
-        if (detail == null || detail.isBlank()) return exception.getMessage() == null ? "상위 AI 서버에 연결할 수 없습니다." : exception.getMessage();
-        return (exception.getMessage() == null ? "상위 AI 서버에 연결할 수 없습니다." : exception.getMessage()) + " " + detail;
+        return exception.getMessage() == null || exception.getMessage().isBlank()
+                ? "상위 AI 서버에 연결할 수 없습니다."
+                : exception.getMessage();
+    }
+
+    private static void appendAssistantContent(StringBuilder target, String text) {
+        if (text == null || text.isEmpty()) return;
+        int remaining = 524_288 - target.length();
+        if (remaining <= 0) return;
+        target.append(text.length() <= remaining ? text : text.substring(0, remaining));
     }
 
     private long elapsed(long startedNanos) { return Duration.ofNanos(System.nanoTime() - startedNanos).toMillis(); }
@@ -799,5 +810,25 @@ public class ModelPlaygroundService {
             int accepted = Math.min(length, maxBytes - written);
             if (accepted > 0) { target.write(bytes, offset, accepted); written += accepted; }
         }
+    }
+
+    private static final class PdfLimitReachedException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+    }
+
+    private static final class BoundedWriter extends java.io.Writer {
+        private final StringBuilder target = new StringBuilder();
+        private final int maxChars;
+        private BoundedWriter(int maxChars) { this.maxChars = maxChars; }
+        @Override public void write(char[] buffer, int offset, int length) {
+            int remaining = maxChars - target.length();
+            if (remaining <= 0) throw new PdfLimitReachedException();
+            int accepted = Math.min(length, remaining);
+            if (accepted > 0) target.append(buffer, offset, accepted);
+            if (target.length() >= maxChars) throw new PdfLimitReachedException();
+        }
+        @Override public void flush() { }
+        @Override public void close() { }
+        @Override public String toString() { return target.toString(); }
     }
 }

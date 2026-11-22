@@ -141,7 +141,7 @@ public final class ProviderFailureClassifier {
             case INPUT_TOKEN_LIMIT_EXCEEDED -> "요청 입력 토큰이 대상 모델의 최대 입력 한도를 초과했습니다." + limit + detail;
             case OUTPUT_TOKEN_LIMIT_EXCEEDED -> "요청 출력 토큰 한도가 대상 모델의 최대 출력 한도를 초과했습니다." + limit + detail;
             case REQUEST_FORMAT_UNSUPPORTED -> "대상 모델 또는 Provider가 요청 형식(response_format·토큰 필드 등)을 지원하지 않습니다." + detail;
-            case AUTHENTICATION_FAILED -> "Provider 인증 또는 권한이 거부되었습니다." + detail;
+            case AUTHENTICATION_FAILED -> "Provider 인증 또는 권한이 거부되었습니다.";
             case MODEL_NOT_FOUND -> "Provider에서 요청한 실제 모델 또는 경로를 찾지 못했습니다." + detail;
             case REQUEST_TIMEOUT -> "Provider 요청 시간이 초과되었습니다." + detail;
             case RATE_LIMITED -> "Provider 요청 한도에 도달했습니다." + detail;

@@ -1,6 +1,7 @@
 package com.aiconnect.llmgateway.admin;
 
 import com.aiconnect.llmgateway.identity.AuditService;
+import com.aiconnect.llmgateway.identity.AuthPrincipal;
 import com.aiconnect.llmgateway.identity.CurrentActor;
 
 import com.aiconnect.llmgateway.domain.*;
@@ -8,11 +9,15 @@ import com.aiconnect.llmgateway.repository.ApiKeyRepository;
 import com.aiconnect.llmgateway.repository.ProjectRepository;
 import com.aiconnect.llmgateway.service.ApiKeyService;
 import com.aiconnect.llmgateway.service.IssuedApiKey;
+import com.aiconnect.llmgateway.team.TeamAccessService;
 import com.aiconnect.llmgateway.web.ApiException;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -31,6 +36,8 @@ public class AdminController {
     private ProjectRepository projects;
     @Autowired(required = false)
     private AuditService audit;
+    @Autowired(required = false)
+    private TeamAccessService access;
 
     public AdminController(ControlPlaneService controlPlane, ApiKeyService apiKeyService, ApiKeyRepository apiKeys) {
         this.controlPlane = controlPlane;
@@ -46,11 +53,18 @@ public class AdminController {
     @PostMapping("/services") public ServiceView createService(@Valid @RequestBody AdminDtos.CreateService request) { return ServiceView.from(controlPlane.create(request)); }
 
     @PostMapping("/projects/{projectId}/service-access")
-    public void grantServiceAccess(@PathVariable UUID projectId, @Valid @RequestBody AdminDtos.GrantServiceAccess request) { controlPlane.grantAccess(projectId, request.serviceId()); }
+    public void grantServiceAccess(@PathVariable UUID projectId, @Valid @RequestBody AdminDtos.GrantServiceAccess request, HttpServletRequest http) {
+        requirePlatformOrOrgAdmin(http, projectId);
+        controlPlane.grantAccess(projectId, request.serviceId());
+    }
     @PostMapping("/services/{serviceId}/targets") public TargetView addTarget(@PathVariable UUID serviceId, @Valid @RequestBody AdminDtos.CreateTarget request) { return TargetView.from(controlPlane.addTarget(serviceId, request)); }
-    @PostMapping("/projects/{projectId}/api-keys") public IssuedApiKey createApiKey(@PathVariable UUID projectId, @Valid @RequestBody AdminDtos.CreateApiKey request) { return apiKeyService.issue(projectId, request.name(), request.expiresAt(), CurrentActor.userIdOrNull(), request.dataBoundaryPolicy()); }
+    @PostMapping("/projects/{projectId}/api-keys") public ResponseEntity<IssuedApiKey> createApiKey(@PathVariable UUID projectId, @Valid @RequestBody AdminDtos.CreateApiKey request) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(apiKeyService.issue(projectId, request.name(), request.expiresAt(), CurrentActor.userIdOrNull(), request.dataBoundaryPolicy()));
+    }
     @DeleteMapping("/api-keys/{apiKeyId}") public void revokeApiKey(@PathVariable UUID apiKeyId) { apiKeyService.revoke(apiKeyId); }
-    @GetMapping("/projects/{projectId}/api-keys") public List<ApiKeyView> apiKeys(@PathVariable UUID projectId) {
+    @GetMapping("/projects/{projectId}/api-keys") public List<ApiKeyView> apiKeys(@PathVariable UUID projectId, HttpServletRequest http) {
+        requirePlatformOrProjectManager(http, projectId);
         DataBoundaryPolicy projectBoundary = projects == null ? DataBoundaryPolicy.EXTERNAL_ALLOWED
                 : projects.findById(projectId).map(Project::effectiveDataBoundaryPolicy).orElse(DataBoundaryPolicy.EXTERNAL_ALLOWED);
         return apiKeys.findByProjectId(projectId).stream().map(item -> ApiKeyView.from(item, projectBoundary)).toList();
@@ -82,6 +96,29 @@ public class AdminController {
     @PostMapping("/runtime-endpoints/{endpointId}/sync-models") public List<DeploymentView> syncModels(@PathVariable UUID endpointId) { return controlPlane.syncModels(endpointId).stream().map(DeploymentView::from).toList(); }
     @GetMapping("/runtime-endpoints") public List<EndpointView> endpoints() { return controlPlane.endpoints().stream().map(EndpointView::from).toList(); }
     @GetMapping("/runtime-endpoints/{endpointId}/deployments") public List<DeploymentView> deployments(@PathVariable UUID endpointId) { return controlPlane.deployments(endpointId).stream().map(DeploymentView::from).toList(); }
+
+    private void requirePlatformOrOrgAdmin(HttpServletRequest http, UUID projectId) {
+        if (http == null || access == null || projects == null) return;
+        if (Boolean.TRUE.equals(http.getAttribute("aiconnect.platform-admin"))) return;
+        AuthPrincipal actor = CurrentActor.principal().orElse(null);
+        if (actor != null && actor.platformAdmin()) return;
+        Project project = projects.findById(projectId).orElse(null);
+        if (project == null) return;
+        if (!access.isOrganizationAdmin(actor, project.getOrganizationId())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ORGANIZATION_ADMIN_REQUIRED",
+                    "Only an organization or platform administrator may manage project service access.");
+        }
+    }
+
+    private void requirePlatformOrProjectManager(HttpServletRequest http, UUID projectId) {
+        if (http == null || access == null) return;
+        if (Boolean.TRUE.equals(http.getAttribute("aiconnect.platform-admin"))) return;
+        AuthPrincipal actor = CurrentActor.principal().orElse(null);
+        if (actor == null || (!actor.platformAdmin() && !access.canManageProject(actor, projectId))) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "PROJECT_ACCESS_DENIED",
+                    "Only a project manager or administrator may list all project API keys.");
+        }
+    }
 
     public record OrganizationView(UUID id, String name, String status, Instant createdAt) { static OrganizationView from(Organization item) { return new OrganizationView(item.getId(), item.getName(), item.getStatus(), item.getCreatedAt()); } }
     public record ProjectView(UUID id, UUID organizationId, UUID teamId, String name, String status, boolean externalAiBlocked, DataBoundaryPolicy dataBoundaryPolicy, DataBoundaryPolicy maxDataBoundaryPolicy) { static ProjectView from(Project item) { return new ProjectView(item.getId(), item.getOrganizationId(), item.getTeamId(), item.getName(), item.getStatus(), item.isExternalAiBlocked(), item.getDataBoundaryPolicy(), item.getMaxDataBoundaryPolicy()); } }

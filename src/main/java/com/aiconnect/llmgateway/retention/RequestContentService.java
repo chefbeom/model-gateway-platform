@@ -1,6 +1,7 @@
 package com.aiconnect.llmgateway.retention;
 
 import com.aiconnect.llmgateway.domain.LlmRequest;
+import com.aiconnect.llmgateway.domain.Project;
 import com.aiconnect.llmgateway.identity.AuditService;
 import com.aiconnect.llmgateway.identity.CurrentActor;
 import com.aiconnect.llmgateway.repository.ProjectRepository;
@@ -40,7 +41,13 @@ public class RequestContentService {
     public void capture(String publicRequestId, String request, String response) {
         if (publicRequestId == null || publicRequestId.isBlank()) return;
         LlmRequest auditRequest = requestByPublicId(publicRequestId);
-        if (auditRequest == null || betaAccess.isBetaProject(auditRequest.getProjectId()) || mode(auditRequest.getProjectId()) != ContentRetentionMode.FULL_ENCRYPTED) return;
+        if (auditRequest == null
+                || "DATA_POLICY_BLOCKED".equals(auditRequest.getErrorCode())
+                || "BLOCK".equals(auditRequest.getDataProtectionAction())
+                || betaAccess.isBetaProject(auditRequest.getProjectId())
+                || mode(auditRequest.getProjectId()) != ContentRetentionMode.FULL_ENCRYPTED) {
+            return;
+        }
         contents.save(new RequestContent(auditRequest.getId(), cipher.encrypt(request), response == null ? null : cipher.encrypt(response)));
     }
 
@@ -51,11 +58,12 @@ public class RequestContentService {
 
     @Transactional
     public ProjectContentPolicy setPolicy(UUID projectId, ContentRetentionMode mode, Integer retentionDays) {
-        if (!projects.existsById(projectId)) throw new ApiException(HttpStatus.NOT_FOUND, "PROJECT_NOT_FOUND", "The project does not exist.");
+        Project project = projects.findById(projectId)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "PROJECT_NOT_FOUND", "The project does not exist."));
         if (mode != ContentRetentionMode.METADATA_ONLY && betaAccess.isBetaProject(projectId)) throw new ApiException(HttpStatus.FORBIDDEN, "BETA_CONTENT_RETENTION_FORBIDDEN", "Beta requests cannot retain request content.");
         ProjectContentPolicy policy = policies.save(new ProjectContentPolicy(projectId, mode, retentionDays));
         if (mode == ContentRetentionMode.METADATA_ONLY) contents.deleteAllForProject(projectId);
-        audit.record(null, CurrentActor.userIdOrNull(), "REQUEST_RETENTION_POLICY_CHANGED", "PROJECT", projectId,
+        audit.record(project.getOrganizationId(), CurrentActor.userIdOrNull(), "REQUEST_RETENTION_POLICY_CHANGED", "PROJECT", projectId,
                 Map.of("mode", mode.name(), "retentionDays", String.valueOf(policy.getRetentionDays())));
         return policy;
     }
@@ -68,7 +76,7 @@ public class RequestContentService {
         return policies.findById(projectId).orElse(new ProjectContentPolicy(projectId, ContentRetentionMode.METADATA_ONLY));
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public StoredContent read(UUID projectId, String publicRequestId) {
         LlmRequest auditRequest = requestByPublicId(publicRequestId);
         if (auditRequest == null || !auditRequest.getProjectId().equals(projectId)) {
@@ -76,7 +84,8 @@ public class RequestContentService {
         }
         RequestContent content = contents.findById(auditRequest.getId()).orElseThrow(() ->
                 new ApiException(HttpStatus.NOT_FOUND, "REQUEST_CONTENT_NOT_RETAINED", "Full request content was not retained for this request."));
-        audit.record(null, CurrentActor.userIdOrNull(), "REQUEST_CONTENT_VIEWED", "LLM_REQUEST", auditRequest.getId(),
+        UUID organizationId = projects.findById(projectId).map(Project::getOrganizationId).orElse(null);
+        audit.record(organizationId, CurrentActor.userIdOrNull(), "REQUEST_CONTENT_VIEWED", "LLM_REQUEST", auditRequest.getId(),
                 Map.of("projectId", projectId.toString(), "requestId", publicRequestId));
         return new StoredContent(cipher.decrypt(content.getEncryptedRequest()), cipher.decrypt(content.getEncryptedResponse()));
     }

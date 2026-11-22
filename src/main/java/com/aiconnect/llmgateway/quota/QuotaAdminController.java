@@ -40,16 +40,20 @@ public class QuotaAdminController {
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "PROJECT_NOT_FOUND", "The project does not exist."));
         ProjectQuota quota = quotas.findById(projectId).orElseGet(() -> new ProjectQuota(projectId, 60, null));
         if (!isPlatformOrOrgAdmin(http, project.getOrganizationId())) {
-            if (quota.getMaxRequestsPerMinute() != null && request.requestsPerMinute() > quota.getMaxRequestsPerMinute()) {
+            int effectiveMaxRpm = quota.getMaxRequestsPerMinute() != null
+                    ? quota.getMaxRequestsPerMinute() : quota.getRequestsPerMinute();
+            if (request.requestsPerMinute() > effectiveMaxRpm) {
                 throw new ApiException(HttpStatus.FORBIDDEN, "QUOTA_CEILING_EXCEEDED",
                         "Requested requestsPerMinute (" + request.requestsPerMinute()
-                                + ") exceeds the administrator ceiling (" + quota.getMaxRequestsPerMinute() + ").");
+                                + ") exceeds the administrator ceiling (" + effectiveMaxRpm + ").");
             }
-            if (quota.getMaxMonthlyTokenLimit() != null
-                    && (request.monthlyTokenLimit() == null || request.monthlyTokenLimit() > quota.getMaxMonthlyTokenLimit())) {
+            Long effectiveMaxTokens = quota.getMaxMonthlyTokenLimit() != null
+                    ? quota.getMaxMonthlyTokenLimit() : quota.getMonthlyTokenLimit();
+            if (effectiveMaxTokens != null
+                    && (request.monthlyTokenLimit() == null || request.monthlyTokenLimit() > effectiveMaxTokens)) {
                 throw new ApiException(HttpStatus.FORBIDDEN, "QUOTA_CEILING_EXCEEDED",
                         "Requested monthlyTokenLimit exceeds or attempts to clear the administrator ceiling ("
-                                + quota.getMaxMonthlyTokenLimit() + ").");
+                                + effectiveMaxTokens + ").");
             }
         }
         quota.configureQuota(request.requestsPerMinute(), request.monthlyTokenLimit());

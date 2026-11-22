@@ -16,8 +16,19 @@ server {
     set_real_ip_from ${AICONNECT_BETA_TRUSTED_PROXY_CIDR};
     real_ip_header CF-Connecting-IP;
     real_ip_recursive on;
+    proxy_hide_header X-Content-Type-Options;
+    proxy_hide_header X-Frame-Options;
+    proxy_hide_header Referrer-Policy;
+    proxy_hide_header Permissions-Policy;
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy no-referrer always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
     proxy_set_header X-AIConnect-Beta-Ingress "${AICONNECT_BETA_INGRESS_TOKEN}";
     proxy_set_header X-Admin-Token "";
+    proxy_set_header Forwarded "";
+    proxy_set_header X-Forwarded-Host "";
+    proxy_set_header X-Forwarded-Port "";
     proxy_set_header Cookie "";
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -37,6 +48,10 @@ server {
         proxy_next_upstream off;
         proxy_read_timeout ${AICONNECT_BETA_UPSTREAM_TIMEOUT};
         proxy_send_timeout ${AICONNECT_BETA_UPSTREAM_TIMEOUT};
+        add_header X-Content-Type-Options nosniff always;
+        add_header X-Frame-Options DENY always;
+        add_header Referrer-Policy no-referrer always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
         add_header X-Accel-Buffering no always;
     }
     location = /api/beta/invitations/redeem {
@@ -49,6 +64,9 @@ server {
         proxy_set_header Authorization "";
         proxy_set_header X-AIConnect-Beta-Ingress "${AICONNECT_BETA_INGRESS_TOKEN}";
         proxy_set_header X-Admin-Token "";
+        proxy_set_header Forwarded "";
+        proxy_set_header X-Forwarded-Host "";
+        proxy_set_header X-Forwarded-Port "";
         proxy_set_header Cookie "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

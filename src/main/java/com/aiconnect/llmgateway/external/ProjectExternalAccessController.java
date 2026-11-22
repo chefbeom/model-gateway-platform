@@ -34,7 +34,7 @@ public class ProjectExternalAccessController {
     public ProjectExternalAccessService.PortalAccessView request(@PathVariable UUID projectId,
                                                                   @Valid @RequestBody RequestAccess request) {
         AuthPrincipal actor = actor();
-        if (!access.canViewProject(actor, projectId)) throw denied();
+        if (!access.canManageProject(actor, projectId)) throw denied();
         return service.request(projectId, request.providerId(), actor.userId(), request.reason());
     }
 

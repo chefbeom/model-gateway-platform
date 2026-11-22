@@ -79,9 +79,29 @@ function defaultBaseUrl() {
   return window.location.origin + '/v1'
 }
 function normalizedBaseUrl() {
+  if (targetMode.value === 'gateway') return defaultBaseUrl()
   const value = baseUrl.value.trim().replace(/\/+$/, '')
   if (!value) return '/v1'
   return /\/v1$/i.test(value) ? value : value + '/v1'
+}
+function validateTargetUrl(url: string): string | null {
+  if (targetMode.value === 'gateway') return null
+  try {
+    const parsed = new URL(url)
+    if (parsed.username || parsed.password) {
+      return '요청 주소에 인증 정보(@)를 포함할 수 없습니다.'
+    }
+    if (targetMode.value === 'external') {
+      if (parsed.protocol !== 'https:') {
+        return '외부 Provider 직접 테스트는 https:// 주소만 허용됩니다.'
+      }
+    } else if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return 'http:// 또는 https:// 주소만 허용됩니다.'
+    }
+    return null
+  } catch {
+    return '올바른 HTTP(S) 요청 주소를 입력하세요.'
+  }
 }
 function formatDate(value?: string | null) {
   if (!value) return '만료 없음'
@@ -230,11 +250,14 @@ async function loadModels() {
   failureRequestId.value = ''
   if (!apiKey.value.trim()) { message.value = keyMode.value === 'temporary' ? '먼저 임시 테스트 키를 발급하세요.' : '실사용 키를 입력하세요.'; return }
   if (directTarget.value && keyMode.value === 'temporary') { message.value = '임시 Gateway 키는 직접 Provider 주소에서 사용할 수 없습니다. AICONNECT Gateway를 선택하세요.'; return }
+  const targetUrl = normalizedBaseUrl()
+  const urlProblem = validateTargetUrl(targetUrl)
+  if (urlProblem) { rawError.value = urlProblem; message.value = urlProblem; probeStatus.value = 'failed'; return }
   loadingModels.value = true
   probeStatus.value = 'loading'
   const started = performance.now()
   try {
-    const response = await fetch(normalizedBaseUrl() + '/models', { headers: jsonHeaders() })
+    const response = await fetch(targetUrl + '/models', { headers: jsonHeaders() })
     const parsed = await parseResponse(response)
     if (!response.ok) throw new Error(requestError(response, parsed.body, '모델 목록 조회에 실패했습니다.'))
     const data = parsed.body && typeof parsed.body === 'object' ? (parsed.body as { data?: ModelItem[] }).data : []
@@ -289,6 +312,9 @@ async function readStream(response: Response) {
 }
 async function runTest() {
   if (!canRun.value) return
+  const targetUrl = normalizedBaseUrl()
+  const urlProblem = validateTargetUrl(targetUrl)
+  if (urlProblem) { rawError.value = urlProblem; message.value = urlProblem; return }
   rawError.value = ''
   result.value = null
   failureRequestId.value = ''
@@ -300,7 +326,7 @@ async function runTest() {
   const body: Record<string, unknown> = { model: model.value.trim(), messages, temperature: Number(temperature.value), max_completion_tokens: Number(maxTokens.value), stream: stream.value }
   if (responseMode.value === 'json') body.response_format = { type: 'json_object' }
   try {
-    const response = await fetch(normalizedBaseUrl() + '/chat/completions', { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(body) })
+    const response = await fetch(targetUrl + '/chat/completions', { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(body) })
     const requestId = response.headers.get('X-Request-Id') ?? response.headers.get('x-request-id') ?? ''
     failureRequestId.value = requestId
     const parsed = stream.value && response.ok ? await readStream(response) : await parseResponse(response)
@@ -378,7 +404,7 @@ watch(() => [props.organizationId, props.auth.accessToken], () => { void loadPro
         </header>
 
         <div class="playground-form">
-          <label class="field">{{ targetMode === 'gateway' ? '브라우저 테스트 요청 주소' : '직접 호출 요청 주소' }} <small>{{ targetMode === 'gateway' ? '기본값은 현재 화면과 같은 출처의 테스트 경로이며 SDK 공지 주소가 아닙니다.' : selectedTarget.label + ' 요청 주소' }} · /v1 자동 보정</small><input v-model.trim="baseUrl" placeholder="https://example.com/v1" /></label>
+          <label class="field">{{ targetMode === 'gateway' ? '브라우저 테스트 요청 주소' : '직접 호출 요청 주소' }} <small>{{ targetMode === 'gateway' ? '기본값은 현재 화면과 같은 출처의 테스트 경로이며 SDK 공지 주소가 아닙니다.' : selectedTarget.label + ' 요청 주소' }} · /v1 자동 보정</small><input v-model.trim="baseUrl" :readonly="targetMode === 'gateway'" placeholder="https://example.com/v1" /></label>
           <details v-if="targetMode === 'gateway'" class="collapsible-subform sdk-address-disclosure">
             <summary>설정된 SDK Gateway 주소 확인 · 복사</summary>
             <div class="collapsible-subform-body sdk-disclosure-body">

@@ -1,5 +1,6 @@
 package com.aiconnect.llmgateway.team;
 
+import com.aiconnect.llmgateway.domain.Organization;
 import com.aiconnect.llmgateway.domain.Project;
 import com.aiconnect.llmgateway.identity.AuthPrincipal;
 import com.aiconnect.llmgateway.identity.OrganizationMember;
@@ -10,7 +11,9 @@ import com.aiconnect.llmgateway.identity.ProjectMembership;
 import com.aiconnect.llmgateway.identity.ProjectMembershipId;
 import com.aiconnect.llmgateway.identity.ProjectMembershipRepository;
 import com.aiconnect.llmgateway.identity.AppUserRepository;
+import com.aiconnect.llmgateway.repository.OrganizationRepository;
 import com.aiconnect.llmgateway.repository.ProjectRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.Optional;
@@ -23,6 +26,8 @@ public class TeamAccessService {
     private final ProjectRepository projects;
     private final ProjectMembershipRepository projectMemberships;
     private final AppUserRepository users;
+    @Autowired(required = false)
+    private OrganizationRepository organizations;
 
     public TeamAccessService(OrganizationMemberRepository organizationMembers, TeamMemberRepository teamMembers,
                              ProjectRepository projects, ProjectMembershipRepository projectMemberships, AppUserRepository users) {
@@ -34,7 +39,13 @@ public class TeamAccessService {
     }
 
     public boolean canViewOrganization(AuthPrincipal actor, UUID organizationId) {
-        return actor != null && (actor.platformAdmin() || organizationMembers.findByIdOrganizationIdAndIdUserId(organizationId, actor.userId()).isPresent());
+        if (actor == null) return false;
+        if (actor.platformAdmin()) return true;
+        if (organizations != null && organizationId != null) {
+            Organization org = organizations.findById(organizationId).orElse(null);
+            if (org != null && !"ACTIVE".equalsIgnoreCase(org.getStatus())) return false;
+        }
+        return organizationMembers.findByIdOrganizationIdAndIdUserId(organizationId, actor.userId()).isPresent();
     }
 
     public boolean isOrganizationAdmin(AuthPrincipal actor, UUID organizationId) {

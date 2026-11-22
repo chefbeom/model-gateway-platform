@@ -63,6 +63,9 @@ public class RuntimeModelOperationController {
 
     @GetMapping("/model-operations/downloads/{jobId}")
     public RuntimeResult downloadStatus(@PathVariable UUID endpointId, @PathVariable String jobId) {
+        if (jobId == null || !jobId.matches("^[A-Za-z0-9._-]{1,128}$")) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_JOB_ID", "Invalid download job identifier.");
+        }
         return service.downloadStatus(endpointId, jobId);
     }
 

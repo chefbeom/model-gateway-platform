@@ -251,6 +251,16 @@ public class PlatformAdministrationService {
         AppUser user = users.findById(userId).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", "사용자를 찾을 수 없습니다."));
         if (!user.getEmail().equalsIgnoreCase(confirmation)) throw new ApiException(HttpStatus.BAD_REQUEST, "CONFIRMATION_MISMATCH", "사용자 이메일을 정확히 입력해야 합니다.");
         if (userId.equals(CurrentActor.userIdOrNull())) throw new ApiException(HttpStatus.CONFLICT, "SELF_DELETE_FORBIDDEN", "현재 관리자 계정은 삭제할 수 없습니다.");
+        if (user.isPlatformAdmin()) {
+            boolean anotherEnabledPlatformAdminExists = users.findAll().stream()
+                    .anyMatch(candidate -> candidate.isPlatformAdmin() && candidate.isEnabled() && !candidate.getId().equals(userId));
+            if (!anotherEnabledPlatformAdminExists) {
+                throw new ApiException(HttpStatus.CONFLICT, "LAST_PLATFORM_ADMIN_FORBIDDEN", "마지막 활성 시스템 관리자 계정은 삭제할 수 없습니다.");
+            }
+        }
+        int revokedKeyCount = entityManager.createNativeQuery(
+                        "update api_key set status = 'REVOKED' where issued_by_user_id = :id and status = 'ACTIVE'")
+                .setParameter("id", userId).executeUpdate();
         execute("update audit_log set actor_user_id = null where actor_user_id = :id", userId);
         execute("update api_key set issued_by_user_id = null where issued_by_user_id = :id", userId);
         execute("update app_user set invited_by_user_id = null where invited_by_user_id = :id", userId);
@@ -264,7 +274,7 @@ public class PlatformAdministrationService {
         execute("delete from organization_member where user_id = :id", userId);
         execute("delete from app_user where id = :id", userId);
         audit.record(null, CurrentActor.userIdOrNull(), "PLATFORM_USER_DELETED", "APP_USER", userId,
-                Map.of("email", user.getEmail()));
+                Map.of("email", user.getEmail(), "revokedApiKeyCount", revokedKeyCount));
     }
 
     @Transactional

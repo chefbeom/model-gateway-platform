@@ -147,11 +147,15 @@ public class OrganizationAuthorizationFilter extends OncePerRequestFilter {
             filterChain.doFilter(new BufferedBodyRequest(request, body), response);
             return;
         }
-        if (teamId != null && access.canManageTeam(actor, teamId)) {
+        if (teamId != null && isTeamMemberPath(uri) && access.canManageTeam(actor, teamId)) {
             filterChain.doFilter(new BufferedBodyRequest(request, body), response);
             return;
         }
         deny(response, "ORGANIZATION_ADMIN_REQUIRED", "An organization administrator is required for this operation.");
+    }
+
+    private boolean isTeamMemberPath(String uri) {
+        return uri.matches("/api/admin/organizations/[0-9a-fA-F-]+/teams/[0-9a-fA-F-]+/members(/[0-9a-fA-F-]+)?");
     }
 
     private void attachOrganization(HttpServletRequest request, UUID organizationId) {

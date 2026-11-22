@@ -9,6 +9,14 @@ backups/
 secrets/
 .tls-validation/
 .env
+.env.*
+!.env.example
+!.env.*.example
+!deploy/ha/.env.example
+!deploy/ha/.env.external-data.example
+temp/
+*.pem
+*.key
 *.log
 *.bak*
 .idea/

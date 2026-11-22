@@ -87,4 +87,38 @@ class DataProtectionScannerTest {
 
         assertThat(scanner.scan(request, policy).has(DataClassification.CONFIDENTIAL)).isTrue();
     }
+
+    @Test
+    void detectsModernKeysUserFieldDataUriBypassAttemptsAndResistsReDoS() throws Exception {
+        var mapper = new ObjectMapper();
+        EffectiveDataProtectionPolicy policy = new EffectiveDataProtectionPolicy(
+                DataProtectionMode.ENFORCE, DataProtectionLevel.STRICT, DataProtectionAction.BLOCK,
+                false, true, true, false, false, true, List.of("(a+a+)+b"), List.of("CUSTOM"));
+
+        // Modern OpenAI project key prefixed with data:image/png, in content (not strict base64 media field)
+        var dataBypass = mapper.createObjectNode()
+                .put("content", "data:image/png, sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz123456");
+        assertThat(scanner.scan(dataBypass, policy).has(DataClassification.SECRET)).isTrue();
+
+        // GitHub token placed inside top-level "user" field
+        var userFieldSecret = mapper.createObjectNode()
+                .put("user", "ghp_1234567890abcdefghijklmnopqrstuvwxyz1234")
+                .put("messages", "hello");
+        assertThat(scanner.scan(userFieldSecret, policy).has(DataClassification.SECRET)).isTrue();
+
+        // Adversarial backtracking email input completes quickly without O(n^2) hang
+        String adversarialEmail = "a.".repeat(10_000) + "noatsign";
+        var emailPayload = mapper.createObjectNode().put("content", adversarialEmail);
+        long startNanos = System.nanoTime();
+        DataProtectionScanResult emailRes = scanner.scan(emailPayload, policy);
+        assertThat(emailRes.has(DataClassification.PII)).isFalse();
+        assertThat(System.nanoTime() - startNanos).isLessThan(1_000_000_000L);
+
+        // Catastrophic custom regex hits step budget and returns SCAN_INCOMPLETE instead of hanging
+        var redosPayload = mapper.createObjectNode().put("content", "a".repeat(80) + "!");
+        long redosStart = System.nanoTime();
+        DataProtectionScanResult redosRes = scanner.scan(redosPayload, policy);
+        assertThat(redosRes.has(DataClassification.SCAN_INCOMPLETE)).isTrue();
+        assertThat(System.nanoTime() - redosStart).isLessThan(1_000_000_000L);
+    }
 }

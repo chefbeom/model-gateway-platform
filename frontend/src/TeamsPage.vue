@@ -224,6 +224,11 @@ async function issueAccountInvitation() {
   }
 }
 
+function closeInviteModal() {
+  inviteOpen.value = false
+  issuedInvitation.value = null
+}
+
 async function copyInviteValue(value: string, label: string) {
   if (!value) return
   try {
@@ -576,7 +581,7 @@ onMounted(() => {
 
     <article class="surface-card role-guide-card"><header class="card-header"><div><span class="card-kicker">SAFE OFFBOARDING</span><h2>삭제 범위 안내</h2></div></header><div class="role-guide-grid"><article><b>팀에서 제거</b><small>선택한 팀 배정만 제거합니다. 조직 계정과 API 키는 유지됩니다.</small></article><article><b>조직에서 제거</b><small>모든 팀 배정을 해제하고, 이 조직에서 해당 사용자가 발급한 API 키 기록을 삭제합니다.</small></article><article><b>팀 삭제</b><small>소속 구성원을 팀에서 해제하고, 팀 프로젝트를 중지·조직 공용으로 전환하며 해당 프로젝트 API 키를 삭제합니다.</small></article></div></article>
 
-    <BaseModal :open="inviteOpen" title="계정 생성 초대 코드/링크 발급" description="1회용 초대 코드와 /#register 가입 링크를 발급합니다. 가입자는 첫 로그인 전 Google Authenticator 2차 인증 등록을 완료해야 합니다." @close="inviteOpen = false">
+    <BaseModal :open="inviteOpen" title="계정 생성 초대 코드/링크 발급" description="1회용 초대 코드와 /#register 가입 링크를 발급합니다. 가입자는 첫 로그인 전 Google Authenticator 2차 인증 등록을 완료해야 합니다." @close="closeInviteModal">
       <div class="modal-form">
         <label v-if="platformAdmin" class="field">
           부여 계층
@@ -653,7 +658,7 @@ onMounted(() => {
         </div>
       </div>
       <template #footer>
-        <button class="secondary-button" @click="inviteOpen = false">닫기</button>
+        <button class="secondary-button" @click="closeInviteModal">닫기</button>
         <button class="primary-button" :disabled="busy || !organizationId" @click="issueAccountInvitation">초대 코드/링크 발급</button>
       </template>
     </BaseModal>

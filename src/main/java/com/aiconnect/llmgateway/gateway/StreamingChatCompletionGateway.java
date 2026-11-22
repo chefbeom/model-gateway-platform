@@ -548,7 +548,13 @@ public class StreamingChatCompletionGateway {
         }
 
         void accept(byte[] bytes) {
+            if (pending.length() >= 1_048_576) {
+                pending.setLength(0);
+            }
             pending.append(new String(bytes, StandardCharsets.UTF_8));
+            if (pending.length() > 1_048_576) {
+                pending.delete(0, pending.length() - 1_048_576);
+            }
             int newline;
             while ((newline = pending.indexOf("\n")) >= 0) {
                 String line = pending.substring(0, newline).trim(); pending.delete(0, newline + 1);
@@ -582,7 +588,9 @@ public class StreamingChatCompletionGateway {
                         .asInt(usage.path("input_tokens_details").path("cached_tokens").asInt(0)));
                 String tier = payload.path("service_tier").asText(null);
                 if (tier != null && !tier.isBlank()) actualServiceTier = tier;
-                TokenUsageEstimator.appendOutputText(payload, generatedText);
+                if (generatedText.length() < 1_048_576) {
+                    TokenUsageEstimator.appendOutputText(payload, generatedText);
+                }
             } catch (Exception ignored) { }
         }
 

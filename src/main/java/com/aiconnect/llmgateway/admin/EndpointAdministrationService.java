@@ -21,6 +21,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -68,6 +70,20 @@ public class EndpointAdministrationService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "RUNTIME_TOKEN_UPDATE_INVALID", "Set a new token or clear the existing token, not both.");
         }
         boolean replaceToken = command.apiToken() != null && !command.apiToken().isBlank();
+        if (replaceToken && hasControlChars(command.apiToken())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_RUNTIME_TOKEN",
+                    "Runtime API token contains invalid control characters.");
+        }
+        if (!baseUrl.equals(endpoint.getBaseUrl()) && endpoint.getApiToken() != null) {
+            String previousToken = cipher.decrypt(endpoint.getApiToken());
+            boolean sameAsPrevious = replaceToken && MessageDigest.isEqual(
+                    command.apiToken().getBytes(StandardCharsets.UTF_8),
+                    (previousToken == null ? "" : previousToken).getBytes(StandardCharsets.UTF_8));
+            if (!command.clearApiToken() && (!replaceToken || sameAsPrevious)) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "RUNTIME_URL_REQUIRES_NEW_TOKEN",
+                        "Changing a runtime endpoint URL requires clearing or replacing the stored API token.");
+            }
+        }
         boolean securityChanged = !baseUrl.equals(endpoint.getBaseUrl()) || replaceToken || command.clearApiToken()
                 || (command.runtimeType() != null && command.runtimeType() != endpoint.getRuntimeType());
         if (securityChanged) trustAttestations.findById(endpointId).ifPresent(a -> a.revoke(Instant.now()));
@@ -108,6 +124,10 @@ public class EndpointAdministrationService {
     private String normalizeBaseUrl(String raw) {
         ExternalUrlSafetyValidator validator = urlSafetyValidator != null ? urlSafetyValidator : new ExternalUrlSafetyValidator(false);
         return validator.validateAndNormalizeRuntimeBaseUrl(raw);
+    }
+
+    private static boolean hasControlChars(String value) {
+        return value != null && value.chars().anyMatch(ch -> ch < 0x20 || ch == 0x7F);
     }
 
     public record UpdateCommand(String displayName, String baseUrl, RuntimeType runtimeType, String apiToken, boolean clearApiToken, Boolean enabled, boolean clearPricing, BigDecimal inputPricePerMillion, BigDecimal outputPricePerMillion, Currency currency) { }

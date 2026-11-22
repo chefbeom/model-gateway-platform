@@ -3,15 +3,19 @@ package com.aiconnect.llmgateway.admin;
 import com.aiconnect.llmgateway.domain.ApiKey;
 import com.aiconnect.llmgateway.domain.ApiKeyStatus;
 import com.aiconnect.llmgateway.domain.Project;
+import com.aiconnect.llmgateway.identity.AuditService;
+import com.aiconnect.llmgateway.identity.CurrentActor;
 import com.aiconnect.llmgateway.repository.ApiKeyRepository;
 import com.aiconnect.llmgateway.repository.ProjectRepository;
 import com.aiconnect.llmgateway.web.ApiException;
 import jakarta.persistence.EntityManager;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 
 /** Emergency control for a project. Suspending blocks every API key at the gateway boundary. */
@@ -20,6 +24,8 @@ public class ProjectControlService {
     private final ProjectRepository projects;
     private final ApiKeyRepository apiKeys;
     private final EntityManager entityManager;
+    @Autowired(required = false)
+    private AuditService audit;
 
     public ProjectControlService(ProjectRepository projects, ApiKeyRepository apiKeys, EntityManager entityManager) {
         this.projects = projects;
@@ -44,6 +50,10 @@ public class ProjectControlService {
                 .setParameter("status", status)
                 .setParameter("projectId", projectId)
                 .executeUpdate();
+        if (audit != null) {
+            audit.record(project.getOrganizationId(), CurrentActor.userIdOrNull(), "PROJECT_STATUS_CHANGED",
+                    "PROJECT", projectId, Map.of("status", status, "revokedApiKeyCount", revoked));
+        }
         return view(project, status, revoked);
     }
 

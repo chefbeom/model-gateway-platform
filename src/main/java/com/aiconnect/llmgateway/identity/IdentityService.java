@@ -24,6 +24,7 @@ import java.util.UUID;
 public class IdentityService {
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final int MAX_LOGIN_FAILED_ATTEMPTS = 5;
+    private static final int MAX_BCRYPT_PASSWORD_BYTES = 72;
     private static final Duration LOGIN_LOCK_DURATION = Duration.ofMinutes(5);
     private static final String FALLBACK_DUMMY_HASH = "$2a$10$7EqJtq98hPqEX7fNZaFWoOHi7q8xI5J7v8P4bM1p5P6sV9z6X1K6W";
     static final String DEFAULT_WORKSPACE_NAME = "Default Workspace";
@@ -59,6 +60,7 @@ public class IdentityService {
     @Transactional
     public synchronized AppUser bootstrap(String email, String password) {
         if (users.count() != 0) throw new ApiException(HttpStatus.CONFLICT, "BOOTSTRAP_ALREADY_COMPLETED", "The first platform administrator already exists.");
+        validatePasswordByteLength(password);
         AppUser administrator = users.save(new AppUser(email, passwordEncoder.encode(password), true, AccountTier.SYSTEM_ADMIN, null));
         Organization workspace = organizations.findByName(DEFAULT_WORKSPACE_NAME)
                 .orElseGet(() -> organizations.save(new Organization(DEFAULT_WORKSPACE_NAME)));
@@ -80,6 +82,7 @@ public class IdentityService {
     public AppUser createUser(String email, String password, boolean platformAdmin, AccountTier accountTier, UUID invitedByUserId) {
         String normalized = normalize(email);
         if (users.existsByEmail(normalized)) throw new ApiException(HttpStatus.CONFLICT, "EMAIL_ALREADY_EXISTS", "A user with that email already exists.");
+        validatePasswordByteLength(password);
         AccountTier resolvedTier = platformAdmin ? AccountTier.SYSTEM_ADMIN : (accountTier == null ? AccountTier.GENERAL_USER : accountTier);
         return users.save(new AppUser(normalized, passwordEncoder.encode(password), platformAdmin, resolvedTier, invitedByUserId));
     }
@@ -104,12 +107,15 @@ public class IdentityService {
     public Session login(String email, String password, String totpCode, String recoveryCode) {
         Instant now = clock.instant();
         String normalizedEmail = normalize(email);
+        boolean oversizedPassword = password == null || password.getBytes(StandardCharsets.UTF_8).length > MAX_BCRYPT_PASSWORD_BYTES;
+        String candidatePassword = oversizedPassword ? "oversized-password-placeholder" : password;
         AppUser user = users.findByEmailForUpdate(normalizedEmail).orElse(null);
         if (user == null) {
-            passwordEncoder.matches(password, dummyPasswordHash);
+            passwordEncoder.matches(candidatePassword, dummyPasswordHash);
             throw invalidCredentials();
         }
         if (user.isLoginLocked(now)) {
+            passwordEncoder.matches(candidatePassword, dummyPasswordHash);
             if (audit != null) {
                 audit.record(null, user.getId(), "LOGIN_BLOCKED_LOCKED", "APP_USER", user.getId(),
                         Map.of("email", user.getEmail()));
@@ -120,10 +126,14 @@ public class IdentityService {
             user.clearLoginLockout();
         }
         if (!user.isEnabled()) {
-            passwordEncoder.matches(password, user.getPasswordHash());
+            passwordEncoder.matches(candidatePassword, user.getPasswordHash());
             throw invalidCredentials();
         }
-        if (!passwordEncoder.matches(password, user.getPasswordHash())) {
+        if (oversizedPassword) {
+            passwordEncoder.matches(candidatePassword, dummyPasswordHash);
+            throw invalidCredentials();
+        }
+        if (!passwordEncoder.matches(candidatePassword, user.getPasswordHash())) {
             boolean lockedNow = user.recordLoginFailure(MAX_LOGIN_FAILED_ATTEMPTS, LOGIN_LOCK_DURATION, now);
             users.saveAndFlush(user);
             if (audit != null) {
@@ -195,6 +205,19 @@ public class IdentityService {
     @Transactional
     public void logout(String rawToken) {
         refreshTokens.findByTokenHashForUpdate(hashRefresh(rawToken)).ifPresent(AuthRefreshToken::revoke);
+    }
+
+    @Transactional
+    public void logoutSession(UUID sessionId) {
+        if (sessionId == null) return;
+        refreshTokens.findByIdForUpdate(sessionId).ifPresent(AuthRefreshToken::revoke);
+    }
+
+    private void validatePasswordByteLength(String password) {
+        if (password == null || password.getBytes(StandardCharsets.UTF_8).length > MAX_BCRYPT_PASSWORD_BYTES) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_PASSWORD_LENGTH",
+                    "Password cannot exceed " + MAX_BCRYPT_PASSWORD_BYTES + " UTF-8 bytes.");
+        }
     }
 
     public AppUser getUser(UUID userId) {
