@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="bgGrad" x1="6" y1="4" x2="58" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#11281d" />
+      <stop offset="100%" stop-color="#07100c" />
+    </linearGradient>
+    <radialGradient id="coreGlow" cx="32" cy="32" r="24" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#72db8a" stop-opacity="0.18" />
+      <stop offset="100%" stop-color="#72db8a" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="diamondGrad" x1="21" y1="20" x2="43" y2="44" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#a8efb5" />
+      <stop offset="100%" stop-color="#42b963" />
+    </linearGradient>
+  </defs>
+
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#bgGrad)" stroke="#72db8a" stroke-opacity="0.34" stroke-width="1.5" />
+  <circle cx="32" cy="32" r="24" fill="url(#coreGlow)" />
+
+  <line x1="12.5" y1="32" x2="32" y2="32" stroke="#a8efb5" stroke-width="4.4" stroke-linecap="round" />
+  <line x1="32" y1="32" x2="49" y2="18.5" stroke="#72db8a" stroke-width="4.4" stroke-linecap="round" />
+  <line x1="32" y1="32" x2="49" y2="45.5" stroke="#7fc7ff" stroke-width="4.4" stroke-linecap="round" />
+
+  <circle cx="12.5" cy="32" r="5" fill="#edf7ef" stroke="#72db8a" stroke-width="1.8" />
+  <circle cx="49" cy="18.5" r="5.2" fill="#a8efb5" stroke="#07100c" stroke-width="1.5" />
+  <circle cx="49" cy="45.5" r="5.2" fill="#7fc7ff" stroke="#07100c" stroke-width="1.5" />
+
+  <path d="M 32 20 L 44 32 L 32 44 L 20 32 Z" fill="url(#diamondGrad)" stroke="#07100c" stroke-width="2.2" stroke-linejoin="round" />
+  <path d="M 32 26 C 32.75 30.05 33.95 31.25 38 32 C 33.95 32.75 32.75 33.95 32 38 C 31.25 33.95 30.05 32.75 26 32 C 30.05 31.25 31.25 30.05 32 26 Z" fill="#07100c" />
+</svg>

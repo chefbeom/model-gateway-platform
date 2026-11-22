@@ -1,971 +1,201 @@
-import type { DocPage } from './types'
-import { currentGuides } from './currentGuides'
-import { runtimeDiagnosticsDoc } from './runtimeDiagnostics'
-import { searchDocuments } from './navigation'
+import type { DocGroup, DocPage } from './types'
+import { resolveDocumentId, searchDocuments } from './navigation'
+import { roleGuides } from './roleGuides'
+import { operationsGuides } from './operationsGuides'
 
-export const DOCS_REVIEWED_AT = '2026. 10. 05.'
+export const DOCS_REVIEWED_AT = '2026. 11. 22.'
+export const DOCS_REVIEWED_ISO = '2026-11-22'
 
-const curlExample = `curl "$AICONNECT_BASE_URL/chat/completions" \\
-  -H "Authorization: Bearer $AICONNECT_API_KEY" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "model": "text-pro",
-    "messages": [
-      {"role": "user", "content": "회의 내용을 세 문장으로 요약해 주세요."}
-    ],
-    "stream": false
-  }'`
-
-const pythonExample = `from openai import OpenAI
-import os
-
-client = OpenAI(
-    api_key=os.environ["AICONNECT_API_KEY"],
-    base_url=os.environ["AICONNECT_BASE_URL"],
-)
-
-response = client.chat.completions.create(
-    model="text-pro",
-    messages=[
-        {"role": "user", "content": "회의 내용을 세 문장으로 요약해 주세요."}
-    ],
-)
-
-print(response.choices[0].message.content)`
-
-const typescriptExample = `import OpenAI from 'openai'
-
-const client = new OpenAI({
-  apiKey: process.env.AICONNECT_API_KEY,
-  baseURL: process.env.AICONNECT_BASE_URL
-})
-
-const response = await client.chat.completions.create({
-  model: 'text-pro',
-  messages: [
-    { role: 'user', content: '회의 내용을 세 문장으로 요약해 주세요.' }
+const overviewDoc: DocPage = {
+  id: 'overview',
+  group: '시작하기',
+  title: 'AICONNECT 한눈에 보기',
+  shortTitle: '개요·권한',
+  description: 'AICONNECT의 요청 처리 흐름과 시스템 관리자 · 프로젝트 총괄자 · 팀원 3단계 역할 구조를 실제 예시 데이터로 이해합니다.',
+  audience: '공통',
+  minutes: 3,
+  icon: '◎',
+  keywords: ['개요', '권한', '역할', '시스템 관리자', '프로젝트 총괄자', '팀원', '조직 관계도', '용어', 'Acme-AI-Lab', 'cs-copilot'],
+  sections: [
+    {
+      id: 'request-path',
+      title: 'AICONNECT가 요청을 처리하는 4단계',
+      description: '개발자와 서비스는 GPU 서버에 직접 접속하지 않고 단일 Gateway(/v1)만 호출합니다.',
+      blocks: [
+        {
+          type: 'flow',
+          items: [
+            { label: '1', title: '애플리케이션 · SDK', text: '프로젝트 API 키(sk_llmg_example_...)와 논리 모델(text-pro)로 Gateway 호출' },
+            { label: '2', title: 'AICONNECT Gateway', text: '키 인증, 데이터 경계·DLP, RPM·예산 한도 평가' },
+            { label: '3', title: '논리 서비스 · Target', text: 'Priority·대기열 정책에 따라 최적의 실제 배포 선택' },
+            { label: '4', title: '사내 GPU / 승인 외부 AI', text: 'seoul-gpu-01(LM Studio) 또는 승인된 외부 Provider에서 추론' }
+          ]
+        }
+      ]
+    },
+    {
+      id: 'role-hierarchy',
+      title: '역할별 권한 비교 (시스템 관리자 · 총괄자 · 팀원)',
+      description: '예시 조직 Acme-AI-Lab · 프로젝트 cs-copilot을 기준으로 세 역할의 책임과 제한이 나뉩니다.',
+      blocks: [
+        {
+          type: 'table',
+          columns: ['역할 (Account Tier)', '예시 계정', '할 수 있는 일', '제한 사항'],
+          rows: [
+            [
+              '시스템 관리자 (SYSTEM_ADMIN / 조직 관리자)',
+              'admin@acme.example',
+              '조직·팀·프로젝트 생성, 총괄자·팀원 초대, GPU Runtime·외부 AI·논리 서비스 구성, 상한 설정',
+              '모든 계정은 초대 가입+TOTP 필수, 직접 사용자 생성 비활성화'
+            ],
+            [
+              '프로젝트 총괄자 (PROJECT_DIRECTOR)',
+              'lead.park@acme.example',
+              '담당 프로젝트(cs-copilot) 팀원 초대, API 키 위임·회수, 상한 내 데이터 보호·예산 관리, 전체 키 사용량 조회',
+              '팀 변경·프로젝트 삭제·재활성화·서비스 권한 부여·인프라 변경 불가'
+            ],
+            [
+              '팀원 / 기본 계정 (GENERAL_USER)',
+              'dev.kim@acme.example',
+              '위임 시 본인 API 키 발급·폐기, API 테스트 검증, 본인 키 사용량·Request ID 조회',
+              '타인 키 관리·초대 발급·예산/정책/인프라 변경 불가'
+            ]
+          ]
+        },
+        {
+          type: 'mockup',
+          screen: '조직 관계도 (#relationship)',
+          roleTag: '공통 화면 · 트리 계층',
+          caption: '내 계정이 속한 조직부터 관리자, 프로젝트, 프로젝트 총괄자, 팀원의 키 발급 권한까지 한 화면에서 확인합니다.',
+          fields: [
+            { label: '1단계 · 최고 관리자', value: 'admin@acme.example', badge: '시스템 관리자 · 전체 관리', badgeTone: 'accent' },
+            { label: '2단계 · 선택 조직', value: 'Acme-AI-Lab (ACTIVE)', badge: '팀 Platform-AI', badgeTone: 'info' },
+            { label: '3단계 · 프로젝트', value: 'cs-copilot', badge: '활성 · text-pro 연결', badgeTone: 'accent' },
+            { label: '4단계 · 프로젝트 총괄자', value: 'lead.park@acme.example', badge: 'API 키 발급 가능', badgeTone: 'accent' },
+            { label: '5단계 · 팀원', value: 'dev.kim@acme.example', badge: 'API 키 발급 가능 (위임됨)', badgeTone: 'info' }
+          ],
+          navigate: { label: '조직 관계도 열기', destination: 'relationship' }
+        }
+      ]
+    },
+    {
+      id: 'core-terms',
+      title: '꼭 알아둘 6가지 핵심 용어',
+      blocks: [
+        {
+          type: 'table',
+          columns: ['용어', '의미', '문서 예시'],
+          rows: [
+            ['조직 (Workspace)', '인프라·비용·권한이 완전히 격리되는 운영 경계', 'Acme-AI-Lab'],
+            ['프로젝트', 'API 키, 데이터 경계, 예산 총량제, 사용량 집계 단위', 'cs-copilot'],
+            ['논리 서비스', '앱이 model 필드에 넣는 안정적인 서비스 키', 'text-pro'],
+            ['Target', '논리 서비스에 연결된 실제 모델 실행 후보와 우선순위', 'P1 seoul-gpu-01'],
+            ['Runtime Endpoint', 'Gateway가 연결하는 사설망 추론 서버', 'http://100.64.0.20:1234'],
+            ['프로젝트 API 키', '프로젝트 권한·한도 식별용 비밀 키(1회 표시)', 'sk_llmg_example_9f8a...']
+          ]
+        }
+      ]
+    }
   ]
-})
+}
 
-console.log(response.choices[0].message.content)`
+const onboardingAuthDoc: DocPage = {
+  id: 'onboarding-auth',
+  group: '시작하기',
+  title: '초대 가입과 2차 인증(TOTP)',
+  shortTitle: '가입·2차 인증',
+  description: '1회용 초대 링크로 계정을 만들고 Google Authenticator 2차 인증을 등록해 콘솔에 입장하는 전체 과정입니다.',
+  audience: '공통',
+  minutes: 4,
+  icon: '→',
+  keywords: ['초대', '가입', 'INV', 'register', 'TOTP', 'Google Authenticator', '2차 인증', '복구 코드', '로그인', '세션'],
+  sections: [
+    {
+      id: 'invite-policy',
+      title: '가입 원칙: 초대 코드 + TOTP 필수',
+      blocks: [
+        {
+          type: 'callout',
+          tone: 'info',
+          title: '자유 회원가입 및 직접 계정 생성은 제공하지 않습니다',
+          text: '상위 관리자 또는 프로젝트 총괄자가 발급한 1회용 초대 코드·가입 링크가 있어야 가입할 수 있습니다. 로그인 시 비밀번호와 함께 Google Authenticator 2차 인증을 필수로 완료해야 콘솔 메뉴가 열립니다.'
+        }
+      ]
+    },
+    {
+      id: 'invite-register-screen',
+      title: 'STEP 1 · 초대 링크로 계정 생성하기',
+      description: '전달받은 가입 링크를 열면 코드가 자동으로 검증되며, 주소창의 초대 코드는 보안을 위해 즉시 지워집니다.',
+      blocks: [
+        {
+          type: 'mockup',
+          screen: '초대 코드 회원가입 (#register)',
+          roleTag: '신규 가입자 화면',
+          stepLabel: 'STEP 1',
+          fields: [
+            { label: '전달받은 가입 링크', value: 'https://www.aiconnectgateway.com/#register?code=INV-EXAMPLE-7K9Q', mono: true, hint: '화면 로드 즉시 주소창에서 ?code= 파라미터 자동 제거' },
+            { label: '초대 검증 결과', value: 'Acme-AI-Lab · cs-copilot · 기본 계정 (GENERAL_USER)', badge: '유효한 초대', badgeTone: 'accent' },
+            { label: '이메일', value: 'dev.kim@acme.example', hint: '지정 이메일 초대인 경우 동일 이메일만 허용' },
+            { label: '비밀번호', value: '•••••••••••• (12자 이상 ~ 72바이트 이하)' }
+          ],
+          actions: [
+            { label: '로그인으로 돌아가기' },
+            { label: '계정 생성', primary: true }
+          ],
+          result: {
+            tone: 'success',
+            title: '계정 생성 직후 다음 단계',
+            items: [
+              '자동으로 2차 인증(Google Authenticator) 등록 화면으로 이동합니다.'
+            ]
+          }
+        }
+      ]
+    },
+    {
+      id: 'totp-enroll-screen',
+      title: 'STEP 2 · Google Authenticator 2차 인증 및 복구 코드 보관',
+      description: 'QR 코드를 스캔한 뒤 6자리 코드를 입력하고, 발급된 복구 코드 8개를 안전한 곳에 저장합니다.',
+      blocks: [
+        {
+          type: 'mockup',
+          screen: 'Google Authenticator 2차 인증 등록',
+          roleTag: '최초 로그인 필수',
+          stepLabel: 'STEP 2',
+          fields: [
+            { label: '등록 계정', value: 'dev.kim@acme.example' },
+            { label: 'QR 코드 / 수동 시크릿 키', value: 'Google Authenticator 앱으로 스캔 또는 수동 입력', badge: '1회 표시', badgeTone: 'info' },
+            { label: '앱 6자리 인증 코드', value: '482 910', mono: true },
+            { label: '복구 코드 8개 보관 확인', value: '안전한 비밀번호 관리자에 저장 완료 (체크 필수)', badge: '필수 확인', badgeTone: 'warning' }
+          ],
+          actions: [
+            { label: '복구 코드 복사' },
+            { label: '2차 인증 완료 후 콘솔 입장', primary: true }
+          ]
+        },
+        {
+          type: 'callout',
+          tone: 'warning',
+          title: '세션 · 로그아웃 보안 안내',
+          text: '토큰 갱신(/api/auth/refresh)과 로그아웃(/api/auth/logout)은 동일 Origin 검증이 적용되며, 로그아웃 시 서버 세션이 즉시 폐기됩니다. 비상 플랫폼 토큰(X-Admin-Token)은 긴급 복구 전용으로만 사용하세요.'
+        }
+      ]
+    }
+  ]
+}
 
 export const devDocs: DocPage[] = [
-  {
-    id: 'overview', group: '시작하기', title: 'AICONNECT 시작하기', shortTitle: '개요',
-    description: '로컬 Runtime과 외부 AI를 하나의 관리 체계와 OpenAI 호환 Gateway로 연결합니다.',
-    audience: '공통', minutes: 4, icon: '◎', keywords: ['개요', 'gateway', 'runtime', 'tailscale', '구조'],
-    sections: [
-      {
-        id: 'what-is-aiconnect', title: 'AICONNECT가 하는 일',
-        blocks: [
-          { type: 'paragraph', text: 'AICONNECT는 등록된 LM Studio, Ollama, llama.cpp, OpenAI 호환 Runtime과 외부 Provider를 연결하는 Control Plane 겸 API Gateway입니다. 모델 실행은 해당 서버가 담당하고, AICONNECT가 인증·권한·논리 서비스·라우팅·데이터 보호·사용량·장애 진단을 관리합니다. 지원되는 Runtime에는 모델 관리 API로 로드·언로드 작업을 요청할 수 있습니다.' },
-          { type: 'callout', tone: 'info', title: `구현 검토 기준: ${DOCS_REVIEWED_AT}`, text: 'Runtime별 모델 상태, 직접 모델 테스트·대화 기록, 외부 모델의 추론·Fast 설정과 요금, 데이터 보호, 요청 실패 진단과 사용량 통계를 현재 프로젝트 코드에 맞춰 정리했습니다. 운영 서버의 배포 버전과 설정에 따라 제공 범위는 다를 수 있습니다.' },
-          { type: 'cards', items: [
-            { label: 'CONTROL', title: '관리', text: '조직, 팀, 사용자, 프로젝트, API 키, Runtime과 논리 서비스를 구성합니다.' },
-            { label: 'GATEWAY', title: '중계', text: '사용자 요청과 모델 응답을 중계하고 실제 모델 ID를 외부에서 숨깁니다.' },
-            { label: 'OBSERVE', title: '관측', text: '요청량, 토큰, 비용, 오류, 실제 배포와 Failover 이력을 기록합니다.' }
-          ] }
-        ]
-      },
-      {
-        id: 'request-path', title: '요청 데이터가 이동하는 경로',
-        description: '사용자는 GPU 서버가 아니라 Gateway에만 접속합니다.',
-        blocks: [
-          { type: 'flow', items: [
-            { label: '1', title: '사용자 애플리케이션', text: 'Gateway Base URL, API 키, 논리 모델명으로 요청' },
-            { label: '2', title: 'AICONNECT Gateway', text: '인증·권한·한도·데이터 보호 정책 평가' },
-            { label: '3', title: '논리 서비스와 Target', text: '기능·상태·우선순위·전환 정책에 맞는 모델 선택' },
-            { label: '4', title: 'Runtime / Provider', text: '사설망 로컬 모델 또는 승인된 외부 API에서 추론' }
-          ] },
-          { type: 'callout', tone: 'info', title: '프롬프트가 Gateway를 통과한다는 의미', text: '프롬프트와 결과는 중계를 위해 Gateway 메모리를 통과합니다. 원문을 DB에 저장하는지는 프로젝트 보관 정책(METADATA 또는 암호화 원문)에 따라 별도로 결정됩니다.' }
-        ]
-      },
-      {
-        id: 'terms', title: '먼저 알아둘 용어',
-        blocks: [
-          { type: 'table', columns: ['용어', '의미', '예시'], rows: [
-            ['Runtime Endpoint', 'Gateway가 접근하는 로컬 추론 서버의 종류·주소·인증', 'LM Studio / Ollama / llama.cpp'],
-            ['Model Deployment', '특정 Runtime에서 제공되는 실제 모델', 'google/gemma-4-e4b'],
-            ['논리 서비스', '사용자에게 공개하는 안정적인 model 이름', 'text-pro'],
-            ['Target', '논리 서비스에서 실제 배포를 선택하는 연결·정책', 'P1 로컬, P2 외부'],
-            ['외부 Provider', 'API 키를 한 번 저장하고 여러 외부 모델을 등록하는 공급자', 'OPEN-AI-API'],
-            ['프로젝트 API 키', '프로젝트 권한과 사용량을 식별하는 비밀 키', 'sk_llmg_…']
-          ] }
-        ]
-      }
-    ]
-  },
-  {
-    id: 'quickstart', group: '시작하기', title: '5분 빠른 시작', shortTitle: '빠른 시작',
-    description: '일반 사용자가 로그인부터 첫 Chat Completion 요청까지 진행합니다.',
-    audience: '사용자', minutes: 5, icon: '→', keywords: ['처음', '로그인', '프로젝트', 'api key', '첫 요청'],
-    sections: [
-      {
-        id: 'before-start', title: '시작 전에 받을 정보',
-        blocks: [
-          { type: 'checklist', items: ['AICONNECT 로그인 계정', '사용할 프로젝트 또는 프로젝트 생성 권한', '허용된 논리 모델명', '호출 환경에 맞는 Gateway Base URL'] },
-          { type: 'callout', tone: 'warning', title: 'GPU 서버 주소를 사용하지 마세요', text: 'LM Studio·Ollama·llama.cpp의 내부 주소는 관리자가 Runtime으로 등록합니다. 사용자 애플리케이션은 AICONNECT Gateway 주소의 /v1 경로를 사용합니다.' }
-        ]
-      },
-      {
-        id: 'five-steps', title: '첫 요청까지 다섯 단계',
-        blocks: [
-          { type: 'steps', items: [
-            { title: '로그인하고 Workspace 확인', text: '전달받은 계정으로 로그인합니다. 현재 선택된 조직과 자신의 역할을 확인합니다.' },
-            { title: '내 API에서 프로젝트 선택', text: '기존 프로젝트를 선택하거나 권한이 있으면 목적별 프로젝트를 만듭니다.', action: { label: '내 API 열기', destination: 'portal' } },
-            { title: 'API 키 발급', text: '키 이름과 만료일을 정합니다. 키 원문은 생성 직후 한 번만 표시되므로 비밀 저장소에 즉시 보관합니다.' },
-            { title: 'Base URL과 논리 모델 복사', text: '발급 완료 화면의 내부/외부 Base URL 중 호출 위치에 맞는 주소와 model 값을 복사합니다.' },
-            { title: '비스트리밍 요청으로 확인', text: '짧은 메시지와 stream: false로 먼저 호출한 뒤 API 사용량에서 성공 기록과 토큰 수를 확인합니다.', action: { label: 'API 사용량 열기', destination: 'usage' } }
-          ] }
-        ]
-      },
-      {
-        id: 'minimum-request', title: '가장 작은 연결 테스트',
-        blocks: [
-          { type: 'code', language: 'bash', title: 'cURL', code: curlExample },
-          { type: 'callout', tone: 'success', title: '성공 기준', text: 'HTTP 200 응답, choices[0].message.content, usage 토큰 정보가 반환되고 사용량 화면에 요청이 기록되면 연결이 완료된 것입니다.' }
-        ]
-      }
-    ]
-  },
-  {
-    id: 'concepts', group: '시작하기', title: '핵심 개념과 권한', shortTitle: '핵심 개념',
-    description: '조직부터 실제 모델까지의 관계와 역할별 책임 범위를 정리합니다.',
-    audience: '공통', minutes: 6, icon: '◇', keywords: ['권한', 'organization', 'team', 'project owner', 'developer', 'logical service'],
-    sections: [
-      {
-        id: 'resource-tree', title: '리소스 관계',
-        blocks: [
-          { type: 'flow', items: [
-            { label: 'ORG', title: '조직', text: '회사 또는 개인 운영 경계' },
-            { label: 'TEAM', title: '팀·부서', text: '구성원과 프로젝트 소유 범위' },
-            { label: 'PROJECT', title: '프로젝트', text: 'API 키·권한·정책·사용량 단위' },
-            { label: 'SERVICE', title: '논리 서비스', text: '사용자 model 값과 실제 배포 연결' }
-          ] }
-        ]
-      },
-      {
-        id: 'role-model', title: '권한 계층',
-        blocks: [
-          { type: 'table', columns: ['역할', '할 수 있는 일', '제한'], rows: [
-            ['플랫폼 관리자', '전체 조직·팀·사용자·인프라·서비스·프로젝트 관리', '감사 이력이 있는 리소스는 정책에 따라 영구 삭제 제한'],
-            ['조직 관리자', '자신의 조직 안에서 팀·사용자·Runtime·서비스·프로젝트 운영', '다른 조직 데이터 접근 불가'],
-            ['팀 관리자 / 프로젝트 소유자', '담당 팀과 프로젝트, API 키와 서비스 권한 관리', '조직 전체 인프라 정책 변경 불가'],
-            ['일반 개발자', '할당된 프로젝트에서 API 키 사용과 본인 사용량 확인', 'Runtime·라우팅·조직 관리 불가']
-          ] },
-          { type: 'callout', tone: 'info', title: '관리자도 API를 사용할 수 있습니다', text: '관리자는 운영 권한과 별개로 프로젝트를 만들고 API 키를 발급받아 일반 사용자와 동일한 /v1 API를 호출할 수 있습니다.' }
-        ]
-      },
-      {
-        id: 'logical-model', title: '논리 모델을 쓰는 이유',
-        blocks: [
-          { type: 'paragraph', text: '사용자는 text-pro 같은 논리 모델만 호출합니다. 관리자는 이 논리 서비스에 여러 Model Deployment를 우선순위로 연결합니다. GPU 교체, 모델 파일 변경, 장애 전환이 있어도 사용자 Base URL·API 키·model 값은 유지됩니다.' },
-          { type: 'callout', tone: 'warning', title: '논리 서비스와 프로젝트는 다른 리소스입니다', text: '프로젝트가 서비스를 사용할 수 있는 관계를 서비스 권한이라고 합니다. 서비스를 그만 사용할 때 프로젝트를 삭제할 필요 없이 프로젝트의 서비스 권한만 해제합니다.' }
-        ]
-      }
-    ]
-  },
-  {
-    id: 'user-portal', group: '사용자 가이드', title: '프로젝트와 API 키', shortTitle: '프로젝트·API 키',
-    description: '프로젝트를 선택하고 키를 발급·폐기·기록 삭제하는 전체 절차입니다.',
-    audience: '사용자', minutes: 8, icon: '⌘', keywords: ['내 API', '키 발급', '키 폐기', '기록 삭제', 'base url', 'model'],
-    sections: [
-      {
-        id: 'project-unit', title: '프로젝트는 사용량과 권한의 단위',
-        blocks: [
-          { type: 'cards', items: [
-            { label: '권한', title: '사용 가능한 모델', text: '프로젝트에 부여된 논리 서비스만 /v1/models와 요청에서 사용할 수 있습니다.' },
-            { label: '정책', title: '요청·토큰 한도', text: 'RPM, 월 토큰, 오류율 경보와 원문 보관 정책을 프로젝트별로 설정합니다.' },
-            { label: '추적', title: 'API 키와 사용량', text: '개발·운영·서비스별 키를 나누면 어떤 시스템의 요청인지 빠르게 찾을 수 있습니다.' }
-          ] }
-        ]
-      },
-      {
-        id: 'issue-key', title: 'API 키 발급과 보관',
-        blocks: [
-          { type: 'steps', items: [
-            { title: '프로젝트 선택', text: '내 API 화면 상단에서 작업할 프로젝트를 고릅니다.', action: { label: '내 API 열기', destination: 'portal' } },
-            { title: '사용 가능한 모델 확인', text: '모델 카드가 비어 있다면 관리자 또는 프로젝트 소유자에게 서비스 권한을 요청합니다.' },
-            { title: 'API 키 발급 선택', text: '사람 이름보다 production-backend, local-test처럼 호출 주체와 용도가 드러나는 이름을 사용합니다.' },
-            { title: '원문과 연결 정보 저장', text: 'API 키 원문, 호출 위치에 맞는 Base URL, 논리 모델명을 함께 저장합니다.' }
-          ] },
-          { type: 'callout', tone: 'danger', title: '키 원문은 다시 볼 수 없습니다', text: '키 원문은 생성 직후 한 번만 표시됩니다. Git, 프론트엔드 번들, 문서, 메신저에 넣지 말고 서버 환경 변수나 전용 Secret Manager에 보관하세요.' }
-        ]
-      },
-      {
-        id: 'revoke-delete', title: '유출 또는 미사용 키 정리',
-        blocks: [
-          { type: 'table', columns: ['작업', '언제 사용', '결과'], rows: [
-            ['폐기', '키가 유출됐거나 더 이상 호출하지 않을 때', '즉시 인증이 차단되며 복구할 수 없음'],
-            ['폐기 기록 영구 삭제', '목록에서 폐기된 키 레코드까지 정리할 때', '키 메타데이터 연결 제거. 요청·감사 이력은 보존'],
-            ['새 키 발급', '폐기한 서비스를 다시 연결할 때', '새 원문을 환경 변수에 교체하고 애플리케이션 재시작']
-          ] },
-          { type: 'callout', tone: 'warning', title: '먼저 폐기하고 교체하세요', text: '키 삭제는 보안 사고의 첫 조치가 아닙니다. 활성 키를 즉시 폐기하고 새 키로 교체한 뒤, 필요할 때 폐기 기록을 정리합니다.' }
-        ]
-      },
-      {
-        id: 'usage-scope', title: '역할에 따라 보이는 사용량 범위',
-        blocks: [
-          { type: 'table', columns: ['역할', '기본 조회 범위', 'API 키 원문 필요'], rows: [
-            ['일반 개발자', '본인이 발급한 API 키의 요청·토큰·비용', '불필요'],
-            ['프로젝트 소유자 / 팀 관리자', '담당 프로젝트의 전체 API 키 사용량', '불필요'],
-            ['조직 / 플랫폼 관리자', '허용된 조직 전체와 프로젝트·서비스·배포별 통계', '불필요']
-          ] },
-          { type: 'callout', tone: 'info', title: '사용량 화면에 API 키를 입력하지 않습니다', text: '로그인 세션과 역할을 기준으로 서버가 조회 범위를 결정합니다. API 키는 외부 애플리케이션의 /v1 호출에만 사용합니다.' }
-        ]
-      }
-    ]
-  },
-  {
-    id: 'api', group: '사용자 가이드', title: 'OpenAI 호환 API 연결', shortTitle: 'API 연결',
-    description: 'Base URL 선택, 모델 조회, Chat Completions와 스트리밍 호출 예시를 제공합니다.',
-    audience: '사용자', minutes: 10, icon: '</>', keywords: ['openai', 'python', 'typescript', 'curl', 'chat completions', 'streaming', 'baseurl'],
-    sections: [
-      {
-        id: 'base-url', title: 'Base URL은 호출 위치에 따라 선택',
-        blocks: [
-          { type: 'table', columns: ['호출 위치', '사용할 주소', '확인'], rows: [
-            ['내부에서 호출', '내부 Gateway Base URL', '개발자 포털의 설정값 확인'],
-            ['외부에서 호출', '외부 HTTPS Base URL', '개발자 포털의 설정값과 접근 허용 확인']
-          ] },
-          { type: 'paragraph', text: '각 주소는 선택적으로 설정되며, 미설정 또는 조회 실패 시 관리자에게 확인하세요. 아래 예제의 AICONNECT_BASE_URL은 포털에서 복사한 /v1로 끝나는 SDK 주소로 설정하세요. 주소 표시가 네트워크 접근 허용을 보장하지는 않습니다.' },
-          { type: 'callout', tone: 'danger', title: 'LM Studio 주소와 혼동하지 마세요', text: 'http://100.x.x.x:1234는 GPU 서버의 Runtime Endpoint일 수 있습니다. 사용자 애플리케이션에는 AICONNECT Gateway 주소를 넣어야 인증·라우팅·사용량·Failover가 동작합니다.' }
-        ]
-      },
-      {
-        id: 'models', title: '사용 가능한 모델 조회',
-        blocks: [
-          { type: 'code', language: 'bash', title: 'GET /v1/models', code: `curl "$AICONNECT_BASE_URL/models" \\
-  -H "Authorization: Bearer $AICONNECT_API_KEY"` },
-          { type: 'paragraph', text: '응답의 data[].id 값만 chat/completions의 model로 사용합니다. 여기에는 실제 Runtime / Provider 모델 ID가 아니라 프로젝트에 허용된 논리 서비스 키가 표시됩니다.' }
-        ]
-      },
-      {
-        id: 'supported-endpoints', title: '현재 지원하는 OpenAI 호환 범위',
-        blocks: [
-          { type: 'table', columns: ['Endpoint', '지원', '설명'], rows: [
-            ['GET /v1/models', '지원', '프로젝트에 허용된 논리 서비스 목록'],
-            ['POST /v1/chat/completions', '지원', 'JSON 응답과 stream: true SSE 중계'],
-            ['POST /v1/responses', '미지원', '현재 Gateway 공개 API에 없음'],
-            ['POST /v1/embeddings', '미지원', '현재 Gateway 공개 API에 없음']
-          ] },
-          { type: 'callout', tone: 'info', title: '응답의 X-Request-Id를 보관하세요', text: 'Chat Completions 응답 헤더의 X-Request-Id는 관측성 화면에서 실제 Deployment, Attempt, Failover와 오류를 찾는 기준입니다.' }
-        ]
-      },
-      {
-        id: 'examples', title: 'Chat Completions 예제',
-        blocks: [
-          { type: 'code', language: 'bash', title: 'cURL', code: curlExample },
-          { type: 'code', language: 'python', title: 'Python', code: pythonExample },
-          { type: 'code', language: 'typescript', title: 'TypeScript', code: typescriptExample },
-          { type: 'callout', tone: 'info', title: '선택 옵션은 모델 지원 범위를 확인한 뒤 추가', text: '최소 예제에서는 temperature를 생략합니다. 모델에 따라 사용자 지정 temperature, 추론 수준, 토큰 필드와 응답 형식이 제한됩니다. AICONNECT의 논리 서비스 및 외부 모델 기본값이 요청 옵션을 조정할 수 있습니다.' }
-        ]
-      },
-      {
-        id: 'streaming', title: '스트리밍 요청',
-        blocks: [
-          { type: 'paragraph', text: 'stream: true를 사용하면 지원되는 Runtime / Provider의 SSE 응답 조각을 중계합니다. 일반 응답이 성공해도 서버·프록시·클라이언트의 스트리밍 지원은 별도로 검증해야 합니다.' },
-          { type: 'callout', tone: 'warning', title: '스트리밍 중 장애 전환의 한계', text: '첫 토큰을 사용자에게 전달하기 전에는 다른 배포로 전환할 수 있습니다. 일부 토큰이 이미 전달된 뒤에는 중복·깨진 JSON을 막기 위해 현재 스트림을 오류로 종료하고 다음 요청부터 대체 배포를 사용합니다.' }
-        ]
-      },
-      {
-        id: 'status-codes', title: '주요 오류 코드',
-        blocks: [
-          { type: 'table', columns: ['HTTP', '의미', '확인할 것'], rows: [
-            ['401', 'API 키가 잘못됐거나 폐기·만료됨', 'Authorization Bearer 값과 키 상태'],
-            ['403', '프로젝트에 모델 권한이 없음', '서비스 권한과 /v1/models 결과'],
-            ['400', '요청 형식·입력·출력·컨텍스트 조건 불일치', '실패 진단과 Provider 오류, 모델별 옵션'],
-            ['429', '요청·토큰·동시성 한도 초과', '프로젝트 정책과 Retry-After'],
-            ['503', '사용 가능한 Target이 없음', 'Runtime, 모델 로드, Target 활성 상태'],
-            ['504', 'Runtime 응답 제한 시간 초과', '출력 길이, 모델 성능, Gateway timeout']
-          ] }
-        ]
-      }
-    ]
-  },
-
-  {
-    id: 'admin-first-run', group: '관리자 가이드', title: '관리자 최초 구축', shortTitle: '최초 구축',
-    description: '빈 AICONNECT에서 조직·팀·사용자·Runtime·서비스·프로젝트를 순서대로 구성합니다.',
-    audience: '관리자', minutes: 12, icon: '◫', keywords: ['관리자', '조직', '팀', '사용자', '초기 설정'],
-    sections: [
-      {
-        id: 'build-order', title: '권장 구축 순서',
-        blocks: [
-          { type: 'steps', items: [
-            { title: '기본 워크스페이스 확인', text: '최초 관리자 부트스트랩에서 Default Workspace가 자동 생성·선택됩니다. 여러 조직을 운영할 때만 추가 조직을 만들고 전환합니다.' },
-            { title: '팀·부서 생성', text: '비용과 책임을 나눌 부서를 팀으로 만들고 기본 워크스페이스에 배치합니다.', action: { label: '팀과 부서 열기', destination: 'teams' } },
-            { title: '사용자와 역할 배정', text: '조직 관리자, 팀 관리자, 프로젝트 소유자, 개발자를 최소 권한으로 배정합니다.' },
-            { title: 'Runtime 또는 외부 Provider 등록', text: 'Runtime 종류에 맞는 Endpoint를 등록하고 모델을 동기화하거나 외부 Provider의 조회 모델을 등록합니다.', action: { label: '인프라 열기', destination: 'infrastructure' } },
-            { title: '논리 서비스와 Target 구성', text: '외부에 공개할 model 키와 실제 배포의 우선순위를 연결합니다.', action: { label: 'LLM 서비스 열기', destination: 'services' } },
-            { title: '프로젝트와 서비스 권한 설정', text: '팀 소유 프로젝트를 만들고 필요한 논리 서비스만 허용합니다.', action: { label: '프로젝트 열기', destination: 'projects' } },
-            { title: '테스트 계정으로 검증', text: '일반 사용자 화면에서 키 발급, /v1/models, 짧은 Chat Completion, 사용량 기록을 확인합니다.' }
-          ] }
-        ]
-      },
-      {
-        id: 'roles', title: '계정과 역할 운영',
-        blocks: [
-          { type: 'table', columns: ['역할', '주요 책임', '권장 원칙'], rows: [
-            ['플랫폼·조직 관리자', '조직 전체 인프라와 권한 관리', '개인별 계정 사용, 공용 관리자 금지'],
-            ['팀 관리자·프로젝트 소유자', '담당 팀과 프로젝트 운영', '필요한 서비스만 권한 부여'],
-            ['개발자', 'API 키 사용과 자신의 사용량 확인', 'Runtime·라우팅 권한 부여 금지']
-          ] },
-          { type: 'callout', tone: 'danger', title: '사용자·팀 제거 전 영향 확인', text: '확인 모달에 표시되는 API 키 이름·식별자·등록 프로젝트를 검토하세요. 요청·사용량·감사 이력은 보존될 수 있습니다.' }
-        ]
-      },
-      {
-        id: 'project-lifecycle', title: '프로젝트 수명주기',
-        blocks: [
-          { type: 'table', columns: ['작업', '영향', '사용 시점'], rows: [
-            ['수정', '이름·소유 팀 변경, 기존 키와 이력 유지', '조직 개편'],
-            ['중지', '새 요청을 PROJECT_SUSPENDED로 즉시 차단', '오용·비용 급증·보안 사고'],
-            ['재개', '새 요청 허용. 폐기된 키는 복구되지 않음', '원인 해결 후'],
-            ['영구 삭제', '연결 설정 정리', '요청 이력이 없는 프로젝트만']
-          ] }
-        ]
-      }
-    ]
-  },
-  {
-    id: 'runtime', group: '관리자 가이드', title: 'LLM Runtime과 모델 운영', shortTitle: 'Runtime·모델',
-    description: 'Runtime 종류별 연결, 현재 로드 상태와 등록 모델, 실제 실행 설정을 구분해 관리합니다.',
-    audience: '관리자', minutes: 10, icon: '◈', keywords: ['lm studio', 'ollama', 'llama.cpp', 'tailscale', 'endpoint', 'load', 'unload', 'download', '캐시', 'gpu offload', 'q4', 'q8'],
-    sections: [
-      {
-        id: 'prepare', title: 'GPU 서버 준비',
-        blocks: [
-          { type: 'checklist', items: ['Runtime 서버와 AICONNECT 사이의 사설망 / Tailscale 경로 확보', 'LM Studio·Ollama·llama.cpp 등 실제 추론 서버 실행', 'Gateway에서 접근 가능한 Listen 주소와 포트 확인', '지원되는 서버 인증을 활성화하고 Token을 관리자 설정에 저장', '방화벽·Tailnet ACL에서 Gateway가 필요한 포트만 접근하도록 제한', '추론 서버를 공개 NAT·포트 포워딩으로 무인증 노출하지 않기'] },
-          { type: 'callout', tone: 'info', title: 'GPU는 선택적 메타데이터입니다', text: '라우팅은 RTX 5090, H100 같은 제품명이 아니라 Endpoint 상태, 모델 Capability, 우선순위와 동시성으로 결정됩니다.' }
-        ]
-      },
-      {
-        id: 'register', title: 'Endpoint 등록과 동기화',
-        blocks: [
-          { type: 'callout', tone: 'info', title: '워크스페이스가 소유 단위입니다', text: 'GPU 노드와 Runtime Endpoint는 선택한 워크스페이스에 귀속됩니다. 선택된 워크스페이스가 없으면 등록 버튼이 비활성화됩니다.' },
-          { type: 'steps', items: [
-            { title: 'Runtime 종류와 주소 저장', text: 'LM Studio, Ollama, llama.cpp, OpenAI-compatible 중 실제 서버 종류를 선택하고 이름·Base URL·선택적 Token을 입력합니다.', action: { label: '인프라 열기', destination: 'infrastructure' } },
-            { title: '연결 확인', text: 'Runtime 종류에 맞는 API로 검사합니다. 연결 성공은 모델이 메모리에 로드되었거나 모든 요청이 성공한다는 의미가 아닙니다.' },
-            { title: '모델 동기화', text: '모델과 로드 인스턴스를 Model Deployment로 반영합니다. 동기화 자체는 다운로드나 로드를 실행하지 않습니다.' },
-            { title: 'HEALTHY·LOADED 확인', text: 'Endpoint와 사용할 모델 상태를 확인한 뒤 논리 서비스 Target으로 연결합니다.' }
-          ] }
-        ]
-      },
-      {
-        id: 'operations', title: 'Runtime별 조회와 작업 지원',
-        blocks: [
-          { type: 'table', columns: ['Runtime', '모델 조회', 'AICONNECT의 관리 범위'], rows: [
-            ['LM Studio', 'native /api/v1/models, 필요 시 /v1/models', '지원되는 native 로드·언로드·다운로드 API'],
-            ['Ollama', '/api/tags 다운로드 목록 + /api/ps 메모리 상태', '현재 코드에서 로드·언로드 관리 API는 미지원. Ollama에서 관리'],
-            ['llama.cpp', 'router /models + /v1/models, 제공 시 /props', '모델 관리 API를 제공하는 router에서 로드·언로드. 일반 단일 프로세스 서버는 직접 관리'],
-            ['OpenAI-compatible', '/v1/models', '호환 Chat API 연결. 임의 서버의 파일 목록·로드 설정을 알아낼 수는 없음']
-          ] },
-          { type: 'callout', tone: 'warning', title: '프로필 저장과 실제 적용은 다릅니다', text: 'LM Studio native REST의 적용 항목은 Context Length, Evaluation Batch Size, Flash Attention, expert 수, KV Cache GPU offload 등으로 제한됩니다. GPU layer·CPU thread·K/V 양자화·TTL 등 고급값은 프로필에 저장되어도 적용되지 않을 수 있습니다. 사전 점검의 경고·지원 항목을 확인하세요. 동일 모델의 Q4/Q8 소스 변경도 native API가 지원하지 않으면 LM Studio에서 선택한 뒤 다시 동기화해야 합니다.' }
-        ]
-      },
-      {
-        id: 'live-and-saved', title: '현재 로드 모델과 과거 등록 모델',
-        blocks: [
-          { type: 'paragraph', text: '인프라의 기본 화면은 현재 로드된 모델을 중심으로 보여줍니다. 미로드 후보와 과거 등록 모델은 접힌 목록에서 확인합니다. 서버가 다운되거나 조회가 실패했다고 등록 레코드와 논리 서비스 Target을 삭제하지 않습니다. 반대로 과거에 로드됐다는 기록을 지금의 LOADED 상태로 표시하지 않습니다.' },
-          { type: 'steps', items: [
-            { title: '모델 동기화', text: '서버의 최신 목록·로드 상태를 반영합니다. 현재 목록에서 사라진 모델은 마지막 확인 정보와 함께 구분하고 실제 요청 후보에 포함되는지 점검합니다.' },
-            { title: '현재 모델 상세 확인', text: '로드 모델을 클릭해 Runtime이 제공한 Context, 캐시 종류, GPU offload, 메모리 등 실행 설정을 확인합니다. 서버가 반환하지 않은 값은 미확인으로 취급합니다. 저장한 프로필 값을 실제 실행값으로 단정하지 않습니다.' },
-            { title: '현재 모델 테스트', text: '로드된 모델을 직접 호출해 실제 준비 상태를 검증하고 논리 서비스 경로는 API 테스트에서 다시 확인합니다.', action: { label: '모델 테스트 콘솔 열기', destination: 'model-playground' } }
-          ] }
-        ]
-      },
-      {
-        id: 'official', title: 'LM Studio 공식 문서',
-        blocks: [
-          { type: 'links', items: [
-            { label: 'Developer Docs', href: 'https://lmstudio.ai/docs/developer', description: 'LM Studio 개발자 문서 전체' },
-            { label: 'List models', href: 'https://lmstudio.ai/docs/developer/rest/list', description: '모델과 로드 인스턴스 조회' },
-            { label: 'Load a model', href: 'https://lmstudio.ai/docs/developer/rest/load', description: '모델 로드 요청과 설정' },
-            { label: 'Download a model', href: 'https://lmstudio.ai/docs/developer/rest/download', description: '모델 다운로드 요청' }
-          ] }
-        ]
-      }
-    ]
-  },
-  {
-    id: 'routing', group: '관리자 가이드', title: '논리 서비스와 라우팅', shortTitle: '서비스·라우팅',
-    description: '사용자 model과 실제 Deployment를 분리하고 우선순위·Failover를 구성합니다.',
-    audience: '관리자', minutes: 12, icon: '⇄', keywords: ['service', 'target', 'priority', 'weight', 'failover', 'retry'],
-    sections: [
-      {
-        id: 'create', title: '서비스 구성 순서',
-        blocks: [
-          { type: 'steps', items: [
-            { title: 'Service Key 결정', text: 'text-pro처럼 사용자 API의 model에 넣을 안정적인 목적 중심 키를 정합니다.' },
-            { title: 'Capability와 가격 설정', text: '필수 기능, Failover·Retry 정책, 입력·출력 100만 토큰 단가를 설정합니다.' },
-            { title: 'Target 추가', text: '동기화된 실제 배포를 Priority 순서로 연결합니다.', action: { label: 'LLM 서비스 열기', destination: 'services' } },
-            { title: '프로젝트 권한 부여', text: '사용할 프로젝트에 논리 서비스 접근 권한을 부여합니다.', action: { label: '프로젝트 열기', destination: 'projects' } }
-          ] }
-        ]
-      },
-      {
-        id: 'fields', title: 'Target 필드',
-        blocks: [
-          { type: 'table', columns: ['필드', '의미', '예시'], rows: [
-            ['Priority', '낮은 숫자를 먼저 선택', 'Primary 1, Secondary 2'],
-            ['Weight', '같은 Priority 후보의 상대 분배 비율', '70 / 30'],
-            ['동시성 재정의', '서비스별 최대 동시 요청', '고비용 서비스 1'],
-            ['Degraded', '품질 저하를 허용할 때만 마지막 후보', '고성능 → 경량 모델'],
-            ['활성화', '꺼진 Target은 즉시 후보 제외', '점검 전 비활성화'],
-            ['모델 변경 자동 추적', '같은 Runtime의 모델 교체 시 정상 Deployment로 자동 보정', '후보가 여러 개면 임의 전환하지 않음']
-          ] },
-          { type: 'callout', tone: 'warning', title: 'Weight는 속도 설정이 아닙니다', text: '100과 100은 동일 분배입니다. 매우 큰 숫자를 넣어도 처리 속도나 Timeout은 늘어나지 않습니다.' }
-        ]
-      },
-      {
-        id: 'request-scheduling', title: '로컬 우선 배분과 대기열',
-        blocks: [
-          {type:'paragraph',text:'LLM 서비스의 요청 배분·대기열에서 IMMEDIATE(기존 즉시 전환), LOCAL_FIRST_WAIT(로컬 대기 후 승인 외부 허용), LOCAL_ONLY_QUEUE(로컬 전용 대기)를 선택합니다. 기존 서비스 기본값은 IMMEDIATE입니다. 기다리는 요청은 아직 모델을 점유하지 않고, 슬롯이 비면 배정됩니다. 이미 실행한 요청을 이동하지 않습니다.'},
-          {type:'table',columns:['설정 위치','내용'],rows:[['인프라 → Runtime 전체 동시 처리 한도','같은 Runtime의 모델·논리 서비스·Chat 테스트가 공유. 로컬 기본 1'],['LLM 서비스 → 요청 배분 · 대기열','최대 대기 60초, 서비스 요청 수·본문 크기·키별 대기 수 한도'],['요청 상세 → 대기와 실행 상태','큐 상태·대기 시간·실행 시간·외부 배정 이유·한도/만료 오류 확인']]},
-          {type:'callout',tone:'warning',title:'보안 정책과 모델 호환성이 우선합니다',text:'외부 전송 금지 프로젝트는 대기 시간이 끝나도 외부로 전송하지 않습니다. 키·권한·보안 정책은 실행 직전 다시 검사합니다. 오프라인·미로드·필수 기능 미지원 모델만 있으면 기다리지 않고 오류를 반환합니다. 직접 모델 테스트는 선택 모델이 바쁘면 MODEL_AT_CAPACITY를 표시합니다.'},
-          {type:'callout',tone:'info',title:'짧은 HTTP 대기열입니다',text:'다중 API 서버는 Redis로 순서와 슬롯을 공유합니다. Redis에는 본문·이미지·API 비밀을 저장하지 않으며 대기 본문은 수신 서버 메모리에만 남습니다. 서버 재시작 시 복구/자동 재실행하지 않습니다. 장기 비동기 Job 기능이 아닙니다.'}
-        ]
-      },
-      {
-        id: 'request-defaults', title: 'Temperature·추론·Fast 기본값',
-        blocks: [
-          { type: 'table', columns: ['설정', '위치', '동작'], rows: [
-            ['Temperature', 'LLM 서비스 정책 편집', '요청 값 사용 / 고정값 / 필드 생략 중 선택'],
-            ['추론 수준·Fast', '논리 서비스 또는 외부 AI 모델 수정', '지원되는 외부 Chat Completions에 적용'],
-            ['외부 모델 기본값', '외부 AI → 모델 수정', '명시한 추론 수준·표준/Fast는 호출자·논리 서비스 설정보다 우선'],
-            ['요청/논리 서비스 설정 사용', '외부 모델 설정', '모델이 덮어쓰지 않고 기존 요청·서비스 정책을 따름']
-          ] },
-          { type: 'callout', tone: 'warning', title: '허용되지 않는 값을 강제하지 마세요', text: 'temperature를 받지 않는 모델에는 필드 생략을 사용하세요. 추론 수준과 Fast 지원은 모델별로 검증해야 합니다. 실제 적용 결과는 요청 상세에서 확인합니다.' }
-        ]
-      },
-      {
-        id: 'failover', title: 'Failover와 삭제 원칙',
-        blocks: [
-          { type: 'flow', items: [
-            { label: 'P1', title: 'Primary 검사', text: 'HEALTHY·READY·기능·동시성 확인' },
-            { label: 'FAIL', title: 'Attempt 기록', text: '오류와 응답 시작 여부 저장' },
-            { label: 'P2', title: 'Secondary 호출', text: '정책에 맞는 다음 Target 선택' },
-            { label: 'OK', title: '최종 기록', text: '실제 배포·토큰·Failover 저장' }
-          ] },
-          { type: 'callout', tone: 'info', title: '모든 오류가 같은 전환 조건은 아닙니다', text: '컨텍스트·입출력 한도·요청 형식 오류도 진단에 남습니다. 다음 후보 선택은 오류 정책, 호환성·Capability, 외부 승인·데이터 보호 조건을 따르며 응답이 시작된 스트리밍은 중간 교체가 제한됩니다.' },
-          { type: 'table', columns: ['삭제 차단 원인', '해결'], rows: [
-            ['프로젝트 서비스 권한', '워크스페이스 관리 → 프로젝트 → 서비스 권한에서 관계만 해제'],
-            ['Service Target', '서비스에서 Target 제거'],
-            ['요청 이력', '이력은 보존하고 프로젝트 권한·Service Target만 제거한 뒤 서비스 삭제'],
-            ['연결·이력 없음', '삭제 검사 후 영구 삭제 가능']
-          ] },
-          { type: 'callout', tone: 'info', title: '이력은 남기고 서비스만 정리할 수 있습니다', text: '삭제 검사에서 차단되는 것은 프로젝트 서비스 권한과 Service Target입니다. 요청·감사·사용량 이력은 보존되며, 관계를 제거한 뒤 논리 서비스만 정리합니다.' }
-        ]
-      }
-    ]
-  },
-  {
-    id: 'operations', group: '관리자 가이드', title: '사용량·관측·감사·알림', shortTitle: '관측·감사',
-    description: '조직 전체 통계에서 이상을 찾고 요청·장애·Failover·관리자 변경 이력을 추적합니다.',
-    audience: '관리자', minutes: 10, icon: '◉', keywords: ['usage', 'observability', 'incident', 'audit', 'discord', 'telegram', 'alert'],
-    sections: [
-      {
-        id: 'usage', title: '관리자 통계와 요청 추적',
-        blocks: [
-          { type: 'paragraph', text: '사용량 화면은 API 키 원문을 입력받지 않습니다. 서버가 로그인 계정의 권한을 확인해 개발자는 직접 발급한 키, 프로젝트 소유자·팀 관리자는 소유 프로젝트의 모든 키, 조직·플랫폼 관리자는 관리 조직의 모든 요청을 자동으로 집계합니다.' },
-          { type: 'cards', items: [
-            { label: 'TOTAL', title: '전체', text: '요청·토큰·비용·성공률을 확인합니다.' },
-            { label: 'PROJECT', title: '팀·프로젝트', text: '어느 조직 단위에서 사용량이 증가했는지 비교합니다.' },
-            { label: 'RUNTIME', title: '실제 인프라', text: '처리 배포, 지연, 오류와 Failover를 확인합니다.' }
-          ] },
-          { type: 'table', columns: ['상세 통계', '무엇을 의미하는가', '해석 기준'], rows: [
-            ['Runtime / 모델', '완료 요청·모델 시도 수, 성공률, 지연시간, 입력·출력·전체 토큰', '최종 응답은 완료 모델에 귀속하고, 모든 재시도는 Attempt로 별도 집계'],
-            ['요청 기능', 'Vision, Structured Output, Tool Calling, 스트리밍', '기능별 요청은 서로 겹칠 수 있어 퍼센트 합이 100%를 넘을 수 있음'],
-            ['수치 범위', '응답시간·토큰 평균, 최솟값, 최댓값', '누락된 토큰은 0으로 보지 않고 실제 표본 수만 계산'],
-            ['실패 원인', '최종 오류 코드와 모델별 재시도 실패 유형', '상세 오류 메시지와 요청 본문은 통계에 저장하지 않음'],
-            ['Playground', '직접 모델 테스트 성공률·토큰·응답시간', '운영 API와 분리하며 비용을 합산하지 않음']
-          ] },
-          { type: 'callout', tone: 'info', title: '집계 기준', text: '성공률 분모는 완료된 요청(성공+실패)입니다. 비용은 통화별 등록 가격 기준 추정치이며 KRW와 USD를 합산하지 않습니다. 자세한 지표 정의는 docs/runtime-usage-statistics.md에서 확인합니다.' },
-          { type: 'steps', items: [
-            { title: '사용량에서 이상 구간 확인', text: '요청 급증, 토큰 비용, 실패율을 프로젝트별로 좁힙니다.', action: { label: '사용량 열기', destination: 'usage' } },
-            { title: '관측성에서 Request·Attempt 확인', text: 'Request ID, 실제 배포, 오류, Failover 경로를 확인합니다.', action: { label: '관측성 열기', destination: 'observability' } },
-            { title: '필요하면 프로젝트 중지', text: '오용이 계속되면 새 요청을 차단하고 활성 키를 폐기합니다.', action: { label: '프로젝트 열기', destination: 'projects' } }
-          ] }
-        ]
-      },
-      {
-        id: 'platform-metrics', title: '외부 Prometheus·Grafana 연결',
-        blocks: [
-          { type: 'paragraph', text: '이미 운영 중인 모니터링 서버가 있다면 내장 Prometheus·Grafana를 중복 실행하지 않아도 됩니다. Gateway는 별도의 관리 포트로 메트릭만 노출하고, 외부 Prometheus가 수집한 값을 기존 Grafana에서 시각화합니다.' },
-          { type: 'steps', items: [
-            { title: '관리 포트 분리', text: 'Standalone은 docker-compose.external-monitoring.yml로 18081을, 단일 호스트 HA는 deploy/ha/docker-compose.external-monitoring.yml로 두 Gateway를 18081·18082에 각각 바인딩합니다.' },
-            { title: 'Prometheus Target 등록', text: '외부 Prometheus에 job_name=aiconnect-gateway와 Gateway-IP:관리포트를 등록하고 /actuator/prometheus를 15초 간격으로 수집합니다.' },
-            { title: 'Grafana 대시보드 배치', text: 'infra/grafana/dashboards/aiconnect-gateway-overview.json을 파일 프로비저닝 경로에 추가하고 Prometheus 데이터소스 UID를 확인합니다.' },
-            { title: '수집 검증', text: 'up{job="aiconnect-gateway"}=1과 llm_gateway_requests_total 증가를 확인합니다.' },
-            { title: 'HA Alert 적용', text: 'infra/prometheus/aiconnect-alerts.yml로 인스턴스 한 개 중단은 warning, 전체 Gateway 중단은 critical로 구분합니다.' }
-          ] },
-          { type: 'callout', tone: 'warning', title: '관리 포트를 인터넷에 공개하지 마세요', text: '방화벽 또는 Tailscale ACL에서 지정 Prometheus 서버만 접근하도록 제한합니다. 정확한 토큰·비용 원장은 MariaDB이며 Prometheus는 시스템 추세 감시용입니다.' },
-          { type: 'callout', tone: 'info', title: '상세 운영 문서', text: '배포 명령, Prometheus scrape 설정과 검증 쿼리는 docs/external-monitoring.md에서 확인합니다.' }
-        ]
-      },
-      {
-        id: 'audit', title: '관리자 감사 로그',
-        blocks: [
-          { type: 'paragraph', text: '감사 로그는 누가 언제 어떤 관리 작업을 수행했는지 확인하는 변경 불가 운영 증적입니다. 조직 관리자는 자신의 조직 기록만, 플랫폼 관리자는 전체 플랫폼 또는 선택 조직 기록을 조회합니다.' },
-          { type: 'steps', items: [
-            { title: '감사 로그 열기', text: '기간, 작업 이름, 리소스 유형으로 변경 이력을 좁힙니다.', action: { label: '감사 로그 열기', destination: 'audit' } },
-            { title: '실행자와 리소스 확인', text: '계정 이메일, 작업, 리소스 유형·식별자와 발생 시각을 확인합니다.' },
-            { title: '상세 JSON 확인', text: '비밀 원문 없이 저장된 변경 전후 맥락을 검토하고 사고 보고서의 Request ID와 연결합니다.' }
-          ] },
-          { type: 'callout', tone: 'danger', title: '감사 로그에 비밀값을 넣지 마세요', text: 'API 키, 비밀번호, LM Studio Token, Webhook 원문은 감사 상세에도 기록하지 않습니다.' }
-        ]
-      },
-      {
-        id: 'alerts', title: 'Discord·Telegram 알림',
-        blocks: [
-          { type: 'checklist', items: ['운영·개발 채널 분리', 'Webhook URL·Bot Token 재노출 금지', '알림 재전송 간격으로 반복 폭주 방지', '장애와 복구 메시지를 모두 시험', '프롬프트 원문을 알림 본문에 포함하지 않기'] },
-          { type: 'steps', items: [
-            { title: '채널 등록', text: 'Discord Webhook 또는 Telegram 정보를 암호화 저장합니다.', action: { label: '알림 채널 열기', destination: 'notifications' } },
-            { title: '프로젝트 경보 설정', text: 'RPM, 오류율, 월 토큰 비율과 재전송 간격을 정합니다.' },
-            { title: '장애·복구 시험', text: '테스트 Runtime을 Drain해 알림의 전체 수명주기를 검증합니다.' }
-          ] }
-        ]
-      }
-    ]
-  },
-  {
-    id: 'security-timeout', group: '운영과 참조', title: '보안·보관·Timeout', shortTitle: '보안·Timeout',
-    description: '비밀값 경계, 프롬프트 보관, Gateway Runtime Timeout과 운영 승인 기준을 정리합니다.',
-    audience: '공통', minutes: 12, icon: '◆', keywords: ['security', 'retention', 'secret', 'timeout', '360000', 'backup', 'ci', 'tls', 'production'],
-    sections: [
-      {
-        id: 'secrets', title: '비밀값을 구분하세요',
-        blocks: [
-          { type: 'table', columns: ['비밀값', '사용 주체', '원칙'], rows: [
-            ['로그인 비밀번호', '사람이 웹 로그인', '계정별 사용, 해시 저장'],
-            ['프로젝트 API 키', '애플리케이션이 Gateway 호출', '원문 1회 표시, Secret Manager 보관'],
-            ['LM Studio Token', 'Gateway가 Runtime 호출', '암호화 저장, 사용자 공개 금지']
-          ] }
-        ]
-      },
-      {
-        id: 'retention', title: '프롬프트 보관',
-        blocks: [
-          { type: 'table', columns: ['정책', '저장', '용도'], rows: [
-            ['METADATA', '모델·토큰·상태·지연·오류', '기본 권장'],
-            ['FULL_ENCRYPTED', '메타데이터와 암호화 원문', '명확한 감사 목적과 보관 기간이 있을 때']
-          ] },
-          { type: 'callout', tone: 'warning', title: '요청 이력은 감사 데이터입니다', text: '키나 프로젝트 레코드를 정리해도 기존 요청·사용량·장애·감사 이력은 보존될 수 있습니다.' }
-        ]
-      },
-      {
-        id: 'timeouts', title: 'Gateway Timeout과 Health Check',
-        blocks: [
-          { type: 'table', columns: ['환경 변수', '기본값', '의미'], rows: [
-            ['RUNTIME_CONNECT_TIMEOUT_MS', '3,000ms', 'LM Studio 연결 시작 대기'],
-            ['RUNTIME_RESPONSE_TIMEOUT_MS', '360,000ms', '연결 후 추론 완료 대기'],
-            ['HEALTH_CHECK_INITIAL_DELAY_MS', '30,000ms', 'Gateway 시작 후 첫 상태 검사까지 대기'],
-            ['HEALTH_CHECK_DELAY_MS', '30,000ms', '상태 검사 완료 후 다음 검사까지 간격']
-          ] },
-          { type: 'callout', tone: 'info', title: '첫 Health Check는 30초 후 실행됩니다', text: 'Gateway와 LM Studio가 시작되는 동안 오판하지 않도록 최초 검사를 30초 지연합니다. 이후에는 HEALTH_CHECK_DELAY_MS 간격으로 반복합니다.' },
-          { type: 'callout', tone: 'info', title: '현재는 Gateway 공통 설정입니다', text: 'docker-compose/.env의 환경 변수로 모든 Runtime에 공통 적용됩니다. Endpoint별 Timeout UI는 아직 제공하지 않습니다.' },
-          { type: 'callout', tone: 'warning', title: '가장 짧은 제한이 실제 제한입니다', text: 'Gateway가 360초를 기다려도 호출 앱이나 프록시가 120초에 연결을 끊으면 결과를 받을 수 없습니다. 클라이언트·Nginx·Gateway 제한을 함께 확인하세요.' }
-        ]
-      },
-      {
-        id: 'production', title: '운영 전 체크리스트',
-        blocks: [
-          { type: 'steps', items: [
-            { title: '자동 품질 게이트 통과', text: 'GitHub Actions의 Backend, Frontend, Compose·이미지 빌드 작업이 모두 성공해야 합니다.' },
-            { title: '운영 비밀값 생성·검증', text: 'new-deployment-env.ps1로 새 설치의 값을 만들고 check-deployment-env.ps1로 placeholder, 중복 Secret, URL, Timeout과 인증서 파일을 검사합니다.' },
-            { title: '외부 HTTPS와 내부 포트 제한', text: '신뢰된 인증서를 적용하고 LM Studio·MariaDB·Prometheus를 외부에 공개하지 않습니다. Grafana는 기본적으로 Gateway의 localhost:3000에서만 접근합니다.' },
-            { title: '백업과 복구 시험', text: 'MariaDB뿐 아니라 API_KEY_PEPPER와 GATEWAY_ENCRYPTION_KEY를 별도로 암호화해 보관하고 격리 환경에서 복원합니다.' },
-            { title: '실제 Runtime 승인', text: '비스트리밍·SSE·관측 기록을 확인하고, 두 물리 Runtime이 준비된 경우 Primary 장애와 복귀까지 검증합니다.' }
-          ] },
-          { type: 'checklist', items: ['최종 도메인의 신뢰된 TLS 인증서', 'LM Studio Token 인증', 'GPU 호스트 방화벽과 최소 사설망 권한', '실제 Discord·Telegram 장애·복구 알림', '프롬프트 보관 정책과 관리자 열람 권한 승인'] },
-          { type: 'callout', tone: 'warning', title: '실제 대체 Target을 검증한 뒤 Failover를 승인하세요', text: 'Mock 검증과 실제 서버 검증은 다릅니다. 로컬 또는 승인된 외부 대체 모델을 준비해 장애·복구·정책·비용을 확인하세요. 대체 Target이 없으면 단일 모델 운영의 제한을 명시합니다.' }
-        ]
-      }
-    ]
-  },
-  {
-    id: 'deployment-profiles', group: '운영과 참조', title: '배포 프로필 선택과 설치', shortTitle: '배포 프로필',
-    description: '동일한 AICONNECT 릴리스를 Standalone, HA, Kubernetes 중 조직 환경에 맞게 설치합니다.',
-    audience: '공통', minutes: 12, icon: '◇', keywords: ['standalone', 'ha', 'redis', 'kubernetes', 'helm', 'gateway'],
-    sections: [
-      { id: 'choose', title: '세 가지 설치 방식', blocks: [
-        { type: 'table', columns: ['프로필', '대상', 'Gateway', '공유 상태'], rows: [
-          ['Standalone', '개인·소규모 조직', '1개', 'JVM 로컬'],
-          ['HA', 'Kubernetes 없이 이중화', '2개 이상', 'Redis'],
-          ['Kubernetes', '대규모 운영 조직', 'Pod 2개 이상', 'Redis']
-        ] },
-        { type: 'callout', tone: 'info', title: '코드와 API는 하나입니다', text: '같은 이미지와 DB 스키마를 사용하며 설치 방식과 공유 상태 구현만 달라집니다.' },
-        { type: 'callout', tone: 'warning', title: '프로필 값만 변경하면 이중화되지 않습니다', text: 'HA에는 Redis, 두 Gateway와 LB가 필요하고 Kubernetes에는 Redis, MariaDB와 Gateway API가 필요합니다.' }
-      ] },
-      { id: 'standalone', title: 'Linux VM Standalone 빠른 설치', blocks: [
-        { type: 'paragraph', text: '전용 Linux VM에 Docker와 Tailscale을 먼저 설치하고 GPU 서버와 같은 Tailnet에 연결합니다. Linux 실행 파일은 .bat가 아니라 quickstart_standalone.sh입니다.' },
-        { type: 'table', columns: ['항목', '권장 기준', '이유'], rows: [
-          ['운영체제', 'Ubuntu 22.04 LTS 이상', 'Docker 공식 저장소와 자동 설치 검증 기준'],
-          ['CPU / 메모리', '4 vCPU / 8 GB 이상', 'Gateway·MariaDB·관측 스택 동시 실행'],
-          ['디스크', '40 GB 이상', '이미지 빌드, DB, Prometheus와 로그 여유 공간']
-        ] },
-        { type: 'callout', tone: 'info', title: '빈 Ubuntu 자동 설치를 실제 검증했습니다', text: 'fullsetting 스크립트는 Docker Engine·Compose·Tailscale을 설치하고 AICONNECT를 기동합니다. apt/dpkg 잠금은 최대 600초 대기하고 실패 시 10초 간격으로 세 번 재시도합니다.' },
-        { type: 'code', language: 'bash', title: 'GitHub에서 다운로드', code: 'wget -O aiconnect.tar.gz \\\n  https://github.com/chefbeom/model-gateway-platform/archive/refs/heads/main.tar.gz\ntar -xzf aiconnect.tar.gz\ncd model-gateway-platform-main\nchmod +x quickstart_standalone.sh' },
-        { type: 'code', language: 'bash', title: 'Docker와 Tailscale도 없는 빈 VM', code: 'chmod +x deploy/fullsetting_quickstart_standingalone.sh\n./deploy/fullsetting_quickstart_standingalone.sh\nsudo tailscale up\n./quickstart_standalone.sh' },
-        { type: 'callout', tone: 'info', title: 'Tailscale 인증은 자동화하지 않습니다', text: '전체 설정 파일은 Docker 공식 저장소, Compose v2, Tailscale stable 패키지와 AICONNECT 로컬 배포까지 진행합니다. 사용자가 sudo tailscale up으로 인증한 뒤 일반 Quickstart를 다시 실행하면 Tailnet HTTPS와 Base URL이 완성됩니다.' },
-        { type: 'code', language: 'bash', title: '한 번에 설치', code: './quickstart_standalone.sh' },
-        { type: 'steps', items: [
-          { title: '사전 조건 검사', text: 'Linux, Docker Compose v2, Docker 권한과 Tailscale 연결을 확인합니다.' },
-          { title: 'Tailnet 전용 HTTPS 준비', text: 'Tailscale Serve가 VM의 Nginx 포트 80을 신뢰된 ts.net HTTPS 주소로 전달합니다.' },
-          { title: '운영 비밀값 생성', text: '.env가 없을 때만 서로 다른 난수 Secret을 만들고 파일 권한을 600으로 제한합니다.' },
-          { title: '전체 스택 시작', text: 'MariaDB, Gateway, Frontend, Nginx, Prometheus, Grafana를 빌드하고 Health Check를 기다립니다.' },
-          { title: '최초 관리자 생성', text: '입력한 이메일과 비밀번호로 빈 설치의 플랫폼 관리자를 생성하고 접속 주소를 출력합니다.' }
-        ] },
-        { type: 'code', language: 'bash', title: 'LM Studio 경로까지 검사', code: 'AICONNECT_LM_STUDIO_URL=http://100.64.0.20:1234 \\\n  ./quickstart_standalone.sh' },
-        { type: 'code', language: 'bash', title: '신뢰된 사내 LAN에서 직접 접속', code: 'AICONNECT_LAN_IP=192.0.2.10 \\\n  ./quickstart_standalone.sh --lan\n# 관리 화면: http://192.0.2.10\n# OpenAI Base URL: http://192.0.2.10/v1' },
-        { type: 'code', language: 'bash', title: '설치 직후 상태 점검', code: 'docker compose ps\n# 키 없이 /v1/models의 401은 인증 경로 도달 확인용입니다.\n# 모델 준비 상태는 인증된 요청으로 별도 검증하세요.\ncurl -i http://127.0.0.1/v1/models\ntailscale status' },
-        { type: 'callout', tone: 'success', title: 'LAN 모드는 실제 접속 주소로 최초 관리자를 생성합니다', text: '--lan 실행 시 127.0.0.1이 아니라 AICONNECT_LAN_IP로 지정한 URL을 사용해 Bootstrap합니다. 내부 PC에서는 출력된 관리 화면과 /v1 Base URL을 그대로 사용합니다.' },
-        { type: 'callout', tone: 'warning', title: 'LAN HTTP 모드는 인터넷에 공개하면 안 됩니다', text: '--lan은 HTTP 로그인을 위해 AUTH_COOKIE_SECURE=false를 설정하고 Nginx를 지정한 내부 IP에 바인딩합니다. 신뢰된 사내 대역만 방화벽으로 허용하고 외부 공개 시에는 HTTPS와 Secure Cookie로 복귀하세요.' },
-        { type: 'callout', tone: 'warning', title: '일반 HTTP Tailscale IP로 로그인하지 마세요', text: 'Refresh Cookie는 Secure입니다. 스크립트가 출력하는 https://<host>.<tailnet>.ts.net 주소를 사용해야 로그인 갱신이 정상 동작합니다.' },
-        { type: 'callout', tone: 'warning', title: '.env를 잃어버리면 새로 만들지 마세요', text: '기존 MariaDB와 다른 API_KEY_PEPPER 또는 GATEWAY_ENCRYPTION_KEY를 사용하면 API 키 인증과 저장된 Token 복호화가 깨집니다. VM 밖의 암호화 저장소에서 원래 파일을 복원하세요.' },
-        { type: 'paragraph', text: 'Redis 없이 로컬 RPM·활성 요청 카운터를 사용합니다. 같은 DB에 Standalone Gateway를 여러 개 실행하지 마세요. 전체 절차는 deploy/standalone/README.md에 정리되어 있습니다.' }
-      ] },
-      { id: 'ha', title: 'Kubernetes 없는 HA 설치', blocks: [
-        { type: 'code', language: 'powershell', title: '참조 HA 실행', code: '.\\scripts\\new-deployment-env.ps1 -Profile HA -OutputPath deploy\\ha\\.env\ndocker compose --env-file deploy/ha/.env -f deploy/ha/docker-compose.yml up -d --build' },
-        { type: 'flow', items: [
-          { label: '1', title: 'Load Balancer', text: '준비된 Gateway로 요청을 분산하고 SSE 버퍼링을 끕니다.' },
-          { label: '2', title: 'Gateway 2개 이상', text: '같은 Secret·DB와 서로 다른 instance ID를 사용합니다.' },
-          { label: '3', title: 'Redis', text: 'RPM, 활성 요청과 예약 작업 락을 공유합니다.' }
-        ] },
-        { type: 'code', language: 'bash', title: 'Tailnet과 OCI Private IP만 허용', code: 'docker compose -p aiconnect-ha --env-file deploy/ha/.env -f deploy/ha/docker-compose.yml -f deploy/ha/docker-compose.external-monitoring.yml -f deploy/ha/docker-compose.private-only.yml up -d mariadb redis api-1 api-2 frontend load-balancer\nsudo env AICONNECT_PRIVATE_CIDR=10.0.0.0/16 bash deploy/ha/private-only-firewall.sh --install' },
-        { type: 'callout', tone: 'success', title: '공개 IP의 웹 포트를 차단합니다', text: 'Private-only override는 LB를 Loopback, Tailscale IP와 OCI Private IP에만 연결합니다. OCI Public IP NAT를 통한 우회는 영구 DOCKER-USER 필터가 차단합니다. Tailnet은 Tailscale IP를, 같은 OCI VCN은 인스턴스 Private IP /v1을 사용합니다.' },
-        { type: 'callout', tone: 'warning', title: 'HTTPS Serve는 Tailnet에서 먼저 활성화해야 합니다', text: 'Serve가 꺼져 있으면 Tailnet IP HTTP를 사용하되 인터넷에는 공개하지 않습니다. Tailnet 관리자가 Serve를 활성화한 뒤 ts.net HTTPS와 Secure Cookie로 전환할 수 있습니다. 자세한 절차는 docs/private-only-deployment.md를 확인하세요.' },
-        { type: 'code', language: 'bash', title: '외부 모니터링을 사용하는 단일 호스트 HA', code: 'docker compose --env-file deploy/ha/.env \\\n  -f deploy/ha/docker-compose.yml \\\n  -f deploy/ha/docker-compose.external-monitoring.yml \\\n  up -d --build mariadb redis api-1 api-2 frontend load-balancer\n# Prometheus Target: Gateway-IP:18081, Gateway-IP:18082' },
-        { type: 'callout', tone: 'info', title: 'Gateway 두 개를 각각 감시합니다', text: 'AICONNECT_METRICS_PORT_1=18081, AICONNECT_METRICS_PORT_2=18082로 구분합니다. 외부 Prometheus를 쓰면 내장 Prometheus·Grafana는 기동하지 않습니다.' },
-        { type: 'callout', tone: 'warning', title: '한 호스트 Compose는 호스트 HA가 아닙니다', text: '물리 장애 대응은 서로 다른 호스트, Redis HA와 DB 복제가 필요합니다.' }
-      ] },
-      { id: 'kubernetes', title: 'Kubernetes와 프로필 전환', blocks: [
-        { type: 'code', language: 'bash', title: 'Helm 설치', code: 'helm lint deploy/kubernetes/helm/aiconnect\nhelm upgrade --install aiconnect deploy/kubernetes/helm/aiconnect -f values-production.yaml' },
-        { type: 'checklist', items: ['Backend Pod 최소 2개', 'Redis HA', 'MariaDB HA', 'Gateway API와 TLS', 'PDB·anti-affinity·readiness', 'Tailscale Egress 또는 사설망'] },
-        { type: 'steps', items: [
-          { title: 'DB와 Secret 백업', text: 'DB와 암호화·서명 키를 보존합니다.' },
-          { title: '새 프로필 병행 배포', text: '기존 Gateway를 유지한 채 신규 인스턴스를 준비합니다.' },
-          { title: 'Readiness·Redis·LM Studio 확인', text: '공유 상태와 Runtime 접근을 검증합니다.' },
-          { title: 'LB 또는 DNS 전환', text: '검증 후 신규 진입점으로 트래픽을 이동합니다.' }
-        ] },
-        { type: 'callout', tone: 'success', title: '사용자 계약은 유지됩니다', text: '동일 DB와 Secret을 유지하면 API 키와 논리 model은 재발급하지 않습니다.' }
-      ] }
-    ]
-  },
-  {
-    id: 'external-provider', group: '관리자 가이드', title: '외부 OpenAI Provider', shortTitle: '외부 AI',
-    description: '관리자 관리형 외부 API를 프로젝트 승인, 수동 사용, 선택형 자동 Failover 정책으로 안전하게 연결합니다.',
-    audience: '관리자', minutes: 10, icon: 'C', keywords: ['OpenAI', '외부 API', 'Provider', '수동 사용', '자동 Failover', '비용'],
-    sections: [
-      {
-        id: 'external-principles', title: '먼저 알아야 할 원칙',
-        blocks: [
-          { type: 'cards', items: [
-            { label: 'SECRET', title: 'API 키는 관리자 소유', text: '외부 Provider 키는 암호화 저장되며 프로젝트 사용자와 Gateway 응답에 노출되지 않습니다.' },
-            { label: 'APPROVAL', title: '프로젝트별 승인', text: '등록만으로 외부 호출이 시작되지 않습니다. 프로젝트의 사용 요청과 관리자 승인이 필요합니다.' },
-            { label: 'DEFAULT OFF', title: '자동 전환은 기본 OFF', text: '자동 Failover는 관리자가 프로젝트 정책에서 명시적으로 켠 경우에만 후보가 됩니다.' }
-          ] },
-          { type: 'callout', tone: 'warning', title: '외부 전송 정책을 확인하세요', text: '외부 모델을 호출하면 프롬프트와 첨부 입력이 회사 네트워크 밖으로 전달될 수 있습니다. 민감정보와 데이터 반출 정책을 승인 전에 검토하세요.' }
-        ]
-      },
-      {
-        id: 'external-setup', title: '관리자 설정 순서',
-        blocks: [
-          { type: 'callout', tone: 'info', title: '외부 AI도 워크스페이스 자원입니다', text: '외부 API Key, 비용과 프로젝트 권한은 선택한 워크스페이스에 귀속됩니다. GPU Runtime과 동일하게 워크스페이스 선택 후 등록합니다.' },
-          { type: 'steps', items: [
-            { title: 'Provider 등록', text: '외부 AI에서 표시 이름, OpenAI 호환 Base URL, API 키를 등록합니다.', action: { label: '외부 AI 열기', destination: 'external' } },
-            { title: '키 기준 모델 조회', text: 'API 키 저장·변경 시 모델 목록을 자동 조회합니다. Provider 하나에 키를 한 번 저장하고 필요한 모델을 선택해 등록하므로 모델마다 같은 키를 반복 등록하지 않습니다.' },
-            { title: '사용할 모델과 옵션 등록', text: '조회 목록에서 필요한 모델을 등록하고 Capability·기능 지원, 컨텍스트, 동시 요청 수, 추론 수준·서비스 티어와 단가를 확인합니다. 목록에 보인다는 것만으로 모든 옵션의 실제 호출 권한을 보장하지는 않습니다.' },
-            { title: '프로젝트 승인', text: '사용자 요청을 검토하거나 관리자가 직접 프로젝트를 선택하고 수동 사용, 자동 Failover, 월 비용 상한, 만료일을 승인합니다.' },
-            { title: '논리 서비스 Target 연결', text: '수동 전용 서비스에는 외부 Target만, 자동 전환 서비스에는 로컬 우선·외부 후순위 Target을 연결합니다.', action: { label: 'LLM 서비스 열기', destination: 'services' } }
-          ] }
-        ]
-      },
-      {
-        id: 'model-settings-and-prices', title: '모델별 추론·Fast·가격',
-        blocks: [
-          { type: 'paragraph', text: '외부 AI의 모델 수정에서 추론 수준과 서비스 티어를 지정할 수 있습니다. 모델에 명시한 값은 호출자·논리 서비스 설정을 덮어쓰며, 요청/논리 서비스 설정 사용을 고르면 덮어쓰지 않습니다. 지원 여부는 모델의 기능 정보와 실제 테스트로 검증합니다.' },
-          { type: 'table', columns: ['가격 정보', '설정과 계산', '주의'], rows: [
-            ['표준 입력·캐시 입력·출력', '100만 토큰 단가와 통화를 모델에 등록', 'Provider가 명시적으로 제공하지 않는 가격은 수동 확인'],
-            ['Fast 입력·캐시 입력·출력', '별도 Fast 가격을 등록', 'Fast 가격이 없으면 잘못 계산하지 않도록 미산정'],
-            ['추론 토큰', 'Provider usage 정보와 적용 단가로 계산', '추론 수준마다 임의 배수를 붙이지 않음'],
-            ['비용 이력', '요청 당시 적용 가격·모드·토큰 정보로 추적', '현재 모델 가격만 보고 과거 비용을 재해석하지 않기']
-          ] },
-          { type: 'callout', tone: 'warning', title: '설정과 공급자 청구는 구분하세요', text: '요청한 Fast / 추론 수준과 실제 적용·반환된 정보가 다를 수 있습니다. AICONNECT 비용은 등록 가격 기준 추정치이며 공급자 청구서가 아닙니다. 모델 이름만으로 최신 가격이나 처리 티어를 추정하지 않습니다.' }
-        ]
-      },
-      {
-        id: 'external-modes', title: '수동 사용과 자동 Failover 차이',
-        blocks: [
-          { type: 'table', columns: ['방식', '구성', '호출 조건', '권장 용도'], rows: [
-            ['수동 사용', '외부 모델만 가진 별도 논리 서비스', '사용자가 해당 model 값을 명시', '무거운 작업, 관리자가 허용한 선택 호출'],
-            ['자동 Failover', '로컬 P1 + 외부 P2', '로컬 사용 불가 + 자동 전환 승인 ON', '로컬 장애 시 선택적 연속성 확보'],
-            ['자동 전환 OFF', '외부 Target이 있어도 제외', '관리자가 ON으로 바꾸기 전에는 호출 안 됨', '예상치 못한 비용과 데이터 반출 방지']
-          ] }
-        ]
-      },
-      {
-        id: 'external-observe', title: '비용·관측·감사',
-        blocks: [
-          { type: 'checklist', items: ['관측성에서 Provider=OPENAI 확인', '라우팅 사유 MANUAL_EXTERNAL 또는 AUTO_FAILOVER 확인', '사용량에서 CLOUD Provider·모델별 비용 확인', '월 비용 상한과 승인 만료 확인', '감사 로그에서 Provider·승인 정책 변경 확인'] },
-          { type: 'callout', tone: 'info', title: '테스트 완료 기준', text: '수동 승인 전 차단, 승인 후 성공, 자동 전환 OFF 차단, ON 전환 성공이 모두 재현되고 요청 기록에 외부 Provider와 예상 비용이 남아야 합니다.' }
-        ]
-      }
-    ]
-  },
-  {
-    id: 'troubleshooting', group: '운영과 참조', title: '문제 해결', shortTitle: '문제 해결',
-    description: '연결 실패, 401·403·503·504, 언로드 HTTP 400을 증상별로 해결합니다.',
-    audience: '공통', minutes: 12, icon: '!', keywords: ['error', 'cannot connect', '400', '401', '403', '503', '504', 'unload'],
-    sections: [
-      {
-        id: 'connection', title: 'Cannot connect to OpenAI API',
-        blocks: [
-          { type: 'steps', items: [
-            { title: 'Base URL 확인', text: '호출 앱에는 LM Studio 주소가 아니라 AICONNECT Gateway 주소를 넣고 /v1 중복 여부를 확인합니다.' },
-            { title: '호출 위치 확인', text: 'localhost는 같은 컴퓨터에서만 유효합니다. 다른 컴퓨터·컨테이너는 내부 IP·DNS 또는 외부 HTTPS를 사용합니다.' },
-            { title: '키와 모델 확인', text: '같은 키로 /v1/models를 호출하고 응답의 논리 모델명을 그대로 사용합니다.' },
-            { title: 'Timeout 확인', text: 'LM Studio가 결과를 만들었는데 앱이 실패하면 호출 앱의 제한 시간이 더 짧은지 확인합니다.' },
-            { title: 'Request·Attempt 확인', text: 'Gateway 도착 여부와 실제 배포의 HTTP 상태를 확인합니다.', action: { label: '관측성 열기', destination: 'observability' } }
-          ] }
-        ]
-      },
-      {
-        id: 'empty-success-response', title: '설정은 저장됐지만 화면이 바로 바뀌지 않음',
-        blocks: [
-          { type: 'paragraph', text: '서비스 권한 부여·해제처럼 응답 본문이 없는 관리 작업도 성공 직후 현재 목록을 다시 불러와 화면에 반영합니다.' },
-          { type: 'callout', tone: 'info', title: '이전 화면이 계속 보일 때', text: '브라우저에 이전 Frontend 정적 파일이 남아 있을 수 있습니다. 새 배포가 완료됐는지 확인한 뒤 한 번만 강력 새로고침하고, 이후 작업부터는 수동 새로고침 없이 반영되는지 확인하세요.' }
-        ]
-      },
-      {
-        id: 'clipboard-http', title: 'HTTP 내부망에서 복사 버튼 오류',
-        blocks: [
-          { type: 'paragraph', text: '일반 HTTP 주소에서는 브라우저가 보안 Clipboard API를 제공하지 않을 수 있습니다. AICONNECT는 이 경우 임시 선택 영역을 사용하는 fallback으로 API 키, Base URL, 모델명과 문서 예제를 복사합니다.' },
-          { type: 'callout', tone: 'warning', title: '비밀키 노출 시 즉시 폐기', text: 'API 키 원문이 스크린샷, 로그 또는 채팅에 노출됐다면 복사 기능 동작 여부와 관계없이 해당 키를 즉시 폐기하고 새 키를 발급하세요.' }
-        ]
-      },
-      {
-        id: 'request-capabilities', title: '같은 API 설정인데 요청별 결과가 다름',
-        blocks: [
-          { type: 'paragraph', text: 'Base URL, API 키와 논리 모델이 같아도 요청 본문이 추가 기능을 요구하면 Gateway는 해당 Capability를 가진 Deployment만 후보로 선택합니다.' },
-          { type: 'callout', tone: 'info', title: '필수 Capability는 다중 선택 드롭다운으로 설정', text: '기본값 [] 자동 판별은 서비스가 기능을 항상 강제하지 않고 요청 본문의 image_url, tools, response_format 등을 보고 필요한 기능을 자동으로 판별한다는 뜻입니다. 대부분의 일반 서비스에는 []를 권장하며, 모든 요청이 반드시 같은 기능을 요구하는 전용 서비스에서만 Capability를 선택하세요.' },
-          { type: 'table', columns: ['요청 본문', '추가 요구 Capability', '확인 위치'], rows: [
-            ['response_format.type = json_schema', 'STRUCTURED_OUTPUT', 'Deployment 운영 설정의 관리자 검증 Capability'],
-            ['tools 배열이 비어 있지 않음', 'TOOL_CALLING', '자동 발견 Capability 또는 검증 override'],
-            ['messages/input에 image_url·input_image 포함', 'VISION', '자동 발견 Capability 또는 검증 override']
-          ] },
-          { type: 'callout', tone: 'warning', title: 'Capability override는 실제 요청으로 검증한 뒤 추가', text: '모델 이름만 보고 기능을 허용하지 마세요. LM Studio에 최소 요청을 직접 보내 성공을 확인한 뒤 Deployment 운영 설정에 추가합니다.' }
-        ]
-      },
-      {
-        id: 'statuses', title: '상태 코드별 점검',
-        blocks: [
-          { type: 'table', columns: ['상태', '원인', '조치'], rows: [
-            ['401', '키 오류·폐기·만료', 'Bearer 값과 키 상태 확인'],
-            ['403', '서비스 권한 없음', '프로젝트 권한과 /v1/models 확인'],
-            ['429', 'RPM·토큰·동시성 한도', '정책 확인 후 지수 백오프'],
-            ['503', '사용 가능한 Target 없음', 'Endpoint·모델 로드·Target·Circuit 확인'],
-            ['504', '추론 응답 제한 초과', 'max_tokens·모델 성능·전체 Timeout 확인']
-          ] }
-        ]
-      },
-      {
-        id: 'unload', title: '모델 언로드 HTTP 400',
-        blocks: [
-          { type: 'paragraph', text: 'LM Studio native unload API는 model key가 아니라 현재 로드된 인스턴스의 instance_id를 요구합니다.' },
-          { type: 'steps', items: [
-            { title: '모델 동기화', text: '현재 로드 인스턴스 정보를 새로 가져옵니다.' },
-            { title: 'Drain', text: '새 요청 유입을 막고 진행 중 요청을 완료합니다.' },
-            { title: 'instance_id 확인', text: '동일 모델의 여러 인스턴스가 있으면 정확한 대상을 선택합니다.' },
-            { title: '언로드 재실행', text: '최근 모델 작업에서 LM Studio 응답 상세를 확인합니다.' }
-          ] }
-        ]
-      },
-      {
-        id: 'report', title: '문제 보고에 포함할 정보',
-        blocks: [
-          { type: 'checklist', items: ['발생 시각과 시간대', 'Request ID와 error.code', '논리 모델명', 'Endpoint와 실제 Deployment 상태', '스트리밍·첫 토큰 여부', 'Attempt 목록', '비밀값을 제거한 클라이언트 설정'] },
-          { type: 'callout', tone: 'danger', title: '비밀값 첨부 금지', text: 'API 키 원문, 비밀번호, LM Studio Token, Tailscale Auth Key를 스크린샷이나 로그에 포함하지 마세요.' }
-        ]
-      }
-    ]
-  },
-  {
-    id: 'resource-ownership-and-onboarding',
-    group: '운영과 참조',
-    title: '조직별 리소스와 첫 설정 흐름',
-    shortTitle: '리소스 소유 범위',
-    description: 'Runtime, GPU 인벤토리, 외부 AI Provider, 논리 서비스와 프로젝트 권한을 같은 조직 범위에서 안전하게 연결하는 방법입니다.',
-    audience: '관리자' as DocPage['audience'],
-    minutes: 10,
-    icon: '◎',
-    keywords: ['organization', 'workspace', 'runtime name', 'gpu inventory', 'external ai', 'onboarding'],
-    sections: [
-      {
-        id: 'ownership-boundary', title: '1. 조직이 리소스의 소유 경계입니다.',
-        blocks: [
-          { type: 'paragraph', text: 'Runtime Endpoint, GPU 인벤토리, 외부 AI Provider, 논리 서비스, 프로젝트와 API 키는 모두 하나의 조직에 귀속됩니다. 다른 조직의 Runtime 또는 Provider는 목록과 Target 선택 후보에 노출되지 않으며, 공유가 필요하면 별도의 공유 정책을 설계해야 합니다.' },
-          { type: 'flow', items: [
-            { label: '1', title: '조직 선택', text: '관리 콘솔의 Workspace에서 작업할 조직을 먼저 선택합니다.' },
-            { label: '2', title: '리소스 등록', text: '선택 조직 안에 LM Studio Runtime 또는 외부 AI Provider를 등록합니다.' },
-            { label: '3', title: '서비스 구성', text: '같은 조직에 속한 Deployment만 논리 서비스 Target으로 연결합니다.' },
-            { label: '4', title: '프로젝트 권한', text: '프로젝트에 논리 서비스를 허용하고, 그 프로젝트 API 키로만 호출합니다.' }
-          ] },
-          { type: 'callout', tone: 'info', title: '왜 조직 범위를 강제하나요?', text: '다른 부서나 고객의 GPU 주소, 외부 API 비용, 모델 목록이 섞이지 않게 하며 권한 실수를 차단하기 위해서입니다.' }
-        ]
-      },
-      {
-        id: 'runtime-and-inventory', title: '2. Runtime과 GPU 인벤토리는 다른 역할입니다.',
-        blocks: [
-          { type: 'table', columns: ['항목', '역할', '라우팅 영향', '예시'], rows: [
-            ['Runtime Endpoint', 'Gateway가 실제 추론 서버에 연결하는 주소와 인증 정보', '직접 영향', '업무용 Gemma 서버 / http://100.x.x.x:1234'],
-            ['Runtime 이름', '주소 대신 사람이 구분하는 운영 별칭', '영향 없음', '서울-4090-주서버'],
-            ['GPU 인벤토리', '하드웨어 참고 메타데이터', '자동 영향 없음', 'NVIDIA / RTX 4090 / 24576 MB']
-          ] },
-          { type: 'steps', items: [
-            { title: 'Runtime 등록', text: '노드 이름과 Endpoint URL을 입력합니다. 새 Runtime의 표시 이름은 기본적으로 노드 이름을 사용합니다.' },
-            { title: '연결 확인 및 모델 동기화', text: 'LM Studio API 연결과 실제 로드 모델을 확인합니다.' },
-            { title: 'GPU 인벤토리 추가', text: 'GPU가 무엇인지 참고용으로 기록합니다. 라우팅 용량은 Deployment의 동시 요청 수와 상태로 관리합니다.' },
-            { title: '수정 또는 삭제', text: '인벤토리 카드의 Edit/Delete로 잘못 등록한 하드웨어 정보를 즉시 고칠 수 있습니다.' }
-          ] }
-        ]
-      },
-      {
-        id: 'external-ai-same-gateway', title: '3. 외부 AI도 AICONNECT를 경유합니다.',
-        blocks: [
-          { type: 'paragraph', text: 'OpenAI 같은 외부 AI Provider의 API 키는 관리자만 등록하며, 일반 사용자에게 원문을 보여주지 않습니다. 외부 모델도 Deployment가 되어 논리 서비스 Target으로 연결되고, 사용자는 AICONNECT의 Base URL과 프로젝트 API 키만 사용합니다.' },
-          { type: 'flow', items: [
-            { label: '1', title: 'Provider 등록', text: '관리자가 외부 API Base URL, 비밀 키, 사용할 모델과 단가를 저장합니다.' },
-            { label: '2', title: '모델과 Target 연결', text: '외부 모델을 논리 서비스의 수동 후보 또는 자동 Failover 후보로 추가합니다.' },
-            { label: '3', title: '프로젝트 승인', text: '프로젝트별 외부 AI 사용을 명시적으로 승인합니다.' },
-            { label: '4', title: '동일한 관측', text: '입·출력 토큰, 비용, 실패 코드, 실제 Provider와 Failover 이력이 한 요청 기록에 남습니다.' }
-          ] },
-          { type: 'callout', tone: 'warning', title: '외부 키를 사용자에게 전달하지 마세요.', text: '사용자는 외부 Provider 주소나 키가 아니라 Gateway의 /v1 엔드포인트와 자신이 발급한 프로젝트 API 키만 사용해야 사용량·권한·비용을 통합 제어할 수 있습니다.' }
-        ]
-      },
-      {
-        id: 'recommended-first-setup', title: '4. 처음 설치한 관리자의 권장 순서',
-        blocks: [
-          { type: 'checklist', items: [
-            '조직 생성 또는 선택',
-            'LM Studio Runtime 또는 외부 AI Provider 하나 등록',
-            '연결 확인 후 모델 동기화 또는 외부 모델 등록',
-            '논리 서비스 생성 후 Target 하나 연결',
-            '팀과 프로젝트 생성',
-            '프로젝트에 서비스 권한 부여',
-            '프로젝트 API 키 발급',
-            'GET /v1/models와 POST /v1/chat/completions로 실제 호출 확인',
-            '사용량과 관측성 화면에서 요청 기록 확인'
-          ] },
-          { type: 'callout', tone: 'success', title: '가장 작은 성공 기준', text: '한 조직, Runtime 또는 외부 Provider 하나, 모델 하나, 논리 서비스 하나, 프로젝트 하나, API 키 하나로 첫 호출과 사용량 기록까지 확인한 뒤 복수 Target과 Failover를 추가하세요.' }
-        ]
-      }
-    ]
-  },
-  {
-    id: 'cost-and-quotas',
-    group: '관리자 가이드',
-    title: '요금·통화·총량제',
-    shortTitle: '요금·쿼터',
-    description: '원화·USD 단가부터 조직별 지출 한도와 초과 차단, 일·월별 사용량까지 한 흐름으로 확인합니다.',
-    audience: '관리자',
-    minutes: 8,
-    icon: '₩',
-    keywords: ['quota', 'budget', 'cost', 'currency', 'KRW', 'USD', 'usage', 'limit'],
-    sections: [
-      {
-        id: 'pricing',
-        title: '모델 단가와 통화',
-        blocks: [
-          { type: 'paragraph', text: '가격은 입력·출력 토큰 100만 개 기준으로 저장합니다. Runtime Endpoint와 모델 Deployment, 외부 Provider 모델, 논리 서비스의 통화(KRW 또는 USD)와 단가를 실제 설정 화면에서 확인·수정합니다.' },
-          { type: 'steps', items: [
-            { title: 'Runtime 또는 외부 Provider 선택', text: '인프라 화면에서는 Runtime Endpoint와 모델 Deployment의 가격을, 외부 AI 화면에서는 Provider 모델의 가격을 편집합니다.', action: { label: '인프라 열기', destination: 'infrastructure' } },
-            { title: '통화와 입력·출력 단가 저장', text: 'KRW(원화) 또는 USD(달러)를 선택하고 입력·출력 각각의 1M 토큰 단가를 저장합니다.' },
-            { title: '논리 서비스 정책 확인', text: '서비스가 별도 가격 정책을 사용하는 경우 LLM 서비스 화면에서 통화와 단가를 함께 확인합니다.', action: { label: 'LLM 서비스 열기', destination: 'services' } }
-          ] }
-        ]
-      },
-      {
-        id: 'quota-scope',
-        title: '총량제 범위와 차단',
-        blocks: [
-          { type: 'cards', items: [
-            { label: 'ORGANIZATION', title: '조직 전체', text: 'Workspace 전체 요청의 지출을 제한합니다.' },
-            { label: 'TEAM / PROJECT', title: '팀·프로젝트', text: '부서 또는 서비스별 예산을 분리합니다.' },
-            { label: 'API KEY', title: 'API 키', text: '호출 주체별로 최대 지출을 제한합니다.' }
-          ] },
-          { type: 'paragraph', text: '한도는 일간·월간·전체 기간 중 하나로 저장합니다. 활성 한도에 도달하면 Gateway가 요청을 허용하지 않고, 사용량과 요청 이력에 차단 결과를 남깁니다.' },
-          { type: 'callout', tone: 'warning', title: '통화는 임의로 합산하지 않습니다', text: 'KRW와 USD 사용량은 원래 통화별로 보존·표시합니다. 서로 다른 통화를 임의 환산한 단일 합계로 판단하지 말고 각 한도의 통화와 사용량을 비교하세요.' }
-        ]
-      },
-      {
-        id: 'review-usage',
-        title: '사용량 확인 순서',
-        blocks: [
-          { type: 'steps', items: [
-            { title: '요금·한도 화면에서 기간·지표 선택', text: '최근 7일·30일·이번 달·전체 기간을 선택합니다. 비용·요청·토큰 지표를 바꿔 상대 높이와 실제 값을 함께 확인합니다. 소액 비용도 선택 기간의 최댓값 기준으로 비교할 수 있습니다.', action: { label: '요금·한도 열기', destination: 'quotas' } },
-            { title: '월간 캘린더 확인', text: '월을 이동해 일별 요청·토큰·통화별 비용을 봅니다. 선택 범위 밖 또는 조회되지 않은 날짜를 사용량 0으로 단정하지 않습니다. 등록된 지출 한도가 없어도 사용량은 별도 표시됩니다.' },
-            { title: '프로젝트·팀·API 키별 분해', text: '어느 소유 단위가 토큰과 비용을 사용했는지 표에서 비교합니다.' },
-            { title: '요청 이력으로 원인 확인', text: 'Request ID, 실제 배포, Provider, Failover와 비용 통화를 함께 확인합니다.', action: { label: '관측성 열기', destination: 'observability' } }
-          ] }
-        ]
-      }
-    ]
-  },
-  {
-    id: 'api-playground-and-structure',
-    group: '운영과 참조',
-    title: 'API 테스트와 시스템 구조',
-    shortTitle: 'API 테스트·구조',
-    description: '실제 키 또는 임시 테스트 키로 연결을 확인하고, 현재 구성된 Gateway·서비스·Runtime·Provider·조직 구조를 읽습니다.',
-    audience: '공통',
-    minutes: 7,
-    icon: '↗',
-    keywords: ['playground', 'api test', 'JSON', 'SSE', 'request id', 'architecture', 'system structure'],
-    sections: [
-      {
-        id: 'playground',
-        title: '연결 테스트 페이지 사용',
-        blocks: [
-          { type: 'steps', items: [
-            { title: '모델 목록 조회', text: '테스트 화면에서 Gateway, Local LLM Runtime, 외부 AI Provider의 모델 노출 상태를 먼저 확인합니다.', action: { label: 'API 테스트 열기', destination: 'playground' } },
-            { title: 'JSON 요청으로 기본 연결 확인', text: '선택한 모델과 짧은 메시지로 비스트리밍 요청을 보내고 HTTP 상태와 실제 응답을 확인합니다.' },
-            { title: 'SSE 스트리밍 확인', text: '스트리밍을 켜면 이벤트가 순서대로 도착하는지 확인하고, 중간 오류가 발생하면 Request ID로 추적합니다.' },
-            { title: '실제 사용 키와 임시 키 구분', text: '운영 키는 권한·쿼터 정책을 그대로 검증하고, 임시 테스트 키는 짧은 유효기간과 제한된 범위로 연결만 검증합니다.' }
-          ] },
-          { type: 'callout', tone: 'success', title: '성공 기준', text: '실제 응답, 토큰 사용량, Request ID가 화면에 표시되고 요청 이력에 동일한 요청이 남으면 Gateway 연결 검증이 완료된 것입니다.' }
-        ]
-      },
-      {
-        id: 'system-map',
-        title: '현재 시스템 구조 읽기',
-        blocks: [
-          { type: 'flow', items: [
-            { label: '1', title: '프로젝트·API 키', text: '팀에 속한 프로젝트의 키로 허용된 논리 서비스를 호출합니다.' },
-            { label: '2', title: 'AICONNECT Gateway', text: '인증, 권한, 요금 한도와 데이터 보호 정책을 적용합니다.' },
-            { label: '3', title: '논리 LLM 서비스', text: '외부에 공개할 model과 Retry/Failover 정책입니다.' },
-            { label: '4', title: '모델 Target', text: 'P 우선순위, 상대 가중치, 활성·Degraded 설정에 따라 실행 후보를 선택합니다.' },
-            { label: '5', title: 'Runtime 또는 외부 Provider', text: '등록된 실제 모델 ID로 Local LLM 또는 외부 API를 호출합니다.' }
-          ] },
-          { type: 'paragraph', text: '연결도는 현재 워크스페이스에 저장된 실제 Target 참조를 사용합니다. 노드·연결선을 선택하면 관련 경로를 강조하고 Endpoint, 모델 상태, 우선순위·가중치, 권한과 상태 사유를 확인할 수 있습니다. 프로젝트·서비스 필터, 확대·축소, 미연결 모델 포함 옵션으로 복잡한 구성을 좁혀 보세요. 팀·키 등의 전체 목록은 접힌 구성 목록에서 확인합니다.' },
-          { type: 'callout', tone: 'warning', title: '저장된 구성과 실시간 성공은 다릅니다', text: '초록은 정상 검사 기록 또는 활성 설정, 노랑은 미로드·복구·Degraded, 빨강은 장애·권한 확인, 회색은 비활성·미확인입니다. 선은 실제 트래픽이 아닌 저장된 요청 후보입니다. P 숫자가 작을수록 우선이며 가중치는 확률(%)이 아닙니다. 실제 요청의 Capability·Quota·데이터 보호 정책 등은 Gateway에서 다시 평가됩니다.' },
-          { type: 'paragraph', text: 'Gateway 아래에는 영속 저장소, 배포 프로필에 따른 Redis 또는 프로세스 로컬 공유 상태, 요청 추적·Usage의 기능 관계를 별도로 표시합니다. Redis 설정 여부를 통신 정상으로 표시하지 않으며 GPU·Inference Node도 실행 자원 수에 중복 합산하지 않습니다. 오프라인 모델과 Target 참조는 삭제하지 않고 장애·미확인 상태로 유지합니다.' },
-          { type: 'steps', items: [
-            { title: '구성 맵 열기', text: '현재 연결된 Runtime, Provider, 논리 서비스, 팀, 프로젝트, API 키의 관계를 한 화면에서 확인합니다.', action: { label: '시스템 구조 열기', destination: 'system' } },
-            { title: '세부 설정으로 이동', text: '이름·Endpoint·가격·통화는 인프라 또는 외부 AI 화면에서, Target과 정책은 LLM 서비스 화면에서 수정합니다.', action: { label: '외부 AI 열기', destination: 'external' } }
-          ] }
-        ]
-      }
-    ]
-  },
-  ...currentGuides,
-  runtimeDiagnosticsDoc,
+  overviewDoc,
+  onboardingAuthDoc,
+  ...roleGuides,
+  ...operationsGuides
 ]
 
-export const docGroups = ['시작하기', '사용자 가이드', '관리자 가이드', '운영과 참조'] as const
+export const docGroups: readonly DocGroup[] = ['시작하기', '역할별 실전 가이드', '인프라·정책 운영', '진단·운영 참조'] as const
 
-export function findDoc(id: string | null | undefined) {
-  return devDocs.find(doc => doc.id === id) ?? devDocs[0]
+export function findDoc(id: string | null | undefined): DocPage {
+  const resolved = id ? resolveDocumentId(id) : ''
+  return devDocs.find(doc => doc.id === resolved) ?? devDocs[0]!
 }
 
 export function searchDocs(query: string) {

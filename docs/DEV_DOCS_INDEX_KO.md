@@ -1,89 +1,59 @@
 # AICONNECT / Dev-Docs
 
-구현 검토 기준: **2026. 10. 05.**
+구현 검토 기준: **2026. 11. 22.**
 
-AICONNECT의 현재 프로젝트 구현을 기준으로 사용·관리·운영 문서를 정리합니다. 운영 서버에 배포된 버전과 설정에 따라 화면과 지원 범위는 다를 수 있습니다.
-앱의 상위 화면은 `#docs`로 열고, 문서 선택 상태는 `#docs/{문서 ID}`로 공유합니다. 전체 목록은 `frontend/src/dev-docs/catalog.ts`에서 관리합니다.
+AICONNECT의 현재 운영 구현을 기준으로 **관리자 · 프로젝트 총괄자 · 팀원** 역할에 맞춘 간결한 실전 가이드와 실제 화면 입력 예시(`mockup`)를 제공합니다.
+웹 콘솔에서는 `#docs`로 열고, 문서별 선택 상태는 `#docs/{문서 ID}`로 공유합니다. 구버전 문서 해시(`#docs/quickstart`, `#docs/request-diagnostics` 등)는 `navigation.ts`의 별칭 테이블을 통해 최신 문서로 자동 연결됩니다.
 
-화면은 문서 목록·본문·페이지 목차의 평면적인 읽기 구조입니다. 중복 카테고리 카드와 박스 안의 박스를 제거했고, 모바일에서는 문서 목록·목차를 접을 수 있습니다. 검색은 본문·표·예제까지 포함하며 대상 필터와 함께 동작합니다.
+## 문서 구성 (4개 그룹 · 9개 가이드)
 
+| 그룹 | 문서 ID | 대상 역할 | 핵심 내용 |
+| --- | --- | --- | --- |
+| 시작하기 | `overview` | 공통 | Gateway 요청 4단계, 3단계 역할 비교, 조직 관계도 예시, 핵심 용어 |
+| 시작하기 | `onboarding-auth` | 공통 | 1회용 초대 링크 가입(`#register`), Google Authenticator TOTP, 세션 보안 |
+| 역할별 실전 가이드 | `guide-admin` | 관리자 | 팀·프로젝트·총괄자 초대, 사내 GPU 등록, 논리 서비스·상한 설정 화면 예시 |
+| 역할별 실전 가이드 | `guide-director` | 프로젝트 총괄자 | 팀원 초대, API 키 위임·회수, 상한 내 정책·예산·관계도/사용량 모니터링 |
+| 역할별 실전 가이드 | `guide-member` | 팀원 | `내 API` 키 발급, `API 테스트` 검증, cURL·Python·TypeScript 연동 예제 |
+| 인프라·정책 운영 | `runtime-routing` | 관리자 | Runtime 4종 비교, 외부 Provider 승인·단가, 로컬 우선 대기열, 모델 테스트·시스템 구조 |
+| 인프라·정책 운영 | `data-protection-quotas` | 관리자 · 프로젝트 총괄자 | 3단계 데이터 경계(`INTERNAL_ONLY` 등), DLP 정책, KRW/USD 단가·총량제 |
+| 진단·운영 참조 | `diagnostics` | 공통 | `X-Request-Id`·Attempt 추적 예시, HTTP/오류 코드표, Runtime 상태 점검 |
+| 진단·운영 참조 | `operations-deploy` | 관리자 | 사용량 집계 범위, 감사 로그, Discord/Telegram·Prometheus, Timeout·배포·보안 체크리스트 |
 
-## 문서 구조
+## 화면 예시 기준 데이터 (가상 예시)
 
-| 영역 | 대상 | 핵심 내용 |
-| --- | --- | --- |
-| 시작하기 | 모든 사용자 | AICONNECT 개요, 권한 구조, 첫 API 요청 |
-| 사용자 가이드 | 개발자·서비스 사용자 | 프로젝트, API 키, Base URL, OpenAI 호환 API |
-| 관리자 가이드 | 조직 관리자 | Runtime·Provider·모델·논리 서비스·요금·총량제 |
-| 운영과 참조 | 운영자·개발자 | API 테스트, 시스템 구조, 장애 진단, 배포·보안·모니터링 |
+문서 내 모든 화면 카드와 코드 예제는 일관된 가상 예시 데이터를 사용하며, 실제 개인 계정이나 내부 서버 IP·비밀값을 포함하지 않습니다.
 
-## 최근 구현 기준
-
-- 2026. 10. 19. 추가: 논리 서비스별 로컬 우선/로컬 전용 대기열, Runtime 전체 공유 동시성, JSON/SSE 비동기 대기, 요청별 대기·실행 시간과 배정 이유를 제공합니다. 기본 서비스 동작은 즉시 전환이며 자세한 제한·배포 조건은 [요청 배분과 공유 대기열](request-scheduling.md)을 참고하세요.
-- LM Studio / Ollama / llama.cpp / OpenAI-compatible Runtime별 조회·모델 관리 지원을 구분합니다. 현재 로드 상태와 과거 등록 모델·Target 참조를 분리합니다.
-- Provider에 API 키를 한 번 저장하고 조회된 모델을 선택해 등록합니다. 추론·Fast 기본값과 표준·Fast·캐시 단가를 모델별로 설정합니다. 지원·실제 적용·공급자 청구는 구분합니다.
-- 모델 테스트 콘솔에서 직접 모델 호출·이미지·텍스트/PDF·SSE와 암호화 저장된 모델별 대화를 검증합니다. 파일 원본은 저장하지 않으며 PLAYGROUND 통계는 운영 API와 별도입니다.
-- 데이터 보호는 플랫폼·조직·프로젝트·서비스·키 정책 중 더 엄격한 제한을 적용합니다. REDACT는 현재 로컬 전용 처리이며 외부 마스킹 전송을 보장하지 않습니다.
-- 요청 상세에서 최종 결과와 Attempt별 실패, 입력·출력 조건, 권장 조치, 추론·Fast·비용 산정 정보를 구분합니다.
-- 입력·출력 단가에 **KRW(원화) 또는 USD(달러)**를 선택해 저장합니다.
-- 요금 총량제를 **조직·팀·프로젝트·API 키** 단위로 설정하고, 일간·월간·전체 기간 한도를 적용합니다.
-- 한도 초과 요청은 Gateway에서 차단하고, 사용량 화면에서 일별 그래프·월간 캘린더·프로젝트·팀·API 키별 집계를 확인합니다.
-- API 테스트 화면에서 모델 조회, JSON 요청, SSE 스트리밍, 실제 응답·토큰·Request ID를 확인할 수 있습니다.
-- 시스템 구조 화면에서는 프로젝트·API 키 → Gateway → 논리 서비스 → 모델 Target → Runtime/Provider를 실제 참조 기반 연결도로 확인합니다. 클릭 상세, 경로 강조, 프로젝트·서비스 필터와 확대·축소를 지원하며 저장된 상태와 기능 관계를 구분합니다. [시스템 연결도](system-topology.md)를 참고하세요. GPU/Inference Node는 실행 자원 수에 중복 합산하지 않습니다.
-
-## 어디서 확인할까요?
-
-| 확인 목적 | AICONNECT 화면 | Dev-Docs 문서 |
-| --- | --- | --- |
-| 첫 연결과 API 호출 | 내 API / API 테스트 | 빠른 시작, API 연결, API 테스트·구조 |
-| Runtime·외부 AI 설정 | 인프라 / 외부 AI | Runtime·모델, 외부 AI |
-| 직접 모델 호출과 과거 대화 | 모델 테스트 콘솔 | 모델 테스트·대화 (`model-playground`) |
-| 민감정보·외부 전송 제어 | 데이터 보호 | 데이터 보호 (`data-protection`) |
-| 실패 원인과 권장 조치 | 관측성 / 사용량 요청 상세 | 요청 실패 진단 (`request-diagnostics`) |
-| 단가·통화·예산 | 요금·쿼터 / LLM 서비스 | 요금·통화·총량제 |
-| 요청·비용·Failover 추적 | 사용량 / 관측성 | [Runtime·모델 사용량 통계](runtime-usage-statistics.md), 사용량·관측·감사·알림, Runtime 장애 진단 |
-| 전체 연결 관계 | 시스템 구조 | API 테스트와 시스템 구조 |
-| 배포·보안·복구 | 배포 프로필 / 운영 문서 | 배포 프로필, 보안·보관·Timeout |
+- 조직 / 팀 / 프로젝트: `Acme-AI-Lab` / `Platform-AI` / `cs-copilot`
+- 계정: `admin@acme.example`(시스템 관리자), `lead.park@acme.example`(프로젝트 총괄자), `dev.kim@acme.example`(팀원)
+- 주소: `https://www.aiconnectgateway.com`, `https://api.aiconnectgateway.com/v1`, `http://100.64.0.10/v1`, `http://100.64.0.20:1234` (`seoul-gpu-01`)
+- 논리 모델 / 키 / 초대 코드: `text-pro`, `gpt-analysis`, `sk_llmg_example_9f8a...`, `INV-EXAMPLE-7K9Q`
 
 ## 화면과 소스 구조
 
     frontend/src/
-    ├─ DevDocsPage.vue                 # breadcrumb, 검색·대상 필터, 문서 영역 탐색
+    ├─ DevDocsPage.vue                 # 역할 필터, 3역할 바로가기 카드, 검색·목차·페이지네이션
     └─ dev-docs/
-       ├─ types.ts                     # 문서 페이지·섹션·블록·화면 이동 타입
-       ├─ catalog.ts                   # 화면에 표시되는 문서 카탈로그
-       ├─ runtimeDiagnostics.ts        # Runtime 장애 진단 문서
-       ├─ currentGuides.ts             # 모델 테스트·보호·요청 실패 진단
-       ├─ navigation.ts                # 검색·대상 필터·문서 해시
-       └─ DevDocsArticle.vue            # 본문 블록 렌더러
+       ├─ types.ts                     # DocAudience(3역할+공통), DocGroup, MockupBlock 타입
+       ├─ navigation.ts                # 역할별 필터링, mockup 포함 전문 검색, 구버전 해시 별칭
+       ├─ roleGuides.ts                # 시스템 관리자 · 프로젝트 총괄자 · 팀원 실전 가이드
+       ├─ operationsGuides.ts          # Runtime·외부 AI·라우팅, 데이터 보호·요금, 진단, 관측·배포·보안
+       ├─ catalog.ts                   # 시작하기 2종 + 카탈로그 결합(9개) 및 DOCS_REVIEWED_AT
+       └─ DevDocsArticle.vue           # 본문 및 내장 화면 예시(mockup) 카드 렌더러
 
-## 문서 작성 규칙
+## 검증
 
-1. 문서는 실제 화면의 현재 라벨·메뉴·API 계약을 기준으로 작성합니다.
-2. 설정 위치와 확인 위치를 함께 적고, 가능하면 AICONNECT 화면으로 이동하는 링크를 제공합니다.
-3. 가격은 통화와 입력·출력 단가를 함께 설명하고, KRW와 USD를 임의 환산하지 않습니다.
-4. 요청 이력·사용량·감사 로그는 보존 대상일 수 있으므로 삭제 동작과 비활성화 동작을 구분합니다.
-5. API 예제의 model은 실제 논리 서비스 키를 사용하고, Runtime 내부 주소를 사용자 호출 예제로 노출하지 않습니다.
-6. 기능 변경 시 catalog.ts, 이 인덱스, 관련 docs/*.md의 기준일과 링크를 함께 갱신합니다.
-7. 비밀값(API 키 원문, Runtime Token, Tailscale Auth Key)은 문서·로그·스크린샷에 기록하지 않습니다.
-8. 지원 표시·저장 프로필·실제 실행값을 혼동하지 않고, 미확인 상태나 미산정 비용을 0 또는 지원으로 추정하지 않습니다.
+```bash
+cd frontend
+npm run test:docs
+node --test tests/*.test.mjs
+npm run build
+```
 
-검증: `cd frontend && npm run test:docs && npm run build`. 문서 이동·검색·대상 필터·본문 복사와 PC/모바일·확대 글꼴 레이아웃도 확인합니다.
+## 관련 운영·참조 문서
 
-## 검증 체크리스트
-
-- [ ] 일반 사용자가 관리자 메뉴 없이 첫 요청 절차를 따라갈 수 있는가?
-- [ ] Base URL과 Runtime Endpoint의 역할이 구분되어 있는가?
-- [ ] 화면의 현재 버튼·메뉴명과 문서 링크가 일치하는가?
-- [ ] 단가의 통화와 사용량의 통화별 표시가 일치하는가?
-- [ ] 총량제 초과 시 요청 차단과 요청 이력 확인 방법이 설명되어 있는가?
-- [ ] API 테스트 결과의 응답·토큰·Request ID 확인 방법이 있는가?
-- [ ] GPU/Inference Node와 실행 가능한 Endpoint/Provider가 중복 집계되지 않는가?
-- [ ] 배포·보안·보관 정책 변경이 관련 운영 문서에도 반영됐는가?
-
-## 외부 참고 문서
-
-- [LM Studio Developer Docs](https://lmstudio.ai/docs/developer)
-- [OpenAPI 계약](openapi.yaml)
 - [외부 Provider 운영 가이드](EXTERNAL_PROVIDER_GUIDE_KO.md)
+- [Runtime · 모델 사용량 통계](runtime-usage-statistics.md)
+- [요청 배분과 공유 대기열](request-scheduling.md)
+- [시스템 연결도](system-topology.md)
+- [OpenAPI 계약](openapi.yaml)
 - [배포 준비 체크리스트](production-readiness.md)

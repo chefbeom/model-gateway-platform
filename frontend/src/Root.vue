@@ -590,7 +590,7 @@ onBeforeUnmount(() => {
 <template>
   <div v-if="activeView === 'splash'" class="session-splash">
     <div class="splash-mark"><span></span><span></span><span></span></div>
-    <strong>AICONNECT</strong><small>보안 세션을 확인하고 있습니다.</small>
+    <strong>AiConnect</strong><small>보안 세션을 확인하고 있습니다.</small>
   </div>
   <ConsoleShell
     v-else-if="activeView === 'console'"

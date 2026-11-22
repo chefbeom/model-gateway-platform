@@ -1,0 +1,19 @@
+{
+  "name": "AiConnect",
+  "short_name": "AiConnect",
+  "theme_color": "#07100c",
+  "background_color": "#07100c",
+  "display": "standalone",
+  "icons": [
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    },
+    {
+      "src": "/favicon-32x32.png",
+      "sizes": "32x32",
+      "type": "image/png"
+    }
+  ]
+}

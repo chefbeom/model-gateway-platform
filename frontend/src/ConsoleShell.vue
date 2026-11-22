@@ -386,7 +386,7 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
   <div class="console-shell">
     <button v-if="sidebarOpen" class="sidebar-scrim" aria-label="메뉴 닫기" @click="sidebarOpen = false"></button>
     <aside class="sidebar" :class="{ open: sidebarOpen }">
-      <div class="sidebar-brand"><span class="brand-mark"><i></i><i></i><i></i></span><span><strong>AICONNECT</strong><small>LLM CONTROL PLANE</small></span></div>
+      <div class="sidebar-brand"><img src="/favicon.svg" alt="" class="brand-logo" width="34" height="34" /><span><strong>AiConnect</strong><small>LLM CONTROL PLANE</small></span></div>
       <div class="scope-card"><span>WORKSPACE</span><select :value="organizationId" :disabled="busy" @change="selectOrganization(($event.target as HTMLSelectElement).value)"><option value="">조직 선택</option><option v-for="organization in organizations" :key="organization.id" :value="organization.id">{{ organization.name }} · {{ organization.status }}</option></select><small>{{ currentOrganization?.name ?? '배정된 조직을 선택하세요.' }}</small></div>
       <nav class="side-nav" aria-label="주요 기능"><section v-for="group in groups" :key="group" class="nav-group"><p>{{ group }}</p><button v-for="item in navItems.filter(nav => nav.group === group)" :key="item.id" :class="{ active: page === item.id }" @click="navigate(item.id)"><span class="nav-icon">{{ item.icon }}</span><span><strong>{{ item.label }}</strong><small>{{ item.description }}</small></span><i></i></button></section></nav>
       <div class="sidebar-support">
@@ -402,7 +402,7 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
 
     <div class="console-stage">
       <header class="topbar">
-        <div class="topbar-leading"><button class="icon-button mobile-menu" aria-label="메뉴 열기" @click="sidebarOpen = true">☰</button><div class="breadcrumb"><span>AICONNECT</span><b>/</b><strong>{{ currentNav.label }}</strong></div></div>
+        <div class="topbar-leading"><button class="icon-button mobile-menu" aria-label="메뉴 열기" @click="sidebarOpen = true">☰</button><div class="breadcrumb"><span>AiConnect</span><b>/</b><strong>{{ currentNav.label }}</strong></div></div>
         <div class="topbar-actions">
           <button class="feature-search" @click="openSearch"><span>⌕</span><em>기능 검색</em><kbd>⌘K</kbd></button>
           <button class="icon-button" :aria-label="theme === 'dark' ? '라이트 모드' : '다크 모드'" @click="emit('toggleTheme')">{{ theme === 'dark' ? '☀' : '◐' }}</button>
@@ -448,7 +448,7 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
         <DataProtectionPage v-else-if="(isOrgOrPlatformAdmin || isProjectDirector) && page === 'data-protection'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" :org-admin="isOrgOrPlatformAdmin" />
         <ApiPlaygroundPage v-else-if="page === 'playground'" :organization-id="organizationId" :auth="auth" />
         <ModelPlaygroundPage v-else-if="isOrgOrPlatformAdmin && page === 'model-playground'" :organization-id="organizationId" :auth="auth" :initial-target-id="playgroundInitialTargetId" />
-        <DevDocsPage v-else-if="page === 'docs'" @navigate="navigate" />
+        <DevDocsPage v-else-if="page === 'docs'" :user-role="isOrgOrPlatformAdmin ? '관리자' : isProjectDirector ? '프로젝트 총괄자' : '팀원'" @navigate="navigate" />
         <WorkspaceRelationship v-else-if="page === 'relationship'" :organization-id="organizationId" :organization-name="currentOrganization?.name" :user-name="profileName" :role-label="profileRole" :auth="auth" standalone :can-navigate-project="true" @open-project="openRelationshipProject" />
         <DeveloperPortalPage v-else :organization-id="organizationId" :auth="auth" />
       </main>

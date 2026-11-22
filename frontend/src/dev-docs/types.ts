@@ -1,4 +1,7 @@
 export type DocsDestination =
+  | 'dashboard'
+  | 'relationship'
+  | 'platform'
   | 'portal'
   | 'usage'
   | 'projects'
@@ -15,12 +18,43 @@ export type DocsDestination =
   | 'data-protection'
   | 'system'
 
-export type DocAudience = '공통' | '사용자' | '관리자'
+export type DocAudience = '공통' | '관리자' | '프로젝트 총괄자' | '팀원'
+export type DocGroup = '시작하기' | '역할별 실전 가이드' | '인프라·정책 운영' | '진단·운영 참조'
 export type CalloutTone = 'info' | 'success' | 'warning' | 'danger'
 
 export type DocAction = {
   label: string
   destination: DocsDestination
+}
+
+export type MockupField = {
+  label: string
+  value: string
+  hint?: string
+  badge?: string
+  badgeTone?: 'accent' | 'info' | 'warning' | 'danger' | 'neutral'
+  mono?: boolean
+}
+
+export type MockupAction = {
+  label: string
+  primary?: boolean
+}
+
+export type MockupBlock = {
+  type: 'mockup'
+  screen: string
+  roleTag?: string
+  stepLabel?: string
+  caption?: string
+  fields: MockupField[]
+  actions?: MockupAction[]
+  result?: {
+    tone?: CalloutTone
+    title: string
+    items?: string[]
+  }
+  navigate?: DocAction
 }
 
 export type DocBlock =
@@ -33,6 +67,7 @@ export type DocBlock =
   | { type: 'table'; columns: string[]; rows: string[][] }
   | { type: 'code'; language: string; title: string; code: string }
   | { type: 'links'; items: Array<{ label: string; href: string; description: string }> }
+  | MockupBlock
 
 export type DocSection = {
   id: string
@@ -43,11 +78,12 @@ export type DocSection = {
 
 export type DocPage = {
   id: string
-  group: '시작하기' | '사용자 가이드' | '관리자 가이드' | '운영과 참조'
+  group: DocGroup
   title: string
   shortTitle: string
   description: string
   audience: DocAudience
+  audiences?: DocAudience[]
   minutes: number
   icon: string
   keywords: string[]

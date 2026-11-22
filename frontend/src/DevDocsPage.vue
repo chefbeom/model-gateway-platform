@@ -1,15 +1,22 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import DevDocsArticle from './dev-docs/DevDocsArticle.vue'
-import { devDocs, docGroups, DOCS_REVIEWED_AT } from './dev-docs/catalog'
+import { devDocs, docGroups, DOCS_REVIEWED_AT, DOCS_REVIEWED_ISO, findDoc } from './dev-docs/catalog'
 import { documentHash, documentIdFromHash, filterDocuments, searchDocuments, type AudienceFilter } from './dev-docs/navigation'
 import type { DocsDestination } from './dev-docs/types'
 
+const props = defineProps<{ userRole?: '관리자' | '프로젝트 총괄자' | '팀원' }>()
 const emit = defineEmits<{ navigate: [target: DocsDestination] }>()
 const storageKey = 'aiconnect.devdocs.article'
 function savedDocument() { try { return sessionStorage.getItem(storageKey) } catch { return null } }
 function rememberDocument(id: string) { try { sessionStorage.setItem(storageKey, id) } catch { /* Storage is optional. */ } }
-function findDocument(id?: string | null) { return devDocs.find(doc => doc.id === id) ?? devDocs[0]! }
+function findDocument(id?: string | null) { return findDoc(id) }
+
+const roleShortcuts = [
+  { role: '관리자' as const, docId: 'guide-admin', title: '시스템 관리자', summary: '조직·팀 생성, 총괄자 초대, GPU·서비스·상한 구축' },
+  { role: '프로젝트 총괄자' as const, docId: 'guide-director', title: '프로젝트 총괄자', summary: '팀원 초대, 키 위임·회수, 상한 내 정책·예산 운영' },
+  { role: '팀원' as const, docId: 'guide-member', title: '팀원 (기본 계정)', summary: 'API 키 발급, API 테스트 검증, SDK·cURL 연결' }
+]
 
 const activeId = ref(findDocument(documentIdFromHash(window.location.hash) ?? savedDocument()).id)
 const query = ref('')
@@ -86,26 +93,44 @@ function searchKeydown(event: KeyboardEvent) {
 <template>
   <section class="docs-site">
     <header class="docs-page-header">
-      <div><p class="docs-eyebrow">KNOWLEDGE BASE</p><h1>Dev-Docs</h1><p class="docs-intro">설정부터 실제 호출·진단까지, 현재 AICONNECT를 사용하는 방법.</p></div>
-      <div class="docs-review"><span>구현 검토 <time datetime="2026-10-05">{{ DOCS_REVIEWED_AT }}</time></span><span>문서 {{ devDocs.length }}개</span></div>
+      <div><p class="docs-eyebrow">KNOWLEDGE BASE</p><h1>Dev-Docs</h1><p class="docs-intro">역할별 실제 화면 입력 예시로 따라 하는 AICONNECT 사용 · 운영 가이드.</p></div>
+      <div class="docs-review"><span>최신 검토 <time :datetime="DOCS_REVIEWED_ISO">{{ DOCS_REVIEWED_AT }}</time></span><span>가이드 {{ devDocs.length }}개</span></div>
     </header>
 
-    <section class="docs-toolbar" aria-label="문서 검색과 대상 필터">
-      <div class="docs-search"><span aria-hidden="true">⌕</span><input v-model="query" type="search" aria-label="문서 검색" aria-describedby="docs-search-help" placeholder="기능, 설정, 오류 코드 검색" @keydown="searchKeydown" /><button v-if="query" type="button" aria-label="검색 초기화" @click="query = ''">×</button></div>
-      <div class="audience-bar" aria-label="문서 대상"><span>대상</span><button v-for="item in (['전체', '사용자', '관리자'] as const)" :key="item" type="button" :aria-pressed="audience === item" :class="{ active: audience === item }" @click="audience = item">{{ item }}</button></div>
-      <span id="docs-search-help" class="docs-sr-only">본문과 예제를 함께 검색합니다. Enter로 첫 결과를 열고 Escape로 검색을 지웁니다.</span>
+    <section class="docs-toolbar" aria-label="문서 검색과 역할 필터">
+      <div class="docs-search"><span aria-hidden="true">⌕</span><input v-model="query" type="search" aria-label="문서 검색" aria-describedby="docs-search-help" placeholder="화면 이름, 예시 값, 오류 코드 검색" @keydown="searchKeydown" /><button v-if="query" type="button" aria-label="검색 초기화" @click="query = ''">×</button></div>
+      <div class="audience-bar" aria-label="역할 필터"><span>역할</span><button v-for="item in (['전체', '관리자', '프로젝트 총괄자', '팀원'] as const)" :key="item" type="button" :aria-pressed="audience === item" :class="{ active: audience === item }" @click="audience = item">{{ item }}</button></div>
+      <span id="docs-search-help" class="docs-sr-only">본문, 화면 예시, 예제를 함께 검색합니다. Enter로 첫 결과를 열고 Escape로 검색을 지웁니다.</span>
     </section>
+
     <section v-if="query.trim()" class="docs-search-results" aria-label="검색 결과">
-      <p role="status">{{ audience }} 대상 · 검색 결과 {{ results.length }}개</p>
-      <ul v-if="results.length"><li v-for="item in results" :key="item.id"><a :href="documentHash(item.id)" @click.prevent="selectDoc(item.id)"><strong>{{ item.title }}</strong><span>{{ item.description }}</span><small>{{ item.group }} · {{ item.audience }}</small></a></li></ul>
-      <p v-else class="search-empty">일치하는 문서가 없습니다. 다른 검색어를 사용하거나 대상 필터를 ‘전체’로 바꿔 보세요.</p>
+      <p role="status">{{ audience }} 역할 · 검색 결과 {{ results.length }}개</p>
+      <ul v-if="results.length"><li v-for="item in results" :key="item.id"><a :href="documentHash(item.id)" @click.prevent="selectDoc(item.id)"><strong>{{ item.title }}</strong><span>{{ item.description }}</span><small>{{ item.group }} · {{ item.audiences?.length ? item.audiences.join(' · ') : item.audience }}</small></a></li></ul>
+      <p v-else class="search-empty">일치하는 문서가 없습니다. 다른 검색어를 사용하거나 역할 필터를 ‘전체’로 바꿔 보세요.</p>
+    </section>
+
+    <section class="role-shortcuts" aria-label="역할별 바로가기">
+      <button
+        v-for="card in roleShortcuts"
+        :key="card.docId"
+        type="button"
+        class="role-shortcut-card"
+        :class="{ active: activeId === card.docId, mine: props.userRole === card.role }"
+        @click="selectDoc(card.docId)"
+      >
+        <span class="role-shortcut-head">
+          <strong>{{ card.title }}</strong>
+          <em v-if="props.userRole === card.role" class="role-my-badge">내 역할</em>
+        </span>
+        <small>{{ card.summary }}</small>
+      </button>
     </section>
 
     <div class="docs-layout">
       <details class="docs-navigation" :open="navigationOpen">
         <summary :aria-expanded="navigationOpen" @click.prevent="navigationOpen = !navigationOpen"><span>문서 목록</span><strong>{{ activePage.shortTitle }}</strong></summary>
         <nav aria-label="Dev-Docs 문서 목록">
-          <section v-for="item in visibleGroups" :key="item.group"><h2>{{ item.group }} <span>{{ item.documents.length }}</span></h2><ul><li v-for="doc in item.documents" :key="doc.id"><a :href="documentHash(doc.id)" :aria-current="activeId === doc.id ? 'page' : undefined" @click.prevent="selectDoc(doc.id)"><span>{{ doc.shortTitle }}</span><small>{{ doc.audience }} · {{ doc.minutes }}분</small></a></li></ul></section>
+          <section v-for="item in visibleGroups" :key="item.group"><h2>{{ item.group }} <span>{{ item.documents.length }}</span></h2><ul><li v-for="doc in item.documents" :key="doc.id"><a :href="documentHash(doc.id)" :aria-current="activeId === doc.id ? 'page' : undefined" @click.prevent="selectDoc(doc.id)"><span>{{ doc.shortTitle }}</span><small>{{ doc.audiences?.length ? doc.audiences.join('·') : doc.audience }} · {{ doc.minutes }}분</small></a></li></ul></section>
         </nav>
       </details>
 
@@ -115,29 +140,29 @@ function searchKeydown(event: KeyboardEvent) {
         <nav class="article-pagination" aria-label="이전 다음 문서"><a v-if="previousPage" :href="documentHash(previousPage.id)" @click.prevent="selectDoc(previousPage.id)"><small>← 이전 문서</small><strong>{{ previousPage.shortTitle }}</strong></a><a v-if="nextPage" class="next" :href="documentHash(nextPage.id)" @click.prevent="selectDoc(nextPage.id)"><small>다음 문서 →</small><strong>{{ nextPage.shortTitle }}</strong></a></nav>
       </div>
 
-      <aside class="page-toc"><p>이 페이지에서</p><nav aria-label="페이지 목차"><button v-for="(section, index) in activePage.sections" :key="section.id" type="button" :class="{ active: activeSection === section.id }" @click="scrollToSection(section.id)"><span>{{ String(index + 1).padStart(2, '0') }}</span>{{ section.title }}</button></nav><small>오류 코드나 설정 이름으로 검색하면 관련 본문과 예제를 찾을 수 있습니다.</small></aside>
+      <aside class="page-toc"><p>이 페이지에서</p><nav aria-label="페이지 목차"><button v-for="(section, index) in activePage.sections" :key="section.id" type="button" :class="{ active: activeSection === section.id }" @click="scrollToSection(section.id)"><span>{{ String(index + 1).padStart(2, '0') }}</span>{{ section.title }}</button></nav><small>오류 코드나 화면 이름, 예시 값으로 검색하면 해당 섹션을 바로 찾을 수 있습니다.</small></aside>
     </div>
   </section>
 </template>
 
 <style scoped>
 .docs-site{width:100%;min-width:0;max-width:1440px;margin-inline:auto;color:var(--text);container:dev-docs / inline-size}
-.docs-page-header{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;padding-bottom:28px}
+.docs-page-header{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;padding-bottom:24px}
 .docs-eyebrow{margin:0 0 10px;color:var(--accent-strong);font-size:10px;font-weight:800;letter-spacing:.15em}
 .docs-page-header h1{margin:0 0 10px;font-size:36px;line-height:1.15;letter-spacing:-.04em}
 .docs-intro{margin:0;color:var(--muted);font-size:14px;line-height:1.7}
 .docs-review{display:flex;gap:16px;flex-wrap:wrap;justify-content:flex-end;color:var(--muted);font-size:11px;line-height:1.6}
 .docs-review time{margin-left:5px;color:var(--text-soft)}
-.docs-toolbar{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:18px 0;border-block:1px solid var(--border)}
-.docs-search{min-width:0;flex:1;max-width:660px;display:flex;align-items:center;gap:10px;border:1px solid var(--border-strong);border-radius:6px;background:var(--surface);padding:0 13px}
+.docs-toolbar{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:16px 0;border-block:1px solid var(--border)}
+.docs-search{min-width:0;flex:1;max-width:600px;display:flex;align-items:center;gap:10px;border:1px solid var(--border-strong);border-radius:6px;background:var(--surface);padding:0 13px}
 .docs-search:focus-within{border-color:var(--accent-strong)}
 .docs-search>span{color:var(--accent-strong);font-size:20px}
-.docs-search input{min-width:0;width:100%;height:44px;border:0;padding:0;background:transparent;color:var(--text);font-size:13px;outline:0;box-shadow:none}
+.docs-search input{min-width:0;width:100%;height:42px;border:0;padding:0;background:transparent;color:var(--text);font-size:13px;outline:0;box-shadow:none}
 .docs-search input::-webkit-search-cancel-button{display:none}
-.docs-search button{flex:none;width:28px;height:28px;padding:0;border:0;background:transparent;color:var(--muted);font-size:20px}
-.audience-bar{display:flex;align-items:center;gap:16px;flex:none}
+.docs-search button{flex:none;width:28px;height:28px;padding:0;border:0;background:transparent;color:var(--muted);font-size:20px;cursor:pointer}
+.audience-bar{display:flex;align-items:center;gap:14px;flex:none}
 .audience-bar>span{color:var(--muted);font-size:11px}
-.audience-bar button{padding:8px 0;border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;color:var(--muted);font-size:12px;white-space:nowrap}
+.audience-bar button{padding:8px 0;border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;color:var(--muted);font-size:12px;white-space:nowrap;cursor:pointer}
 .audience-bar button.active{border-bottom-color:var(--accent-strong);color:var(--text);font-weight:700}
 .docs-search-results{padding:16px 0 22px;border-bottom:1px solid var(--border)}
 .docs-search-results>p{margin:0 0 12px;color:var(--muted);font-size:12px}
@@ -146,25 +171,36 @@ function searchKeydown(event: KeyboardEvent) {
 .docs-search-results a:hover strong{color:var(--accent-strong);text-decoration:underline}
 .docs-search-results strong{font-size:14px}.docs-search-results a>span{color:var(--text-soft);font-size:12px;line-height:1.6}.docs-search-results small{color:var(--muted);font-size:10px}
 .docs-search-results .search-empty{margin:0;line-height:1.7}
-.docs-layout{display:grid;grid-template-columns:205px minmax(0,1fr) 190px;gap:32px;align-items:start;padding-top:32px}
+
+.role-shortcuts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;padding-top:18px}
+.role-shortcut-card{display:grid;gap:5px;padding:12px 14px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);text-align:left;cursor:pointer;transition:border-color .15s,background .15s}
+.role-shortcut-card:hover{border-color:var(--border-strong);background:var(--surface-2)}
+.role-shortcut-card.mine{border-color:var(--accent-border)}
+.role-shortcut-card.active{border-color:var(--accent-strong);background:var(--accent-dim)}
+.role-shortcut-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.role-shortcut-head strong{font-size:13px;color:var(--text)}
+.role-my-badge{font-style:normal;padding:1px 7px;border-radius:999px;background:var(--accent-dim);border:1px solid var(--accent-border);color:var(--accent-strong);font-size:10px;font-weight:700}
+.role-shortcut-card small{color:var(--muted);font-size:11px;line-height:1.5}
+
+.docs-layout{display:grid;grid-template-columns:205px minmax(0,1fr) 190px;gap:32px;align-items:start;padding-top:26px}
 .docs-navigation,.page-toc{position:sticky;top:88px;max-height:calc(100vh - 112px);overflow:auto;scrollbar-width:thin}
 .docs-navigation{padding-right:18px;border-right:1px solid var(--border)}
-.docs-navigation>summary{display:none}.docs-navigation nav{display:grid;gap:25px}
-.docs-navigation h2{display:flex;justify-content:space-between;gap:8px;margin:0 0 9px;color:var(--muted);font-size:11px;font-weight:700}.docs-navigation h2 span{font-weight:400;color:var(--faint)}
+.docs-navigation>summary{display:none}.docs-navigation nav{display:grid;gap:22px}
+.docs-navigation h2{display:flex;justify-content:space-between;gap:8px;margin:0 0 8px;color:var(--muted);font-size:11px;font-weight:700}.docs-navigation h2 span{font-weight:400;color:var(--faint)}
 .docs-navigation ul{margin:0;padding:0;list-style:none}
-.docs-navigation a{display:grid;gap:3px;padding:9px 10px;margin-left:-10px;border-left:2px solid transparent;color:var(--text-soft);text-decoration:none}
+.docs-navigation a{display:grid;gap:3px;padding:8px 10px;margin-left:-10px;border-left:2px solid transparent;color:var(--text-soft);text-decoration:none}
 .docs-navigation a:hover{color:var(--text);background:var(--surface-2)}
 .docs-navigation a[aria-current='page']{border-left-color:var(--accent-strong);color:var(--accent-strong);background:var(--accent-dim)}
 .docs-navigation a>span{font-size:13px;line-height:1.45}.docs-navigation a>small{font-size:10px;color:var(--muted);line-height:1.5}
 .docs-main{min-width:0;scroll-margin-top:88px}
 .page-toc>p{margin:0 0 12px;font-size:11px;font-weight:700;color:var(--muted)}
-.page-toc nav{display:grid}.page-toc button{display:flex;align-items:baseline;gap:9px;padding:9px 12px;border:0;border-left:1px solid var(--border);border-radius:0;background:transparent;text-align:left;color:var(--muted);font-size:11px;line-height:1.6;overflow-wrap:anywhere}
+.page-toc nav{display:grid}.page-toc button{display:flex;align-items:baseline;gap:9px;padding:8px 12px;border:0;border-left:1px solid var(--border);border-radius:0;background:transparent;text-align:left;color:var(--muted);font-size:11px;line-height:1.6;overflow-wrap:anywhere;cursor:pointer}
 .page-toc button span{font-size:9px;color:var(--faint)}.page-toc button.active,.page-toc button:hover{border-left-color:var(--accent-strong);color:var(--text)}
 .page-toc>small{display:block;margin-top:20px;color:var(--muted);font-size:11px;line-height:1.7}
 .article-pagination{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;margin-top:36px;padding-top:22px;border-top:1px solid var(--border)}
 .article-pagination a{display:grid;gap:6px;color:var(--text);text-decoration:none;overflow-wrap:anywhere}.article-pagination a:hover strong{color:var(--accent-strong);text-decoration:underline}.article-pagination small{color:var(--muted);font-size:11px}.article-pagination strong{font-size:14px}.article-pagination .next{grid-column:2;text-align:right}
 .mobile-toc{display:none}.docs-sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 @container dev-docs (max-width:1120px){.docs-layout{grid-template-columns:185px minmax(0,1fr);gap:26px}.page-toc{display:none}.mobile-toc{display:block;margin-bottom:24px;padding-bottom:14px;border-bottom:1px solid var(--border);font-size:12px;color:var(--muted)}.mobile-toc summary{cursor:pointer}.mobile-toc nav{display:grid;gap:7px;margin-top:12px}.mobile-toc button{border:0;padding:4px 0;background:transparent;text-align:left;font-size:12px;color:var(--text-soft)}}
-@media(max-width:900px){.docs-page-header{display:grid;gap:14px}.docs-review{justify-content:flex-start}.docs-layout{grid-template-columns:minmax(0,1fr);gap:25px;padding-top:24px}.docs-navigation{position:static;max-height:none;overflow:visible;border:0;border-bottom:1px solid var(--border);padding:0 0 14px}.docs-navigation>summary{display:list-item;cursor:pointer;color:var(--muted);font-size:12px;line-height:1.8}.docs-navigation>summary strong{margin-left:12px;color:var(--text);font-size:12px;font-weight:500}.docs-navigation nav{grid-template-columns:repeat(2,minmax(0,1fr));gap:22px;margin-top:22px;padding:0 10px 8px}.docs-toolbar{gap:16px;flex-wrap:wrap}.docs-search{max-width:none;flex-basis:100%}.audience-bar{gap:20px}.docs-main{scroll-margin-top:74px}}
+@media(max-width:900px){.docs-page-header{display:grid;gap:14px}.docs-review{justify-content:flex-start}.role-shortcuts{grid-template-columns:minmax(0,1fr)}.docs-layout{grid-template-columns:minmax(0,1fr);gap:24px;padding-top:22px}.docs-navigation{position:static;max-height:none;overflow:visible;border:0;border-bottom:1px solid var(--border);padding:0 0 14px}.docs-navigation>summary{display:list-item;cursor:pointer;color:var(--muted);font-size:12px;line-height:1.8}.docs-navigation>summary strong{margin-left:12px;color:var(--text);font-size:12px;font-weight:500}.docs-navigation nav{grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;margin-top:20px;padding:0 10px 8px}.docs-toolbar{gap:16px;flex-wrap:wrap}.docs-search{max-width:none;flex-basis:100%}.audience-bar{gap:14px;flex-wrap:wrap}.docs-main{scroll-margin-top:74px}}
 @media(max-width:560px){.docs-page-header h1{font-size:30px}.docs-intro{font-size:13px}.docs-navigation nav,.docs-search-results ul{grid-template-columns:minmax(0,1fr)}.docs-review{gap:8px 16px}.docs-layout{gap:20px}.article-pagination{gap:12px}.article-pagination strong{font-size:12px}}
 </style>
