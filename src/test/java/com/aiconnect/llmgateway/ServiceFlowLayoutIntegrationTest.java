@@ -3,6 +3,7 @@ package com.aiconnect.llmgateway;
 import com.aiconnect.llmgateway.domain.FailoverPolicy;
 import com.aiconnect.llmgateway.domain.LlmService;
 import com.aiconnect.llmgateway.domain.Organization;
+import com.aiconnect.llmgateway.domain.Project;
 import com.aiconnect.llmgateway.domain.RetryPolicy;
 import com.aiconnect.llmgateway.flowdesigner.ServiceFlowLayoutRepository;
 import com.aiconnect.llmgateway.identity.IdentityService;
@@ -10,6 +11,7 @@ import com.aiconnect.llmgateway.identity.OrganizationRole;
 import com.aiconnect.llmgateway.identity.TotpService;
 import com.aiconnect.llmgateway.repository.LlmServiceRepository;
 import com.aiconnect.llmgateway.repository.OrganizationRepository;
+import com.aiconnect.llmgateway.repository.ProjectRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -28,6 +30,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -47,6 +50,7 @@ class ServiceFlowLayoutIntegrationTest {
     @Autowired IdentityService identity;
     @Autowired TotpService totpService;
     @Autowired OrganizationRepository organizations;
+    @Autowired ProjectRepository projects;
     @Autowired LlmServiceRepository services;
     @Autowired ServiceFlowLayoutRepository layouts;
 
@@ -173,8 +177,63 @@ class ServiceFlowLayoutIntegrationTest {
         assertThat(services.findById(svc.getId())).isEmpty();
     }
 
+    @Test
+    void authenticatedPlatformAdminListsProjectsManagesServiceAccessAndSavesLayout() throws Exception {
+        Organization org = organizations.save(new Organization("Flow Auth Org " + UUID.randomUUID()));
+        Project project = projects.save(new Project(org.getId(), "flow-access-proj"));
+        LlmService svc = newService(org, "flow-access-svc");
+        SessionAccount admin = login("flow-sysadmin@example.com", org, OrganizationRole.ORGANIZATION_ADMIN, true);
+
+        mvc.perform(get("/api/admin/organizations/{orgId}/projects", org.getId())
+                        .header("Authorization", "Bearer " + admin.token()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(project.getId().toString()));
+
+        mvc.perform(get("/api/admin/projects/{projectId}/service-access", project.getId())
+                        .header("Authorization", "Bearer " + admin.token()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+
+        mvc.perform(post("/api/admin/projects/{projectId}/service-access", project.getId())
+                        .header("Authorization", "Bearer " + admin.token())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"serviceId\":\"" + svc.getId() + "\"}"))
+                .andExpect(status().isOk());
+
+        mvc.perform(get("/api/admin/projects/{projectId}/service-access", project.getId())
+                        .header("Authorization", "Bearer " + admin.token()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(svc.getId().toString()));
+
+        mvc.perform(put(url(svc.getId()))
+                        .header("Authorization", "Bearer " + admin.token())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body(Map.of("project:" + project.getId(), Map.of("x", 48, "y", 160)))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.revision").value(1))
+                .andExpect(jsonPath("$.layout.nodes['project:" + project.getId() + "'].x").value(48));
+        assertThat(layouts.findById(svc.getId()).orElseThrow().getUpdatedBy()).isEqualTo(admin.userId());
+
+        mvc.perform(delete("/api/admin/projects/{projectId}/service-access/{serviceId}", project.getId(), svc.getId())
+                        .header("Authorization", "Bearer " + admin.token()))
+                .andExpect(status().isNoContent());
+
+        mvc.perform(get("/api/admin/projects/{projectId}/service-access", project.getId())
+                        .header("Authorization", "Bearer " + admin.token()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+    }
+
+    private record SessionAccount(UUID userId, String token) { }
+
     private String token(String email, Organization org, OrganizationRole role) throws Exception {
-        var user = identity.createUser(email, PW, false);
+        return login(email, org, role, false).token();
+    }
+
+    private SessionAccount login(String email, Organization org, OrganizationRole role, boolean platformAdmin) throws Exception {
+        var user = identity.createUser(email, PW, platformAdmin);
         identity.grantMembership(org.getId(), user.getId(), role);
         String login = mvc.perform(post("/api/auth/login").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"email\":\"" + email + "\",\"password\":\"" + PW + "\"}"))
@@ -187,6 +246,6 @@ class ServiceFlowLayoutIntegrationTest {
         MvcResult enroll = mvc.perform(post("/api/auth/totp/enroll").header("Authorization", "Bearer " + preMfa)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"code\":\"" + code + "\"}"))
                 .andExpect(status().isOk()).andReturn();
-        return objectMapper.readTree(enroll.getResponse().getContentAsString()).path("session").path("accessToken").asText();
+        return new SessionAccount(user.getId(), objectMapper.readTree(enroll.getResponse().getContentAsString()).path("session").path("accessToken").asText());
     }
 }

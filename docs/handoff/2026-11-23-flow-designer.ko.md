@@ -49,8 +49,9 @@ A와 D, B와 C를 각각 병렬로 진행했다. 패키지마다 파일 소유�
 
 ## 5. 검증 결과
 
-- 프런트: `npm run test:flow-designer` 53/53, 기존 테스트 12종 전부 통과, `npm run build` 성공
-- 백엔드(대상 테스트): `ServiceFlowLayoutIntegrationTest` 6개, `DatabaseSchema`, `MigrationVersionOrdering`, `OpenApiContract`, `PlatformAdministration`, `RoutingPolicyManagement` 통과
+- 프런트: `npm run test:flow-designer` **58/58** (`flowDesignerAdapter.test.mjs`에 프로젝트 접근 노드 추가 → 접근 부여/해제 Plan 컴파일 → `executePlan` → `rebase` 시나리오 추가), 기존 포함 전체 프런트엔드 테스트 **153/153** 통과, `npm run build` (`vue-tsc --noEmit && vite build`) 성공
+- 백엔드(대상 테스트): `ServiceFlowLayoutIntegrationTest` **7/7** (실제 TOTP 인증 `platformAdmin` JWT 세션의 프로젝트 목록 조회·접근 부여/해제·`flow-layout` 저장 및 `updatedBy` 기록 검증 포함), `DatabaseSchemaIntegrationTest`, `MigrationVersionOrderingTest`, `OpenApiContractTest`, `PlatformAdministrationIntegrationTest` 통과 (선행 커밋 `fd0290f`에서 `RoutingPolicyManagement` 통과)
+- CI (`AICONNECT quality gate`, PR `#9`, run `45153027120`): `Frontend typecheck and build`, `Compose and image contract`, `Backend test and package`(MariaDB 11.4 · Redis 7.4 서비스 포함 `gradle clean test bootJar`) 3개 잡 모두 `success`
 - 실제 브라우저(로컬 백엔드 + 시드 데이터, 폰트 배율 115%)에서 아래 항목을 서버 반영까지 확인했다.
   - Target 우선순위 변경, 응답 캐시 켜기
   - 와이어로 Target 추가(임시 노드 id가 실제 id로 교체됨), Delete 키로 Target 삭제
@@ -69,10 +70,10 @@ A와 D, B와 C를 각각 병렬로 진행했다. 패키지마다 파일 소유�
 
 ## 6. 현재 상태와 남은 일
 
-- **브랜치 `claude/flow-designer`에 푸시했고, 아직 `main`에 병합하지 않았다.** 병합과 PR 여부는 사용자가 결정한다.
-- 미검증
-  - 실제 사용자 계정으로 프로젝트 접근 노드(부여·해제)를 확인하지 못했다. 비상용 플랫폼 토큰 세션에서는 `GET /organizations/{id}/projects`가 `canViewProject` 필터 때문에 빈 목록을 돌려준다. 기존 동작이며 ProjectsPage도 같다.
-  - MariaDB에서 V53 실행과 `ddl-auto: validate`, `FlywayUpgradeIntegrationTest`는 `TEST_MARIADB_URL`이 필요해 CI에서만 검증된다.
+- **브랜치 `claude/flow-designer`에 푸시했고(PR `#9` OPEN), 아직 `main`에 병합·운영 배포하지 않았다.** 병합과 배포 여부는 사용자가 결정한다.
+- 추가 확인(후속 검증)
+  - 실제 TOTP 로그인 `platformAdmin` JWT 세션을 사용한 `GET /organizations/{id}/projects`, `POST/DELETE /projects/{id}/service-access`, `PUT /services/{id}/flow-layout` 및 프런트 캔버스 접근 부여·해제 `Plan → Execute → Rebase` 자동화 검증을 완료했다. (비상용 `X-Admin-Token`에서는 `canViewProject` 필터에 의해 프로젝트 목록이 빈 배열로 반환되는 기존 동작 유지)
+  - MariaDB 11.4 대상 `gradle clean test bootJar`는 PR `#9` GitHub Actions CI(`45153027120`)에서 통과했다. (실제 운영 브라우저 화면에서의 로그인 계정 기반 프로젝트 접근 클릭 수동 확인만 선택 과제로 남음)
 - 범위 밖으로 남긴 기존 버그(설계서 §12.2, 수정하지 않음)
   - `ServicesPage.vue`: 캐시 TTL 하한이 5지만 서버는 `@Min(10)`이라 5~9를 입력하면 400
   - `ServicesPage.savePipeline`: `guardrailAction`을 항상 전송해서 저장할 때마다 서비스 DLP 탐지 항목이 재설정됨

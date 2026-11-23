@@ -404,7 +404,8 @@ test('FlowCanvas onPointerUp never reads `moved` after resetInteraction()', () =
 })
 
 test('project access node add, grant, revoke executes plan and rebases cleanly', async () => {
-  const base = buildSnapshot(raw())
+  const validScheduling = { settings: { mode: 'IMMEDIATE', localWaitMs: 100, maxWaitMs: 200, maxQueuedRequests: 20, maxQueuedBytes: 4096, maxQueuedPerKey: 5 }, queue: {} }
+  const base = buildSnapshot(raw({ scheduling: validScheduling }))
   let graph = decompile(base, null)
 
   graph = applyCommand(graph, { type: 'addNode', nodeType: 'project', refId: 'p2', position: { x: 40, y: 200 } }, base).graph
@@ -431,6 +432,7 @@ test('project access node add, grant, revoke executes plan and rebases cleanly',
   ])
 
   const updatedRemote = buildSnapshot(raw({
+    scheduling: validScheduling,
     projectAccess: { p1: [], p2: [{ id: 'svc1', serviceKey: 'chat' }] }
   }))
   const rebased = rebase({ graph, base, remote: updatedRemote })
