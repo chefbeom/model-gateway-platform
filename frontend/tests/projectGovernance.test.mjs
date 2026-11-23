@@ -19,6 +19,7 @@ function compileVueComponent(relativePath, id, extraReplacements = {}) {
     .replace(/from ['"]\.\/clipboard['"]/g, 'from ' + JSON.stringify(typeScriptModuleUrl('../src/clipboard.ts')))
     .replace(/from ['"]\.\/dateTime['"]/g, 'from ' + JSON.stringify(typeScriptModuleUrl('../src/dateTime.ts')))
     .replace(/from ['"]\.\/quotaVisualization['"]/g, 'from ' + JSON.stringify(typeScriptModuleUrl('../src/quotaVisualization.ts')))
+    .replace(/from ['"]\.\/requestFeedback['"]/g, 'from ' + JSON.stringify(typeScriptModuleUrl('../src/requestFeedback.ts')))
     .replace(/from ['"]\.\/externalCapabilities['"]/g, 'from ' + JSON.stringify(typeScriptModuleUrl('../src/externalCapabilities.ts')))
   for (const [pattern, replacementUrl] of Object.entries(extraReplacements)) {
     script = script

@@ -19,7 +19,8 @@
     "test:totp-hierarchy": "node --test tests/totpAndHierarchy.test.mjs",
     "test:project-governance": "node --test tests/projectGovernance.test.mjs",
     "test:flow-designer": "node --test tests/flowDesignerModel.test.mjs tests/flowDesignerAdapter.test.mjs",
-    "test:services-page": "node --test tests/servicesPage.test.mjs"
+    "test:services-page": "node --test tests/servicesPage.test.mjs",
+    "test:registration-modal": "node --test tests/registrationModalErrors.test.mjs"
   },
   "dependencies": {
     "vue": "^3.5.13"
