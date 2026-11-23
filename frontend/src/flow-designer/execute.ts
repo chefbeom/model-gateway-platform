@@ -154,11 +154,16 @@ export async function executePlan(
     emit()
   }
 
+  const deletedTargetKeys: string[] = []
+  plan.operations.forEach((op, i) => {
+    if (op.kind === 'deleteTarget' && (results[i].status === 'succeeded' || results[i].status === 'already-applied')) deletedTargetKeys.push(`target:${op.targetId}`)
+  })
   const completed = results.every((item) => item.status === 'succeeded' || item.status === 'already-applied')
   return {
     results: results.map((item) => ({ ...item })),
     serviceId: ctx.serviceId,
     createdTargetIds: { ...ctx.createdTargetIds },
+    deletedTargetKeys,
     completed,
     failedOpId
   }

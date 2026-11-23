@@ -829,3 +829,59 @@ test('suggestNodePosition places in the catalog column below existing nodes, els
   // empty column starts at y = 0
   assert.equal(layout.suggestNodePosition({ nodes: [], edges: [], nextSeq: 1 }, 'project', { x: 0, y: 0 }, null).y, 0)
 })
+
+/* ---------------- partial apply after a swap / config dirtiness ---------------- */
+
+function swapScenario() {
+  let swap = run(baseGraph(), { type: 'bindTarget', targetNodeId: 'target:t1', deploymentId: 'x' }, base)
+  swap = run(swap, { type: 'bindTarget', targetNodeId: 'target:t2', deploymentId: 'a' }, base)
+  return swap
+}
+
+test('rebase after a swap whose pre-deletes succeeded keeps the unapplied replacements as pending creates', () => {
+  const swap = swapScenario()
+  const remote = remoteWith((r) => { r.config.targets = [] })
+  const naive = rebase({ graph: swap, base, remote })
+  assert.equal(naive.graph.nodes.filter((n) => n.type === 'target').length, 0, 'documents the old data loss without deletedTargetKeys')
+
+  const result = rebase({ graph: swap, base, remote, createdTargetIds: {}, deletedTargetKeys: ['target:t1', 'target:t2'] })
+  const targets = result.graph.nodes.filter((n) => n.type === 'target')
+  assert.equal(targets.length, 2)
+  assert.ok(targets.every((n) => n.refId === null && /^target:new-\d+$/.test(n.id)))
+  const byDep = Object.fromEntries(compile(result.graph, remote).targets.map((t) => [t.deploymentId, t]))
+  assert.equal(byDep.x.weight, 80)
+  assert.equal(byDep.a.weight, 100)
+  assert.equal(byDep.a.maxConcurrencyOverride, 2)
+  const again = plan(remote, result.graph, remote)
+  assert.deepEqual(again.operations.filter((o) => o.kind !== 'createTarget'), [])
+  assert.equal(again.operations.filter((o) => o.kind === 'createTarget').length, 2)
+  assert.equal(again.conflicts.length, 0)
+})
+
+test('rebase does not detach targets that were re-created, and intentional deletions stay deleted', () => {
+  const swap = swapScenario()
+  const remote = remoteWith((r) => { r.config.targets = [target('n1', 'x', { priority: 1, weight: 80 })] })
+  const result = rebase({ graph: swap, base, remote, createdTargetIds: { 'target:t1': 'n1' }, deletedTargetKeys: ['target:t1', 'target:t2'] })
+  const ids = result.graph.nodes.filter((n) => n.type === 'target').map((n) => n.id).sort()
+  assert.equal(ids.length, 2)
+  assert.ok(ids.includes('target:n1'))
+
+  const removed = run(baseGraph(), { type: 'removeItems', nodeIds: ['target:t2'], edgeIds: [] }, base)
+  const remote2 = remoteWith((r) => { r.config.targets = r.config.targets.filter((t) => t.id !== 't2') })
+  const kept = rebase({ graph: removed, base, remote: remote2, deletedTargetKeys: ['target:t2'] })
+  assert.deepEqual(kept.graph.nodes.filter((n) => n.type === 'target').map((n) => n.id), ['target:t1'])
+  assert.equal(plan(remote2, kept.graph, remote2).operations.length, 0)
+})
+
+test('isConfigDirty is independent of undo history for existing services and new drafts', () => {
+  assert.equal(diff.isConfigDirty(baseGraph(), base), false)
+  const draft = draftSnapshot()
+  const fresh = decompile(draft, null)
+  assert.equal(diff.isConfigDirty(fresh, draft), false)
+  const edited = props(fresh, 'service', { displayName: 'Changed' }, draft)
+  assert.equal(diff.isConfigDirty(edited, draft), true)
+  // a stash/restore round-trip drops history but the graph itself stays dirty
+  assert.equal(diff.isConfigDirty(structuredClone(edited), draft), true)
+  const existing = props(baseGraph(), 'service', { displayName: 'Changed' }, base)
+  assert.equal(diff.isConfigDirty(existing, base), true)
+})

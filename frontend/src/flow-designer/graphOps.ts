@@ -224,6 +224,32 @@ export function renameTargetNodes(graph: FlowGraph, createdTargetIds: Record<str
   return sortGraph({ ...graph, nodes, edges })
 }
 
+/** Turn persisted Target nodes whose server row is gone into brand-new pending Targets (same position, props and edges). */
+export function detachTargetNodes(graph: FlowGraph, keys: string[]): FlowGraph {
+  const present = new Set(graph.nodes.map((n) => n.id))
+  const targets = new Set(graph.nodes.filter((n) => n.type === 'target' && n.refId !== null && keys.includes(n.id)).map((n) => n.id))
+  if (targets.size === 0) return graph
+  const renames = new Map<string, string>()
+  let seq = graph.nextSeq
+  for (const id of [...targets].sort(cmp)) {
+    while (present.has(`target:new-${seq}`)) seq += 1
+    renames.set(id, `target:new-${seq}`)
+    present.add(`target:new-${seq}`)
+    seq += 1
+  }
+  const mapId = (id: string) => renames.get(id) ?? id
+  const nodes = graph.nodes.map((n) => {
+    const next = renames.get(n.id)
+    return next ? { ...cloneNode(n), id: next, refId: null } : cloneNode(n)
+  })
+  const edges = graph.edges.map((e) => {
+    const from = { ...e.from, nodeId: mapId(e.from.nodeId) }
+    const to = { ...e.to, nodeId: mapId(e.to.nodeId) }
+    return { ...e, from, to, id: edgeId(from, to) }
+  })
+  return sortGraph({ ...graph, nodes, edges, nextSeq: seq })
+}
+
 /* ------------------------------------------------------------------ */
 /* Commands                                                            */
 /* ------------------------------------------------------------------ */

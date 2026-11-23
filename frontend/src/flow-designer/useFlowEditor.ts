@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch,
 import type { AdminAuth } from '../api'
 import { compile } from './compile'
 import { decompile } from './decompile'
-import { computeNodeChanges, planChanges, rebase, stableStringify } from './diff'
+import { computeNodeChanges, isConfigDirty, planChanges, rebase, stableStringify } from './diff'
 import { hasDraft, installDraftAutoClear, stashDraft, takeDraft } from './draftStore'
 import { executePlan } from './execute'
 import { createAdminTransport, currentUserId, loadFlowLayout, loadFlowSnapshot, loadServiceList, saveFlowLayout } from './flowApi'
@@ -105,7 +105,8 @@ export function useFlowEditor(props: FlowEditorProps, canvas: Ref<CanvasHandle |
   const errorCount = computed(() => issues.value.filter(issue => issue.severity === 'error').length)
   const warningCount = computed(() => issues.value.filter(issue => issue.severity === 'warning').length)
   const layoutDirty = computed(() => graph.value !== null && layoutFingerprint(graph.value) !== savedFingerprint.value)
-  const dirty = computed(() => base.value !== null && (history.value.past.length > 0 || layoutDirty.value || (base.value.serviceId !== null && changeCount.value > 0)))
+  const configDirty = computed(() => base.value !== null && graph.value !== null && isConfigDirty(graph.value, base.value))
+  const dirty = computed(() => base.value !== null && (history.value.past.length > 0 || layoutDirty.value || configDirty.value))
   const busy = computed(() => loadState.value === 'loading' || planBusy.value || layoutBusy.value)
   const readOnly = computed(() => narrow.value || loadState.value !== 'ready' || planBusy.value || planOpen.value)
   const canUndo = computed(() => history.value.past.length > 0)
@@ -423,7 +424,7 @@ export function useFlowEditor(props: FlowEditorProps, canvas: Ref<CanvasHandle |
       // Always re-read and rebase so the canvas matches the server, keeping any remaining edits.
       try {
         const synced = await loadFlowSnapshot(snapshot.organizationId, report.serviceId ?? snapshot.serviceId, props.auth)
-        const merged = rebase({ graph: current, base: snapshot, remote: synced, createdTargetIds: report.createdTargetIds })
+        const merged = rebase({ graph: current, base: snapshot, remote: synced, createdTargetIds: report.createdTargetIds, deletedTargetKeys: report.deletedTargetKeys })
         const wasNew = snapshot.serviceId === null
         setGraph(merged.graph)
         base.value = synced

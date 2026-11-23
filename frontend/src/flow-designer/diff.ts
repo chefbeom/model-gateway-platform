@@ -10,7 +10,7 @@ import {
 } from './catalog'
 import { compile, sameFieldValue } from './compile'
 import { syncGraphToConfig } from './decompile'
-import { renameTargetNodes } from './graphOps'
+import { detachTargetNodes, renameTargetNodes } from './graphOps'
 import type {
   CreateServiceBody,
   CreateTargetBody,
@@ -80,6 +80,11 @@ export function configsEqual(a: FlowConfigState, b: FlowConfigState): boolean {
   const as = [...a.accessProjectIds].sort()
   const bs = [...b.accessProjectIds].sort()
   return as.every((id, i) => id === bs[i])
+}
+
+/** True when the graph's compiled configuration differs from the snapshot's own configuration. */
+export function isConfigDirty(graph: FlowGraph, base: ServiceFlowSnapshot): boolean {
+  return !configsEqual(compile(graph, base), base.config)
 }
 
 type NameOf = (deploymentId: string) => string
@@ -302,8 +307,11 @@ export function mergeConfigs(base: FlowConfigState, local: FlowConfigState, remo
 }
 
 export function rebase(input: RebaseInput): RebaseResult {
-  const { graph, base, remote, createdTargetIds } = input
-  const g1 = createdTargetIds && Object.keys(createdTargetIds).length > 0 ? renameTargetNodes(graph, createdTargetIds) : graph
+  const { graph, base, remote, createdTargetIds, deletedTargetKeys } = input
+  // Targets whose server row we deleted ourselves (and did not re-create) become pending creates instead of "removed remotely".
+  const detachKeys = (deletedTargetKeys ?? []).filter((k) => !(createdTargetIds && k in createdTargetIds))
+  const g0 = detachKeys.length > 0 ? detachTargetNodes(graph, detachKeys) : graph
+  const g1 = createdTargetIds && Object.keys(createdTargetIds).length > 0 ? renameTargetNodes(g0, createdTargetIds) : g0
   const local = compile(g1, base)
   const { merged, conflicts, adopted } = mergeConfigs(base.config, local, remote.config)
   const g2 = Object.keys(adopted).length > 0 ? renameTargetNodes(g1, adopted) : g1

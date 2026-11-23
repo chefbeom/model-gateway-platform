@@ -319,7 +319,7 @@ export interface FlowPlan {
   fingerprint: string
 }
 export interface PlanInput { base: ServiceFlowSnapshot; desired: FlowConfigState; remote: ServiceFlowSnapshot; issues: ValidationIssue[] }
-export interface RebaseInput { graph: FlowGraph; base: ServiceFlowSnapshot; remote: ServiceFlowSnapshot; createdTargetIds?: Record<string, string> }
+export interface RebaseInput { graph: FlowGraph; base: ServiceFlowSnapshot; remote: ServiceFlowSnapshot; createdTargetIds?: Record<string, string>; deletedTargetKeys?: string[] }
 export interface RebaseResult { graph: FlowGraph; conflicts: FlowConflict[] }
 
 /* ---------------- Execution (implemented by WP-C execute.ts) ---------------- */
@@ -334,6 +334,8 @@ export interface ExecutionReport {
   serviceId: string | null
   /** Target key (FlowNode id) -> created server id. */
   createdTargetIds: Record<string, string>
+  /** Target keys (FlowNode ids) whose server row this run deleted (succeeded or already gone). */
+  deletedTargetKeys?: string[]
   completed: boolean
   failedOpId: string | null
 }

@@ -6,6 +6,11 @@ import { loadTypeScript } from './loadTypeScript.mjs'
 const { buildSnapshot, safeAddressLabel, FlowLoadError } = await loadTypeScript('../src/flow-designer/flowSnapshot.ts', import.meta.url)
 const { operationRequest, executePlan, previewRequest } = await loadTypeScript('../src/flow-designer/execute.ts', import.meta.url)
 const drafts = await loadTypeScript('../src/flow-designer/draftStore.ts', import.meta.url)
+const { decompile } = await loadTypeScript('../src/flow-designer/decompile.ts', import.meta.url)
+const { compile } = await loadTypeScript('../src/flow-designer/compile.ts', import.meta.url)
+const { applyCommand } = await loadTypeScript('../src/flow-designer/graphOps.ts', import.meta.url)
+const { validateGraph } = await loadTypeScript('../src/flow-designer/validate.ts', import.meta.url)
+const { planChanges, rebase } = await loadTypeScript('../src/flow-designer/diff.ts', import.meta.url)
 
 /* ---------------- fixtures ---------------- */
 
@@ -396,4 +401,54 @@ test('FlowCanvas onPointerUp never reads `moved` after resetInteraction()', () =
     if (reset < 0) continue
     assert.doesNotMatch(branch.slice(reset + 'resetInteraction()'.length), /\bmoved\b/, 'read `moved` into a local before resetInteraction()')
   }
+})
+
+test('project access node add, grant, revoke executes plan and rebases cleanly', async () => {
+  const base = buildSnapshot(raw())
+  let graph = decompile(base, null)
+
+  graph = applyCommand(graph, { type: 'addNode', nodeType: 'project', refId: 'p2', position: { x: 40, y: 200 } }, base).graph
+  graph = applyCommand(graph, { type: 'setAccess', projectNodeId: 'project:p2', granted: true }, base).graph
+  graph = applyCommand(graph, { type: 'setAccess', projectNodeId: 'project:p1', granted: false }, base).graph
+
+  const desired = compile(graph, base)
+  assert.deepEqual(desired.accessProjectIds, ['p2'])
+
+  const issues = validateGraph(graph, base)
+  assert.equal(issues.filter(issue => issue.severity === 'error').length, 0)
+
+  const plan = planChanges({ base, desired, remote: base, issues })
+  assert.equal(plan.blockingIssues.length, 0)
+  assert.equal(plan.conflicts.length, 0)
+  assert.deepEqual(plan.operations.map(op => op.opId), ['grant-access:p2', 'revoke-access:p1'])
+
+  const transport = fakeTransport(() => undefined)
+  const report = await executePlan(plan, transport, { serviceId: 'svc1' })
+  assert.equal(report.completed, true)
+  assert.deepEqual(transport.calls, [
+    { method: 'POST', path: '/api/admin/projects/p2/service-access', body: { serviceId: 'svc1' } },
+    { method: 'DELETE', path: '/api/admin/projects/p1/service-access/svc1', body: undefined }
+  ])
+
+  const updatedRemote = buildSnapshot(raw({
+    projectAccess: { p1: [], p2: [{ id: 'svc1', serviceKey: 'chat' }] }
+  }))
+  const rebased = rebase({ graph, base, remote: updatedRemote })
+  assert.equal(rebased.conflicts.length, 0)
+  assert.deepEqual(compile(rebased.graph, updatedRemote).accessProjectIds, ['p2'])
+  assert.equal(rebased.graph.edges.some(edge => edge.kind === 'access' && edge.from.nodeId === 'project:p2'), true)
+  assert.equal(rebased.graph.edges.some(edge => edge.kind === 'access' && edge.from.nodeId === 'project:p1'), false)
+})
+
+test('executePlan reports deletedTargetKeys for succeeded and already-applied deletes only', async () => {
+  const mk = (id) => ({ ...common, opId: `delete-target:${id}`, kind: 'deleteTarget', service: { kind: 'existing', id: 's' }, targetId: id })
+  const plan = { ...samplePlan(), operations: [mk('a'), mk('b'), mk('c'), mk('d')] }
+  const transport = fakeTransport(({ path }) => {
+    if (path.endsWith('/b')) throw httpError(404, 'gone', 'TARGET_NOT_FOUND')
+    if (path.endsWith('/c')) throw httpError(500, 'boom', 'INTERNAL')
+    return undefined
+  })
+  const report = await executePlan(plan, transport, { serviceId: 's' })
+  assert.deepEqual(report.results.map(item => item.status), ['succeeded', 'already-applied', 'failed', 'skipped'])
+  assert.deepEqual(report.deletedTargetKeys, ['target:a', 'target:b'])
 })
