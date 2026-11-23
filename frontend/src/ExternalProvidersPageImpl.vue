@@ -102,6 +102,7 @@ async function saveProvider() {
     : {}
   busy.value=true; busyAction.value='provider'; providerModalError.value=''
   const timeout = createRequestTimeout(SAVE_REQUEST_TIMEOUT_MS)
+  let saveSucceeded = false
   try {
     const path = editing.value ? `/api/admin/external-providers/${selected.value!.id}` : '/api/admin/external-providers'
     const body = editing.value
@@ -109,11 +110,16 @@ async function saveProvider() {
       : { organizationId:props.organizationId, displayName:providerForm.value.displayName, baseUrl:providerForm.value.baseUrl, apiKey:providerForm.value.apiKey, ...zeroRetentionPayload }
     const saved = await adminFetch<Provider>(path, props.auth, {method:editing.value?'PATCH':'POST', body:JSON.stringify(body), signal:timeout.signal})
     providers.value = editing.value ? providers.value.map(item => item.id===saved.id ? saved : item) : [...providers.value, saved]
-    selectedId.value=saved.id; providerOpen.value=false; providerForm.value.apiKey=''; await loadModels()
+    selectedId.value=saved.id; providerOpen.value=false; providerForm.value.apiKey=''
     message.value = editing.value ? '외부 Provider 설정을 수정했습니다.' : '외부 Provider를 등록했습니다.'
-    if (shouldProbe) await probe()
+    saveSucceeded = true
   } catch (error) { providerModalError.value = describeRequestError(error, '외부 Provider 저장', SAVE_REQUEST_TIMEOUT_MS, timeout.timedOut()) }
   finally { timeout.clear(); busy.value=false; busyAction.value='' }
+  if (!saveSucceeded) return
+  // The modal is closed now: failures of follow-up work must surface on the page, never in providerModalError.
+  try { await loadModels() }
+  catch (error) { message.value = `${message.value} 다만 모델 목록을 새로고침하지 못했습니다. ${describeRequestError(error, '모델 목록 새로고침', SAVE_REQUEST_TIMEOUT_MS)}` }
+  if (shouldProbe) await probe()
 }
 async function probe() {
   if (!selected.value) return

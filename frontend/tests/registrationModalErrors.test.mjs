@@ -60,6 +60,19 @@ test('an aborted admin request does not raise session-expired, a network failure
   }
 })
 
+test('post-save refresh failure is routed to the page-level message, not the closed provider modal', () => {
+  const page = read('../src/ExternalProvidersPageImpl.vue')
+  const start = page.indexOf('async function saveProvider')
+  const saveProvider = page.slice(start, page.indexOf('async function probe', start))
+  const refresh = saveProvider.slice(saveProvider.indexOf('try { await loadModels() }'))
+  assert.match(refresh, /catch \(error\) \{ message\.value = .*describeRequestError\(error, '모델 목록 새로고침'/)
+  assert.doesNotMatch(refresh, /providerModalError/)
+  assert.match(refresh, /if \(shouldProbe\) await probe\(\)/)
+  // the save request itself is the only thing that writes to the modal error
+  assert.equal(saveProvider.match(/providerModalError\.value = describeRequestError/g).length, 1)
+  assert.ok(saveProvider.indexOf('saveSucceeded = true') < saveProvider.indexOf('try { await loadModels() }'))
+})
+
 test('modal actions write errors to modal-scoped refs and use the timeout', () => {
   const page = read('../src/ExternalProvidersPageImpl.vue')
   assert.match(page, /modelModalError\.value = describeRequestError\(error, '외부 모델 등록\/수정'/)
