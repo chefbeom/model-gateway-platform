@@ -1049,7 +1049,7 @@ test('ServicesPage sets dataBoundaryPolicy and DeveloperPortalPage enforces canI
       calls.push({ url, method, body })
       if (url === '/api/admin/organizations/org-1/services') return okJson([svc])
       if (url === '/api/admin/services/svc-1/targets') return okJson([])
-      if (url === '/api/admin/runtime-endpoints') return okJson([])
+      if (url === '/api/admin/organizations/org-1/runtime-endpoints') return okJson([])
       if (url === '/api/admin/organizations/org-1/external-providers') return okJson([])
       if (url === '/api/admin/services/svc-1' && method === 'PATCH') {
         svc = { ...svc, ...body }
@@ -1360,7 +1360,7 @@ test('ServicesPage visual pipeline configures REDACT_RESTORE, ZDR masker, 80:20 
 
       if (method === 'GET' && path === '/api/admin/organizations/org-1/services') return okJson([currentService])
       if (method === 'GET' && path === '/api/admin/services/svc-1/targets') return okJson(currentTargets)
-      if (method === 'GET' && path === '/api/admin/runtime-endpoints') {
+      if (method === 'GET' && path === '/api/admin/organizations/org-1/runtime-endpoints') {
         return okJson([{ id: 'ep-local', displayName: '사내 Ollama', baseUrl: 'http://127.0.0.1:11434/v1', enabled: true }])
       }
       if (method === 'GET' && path === '/api/admin/runtime-endpoints/ep-local/deployments') {

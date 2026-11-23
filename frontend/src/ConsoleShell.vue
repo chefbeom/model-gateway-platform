@@ -12,6 +12,7 @@ const InfrastructurePage = defineAsyncComponent(() => import('./InfrastructurePa
 const SystemStructurePage = defineAsyncComponent(() => import('./SystemStructurePage.vue'))
 const ExternalProvidersPage = defineAsyncComponent(() => import('./ExternalProvidersPage.vue'))
 const ServicesPage = defineAsyncComponent(() => import('./ServicesPage.vue'))
+const FlowDesignerPage = defineAsyncComponent(() => import('./flow-designer/FlowDesignerPage.vue'))
 const TeamsPage = defineAsyncComponent(() => import('./TeamsPage.vue'))
 const ObservabilityPage = defineAsyncComponent(() => import('./ObservabilityPage.vue'))
 const NotificationsPage = defineAsyncComponent(() => import('./NotificationsPage.vue'))
@@ -38,7 +39,7 @@ import { formatDateTime } from './dateTime'
 
 type Theme = 'dark' | 'light'
 type FontScale = '100' | '115' | '125' | '135'
-type PageKey = 'beta' | 'dashboard' | 'relationship' | 'infrastructure' | 'system' | 'external' | 'services' | 'teams' | 'projects' | 'observability' | 'usage' | 'quotas' | 'data-protection' | 'notifications' | 'audit' | 'platform' | 'portal' | 'playground' | 'model-playground' | 'docs'
+type PageKey = 'beta' | 'dashboard' | 'relationship' | 'infrastructure' | 'system' | 'external' | 'services' | 'flow-designer' | 'teams' | 'projects' | 'observability' | 'usage' | 'quotas' | 'data-protection' | 'notifications' | 'audit' | 'platform' | 'portal' | 'playground' | 'model-playground' | 'docs'
 type OrganizationRole = 'ORGANIZATION_ADMIN' | 'DEVELOPER'
 type Organization = { id: string; name: string; status: string }
 type AccessibleProject = { id: string; name: string; status: string }
@@ -57,6 +58,7 @@ const adminNavItems: NavItem[] = [
   { id: 'system', label: '시스템 구조', description: '요청 경로 · Target · 서버 연결 상태', keywords: '시스템 구조 연결도 상태 architecture structure topology infrastructure provider llm team project api key', icon: '~', group: 'Operations' },
   { id: 'external', label: '외부 AI', description: 'OpenAI·승인·수동·자동 Failover', keywords: 'openai external provider cloud approval failover', icon: '◎', group: '운영' },
   { id: 'services', label: 'LLM 서비스', description: '논리 모델과 라우팅 정책', keywords: 'service model failover routing', icon: '▣', group: '운영' },
+  { id: 'flow-designer', label: '플로우 디자이너', description: '노드 캔버스로 서비스 파이프라인 구성 · 실험', keywords: 'flow designer canvas node graph pipeline routing 플로우 디자이너 배치 노드 캔버스 실험 experimental', icon: '⌬', group: '운영' },
   { id: 'teams', label: '팀과 부서', description: '부서·역할·프로젝트 소유', keywords: 'team department role audit', icon: '⌘', group: '워크스페이스 관리' },
   { id: 'projects', label: '프로젝트', description: '프로젝트·권한·API 키', keywords: 'project key quota credential', icon: '⌘', group: '워크스페이스 관리' },
   { id: 'relationship', label: '조직 관계도', description: '최고 관리자·조직·프로젝트·구성원 계층도', keywords: 'organization relationship hierarchy chart tree member manager 조직 관계도 계층도', icon: '◈', group: '워크스페이스' },
@@ -180,7 +182,7 @@ const searchResults = computed(() => {
 })
 
 function knownPage(value: string): value is PageKey {
-  return ['beta', 'dashboard', 'relationship', 'infrastructure', 'system', 'external', 'services', 'teams', 'projects', 'observability', 'usage', 'quotas', 'data-protection', 'notifications', 'audit', 'platform', 'portal', 'playground', 'model-playground', 'docs'].includes(value)
+  return ['beta', 'dashboard', 'relationship', 'infrastructure', 'system', 'external', 'services', 'flow-designer', 'teams', 'projects', 'observability', 'usage', 'quotas', 'data-protection', 'notifications', 'audit', 'platform', 'portal', 'playground', 'model-playground', 'docs'].includes(value)
 }
 function isAllowedPage(target: PageKey) { return target === 'docs' || navItems.value.some(item => item.id === target) }
 function fallbackPage(): PageKey { return 'dashboard' }
@@ -436,6 +438,7 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
         <SystemStructurePage v-else-if="isOrgOrPlatformAdmin && page === 'system'" :organization-id="organizationId" :auth="auth" />
         <ExternalProvidersPage v-else-if="isOrgOrPlatformAdmin && page === 'external'" :organization-id="organizationId" :auth="auth" @open-playground="openModelPlayground" />
         <ServicesPage v-else-if="isOrgOrPlatformAdmin && page === 'services'" :organization-id="organizationId" :auth="auth" />
+        <FlowDesignerPage v-else-if="isOrgOrPlatformAdmin && page === 'flow-designer'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" />
         <TeamsPage v-else-if="isOrgOrPlatformAdmin && page === 'teams'" :organization-id="organizationId" :auth="auth" :platform-admin="platformAdmin" />
         <ProjectsPage v-else-if="(isOrgOrPlatformAdmin || isProjectDirector) && page === 'projects'" :organization-id="organizationId" :organization-name="currentOrganization?.name ?? ''" :current-user-id="user?.id" :auth="auth" :platform-admin="platformAdmin" :org-admin="isOrgOrPlatformAdmin" @invite="openAccount" @open-platform="navigate('platform')" />
         <ObservabilityPage v-else-if="isOrgOrPlatformAdmin && page === 'observability'" :organization-id="organizationId" :auth="auth" />
