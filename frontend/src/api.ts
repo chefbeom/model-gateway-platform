@@ -305,9 +305,25 @@ export function persistSession(raw: Session): Session {
   return session
 }
 
+/** Resolves a non-empty user-facing error message from an HTTP response and parsed body. */
+export function formatHttpErrorMessage(response: Response, body: unknown, fallback: string): string {
+  const candidate = body && typeof body === 'object' ? (body as { message?: unknown }).message : undefined
+  const rawMessage = typeof candidate === 'string' ? candidate.trim() : ''
+  const statusMessage = response.status === 429
+    ? '요청이 너무 많습니다. 잠시 후 다시 시도하세요.'
+    : (response.statusText?.trim() || fallback)
+  return rawMessage || statusMessage
+}
+
+/** Reads an HTTP error response body safely and falls back to status/default wording when empty. */
+export async function readHttpErrorMessage(response: Response, fallback: string): Promise<string> {
+  const body = await response.json().catch(() => ({ message: undefined, code: undefined }))
+  return formatHttpErrorMessage(response, body, fallback)
+}
+
 function responseError(response: Response, fallback: string): Promise<ApiError> {
   return response.json()
-    .catch(() => ({ message: response.statusText, code: undefined }))
+    .catch(() => ({ message: undefined, code: undefined }))
     .then(body => {
       const code = typeof body?.code === 'string' ? body.code : undefined
       if (code === 'TOTP_ENROLLMENT_REQUIRED') {
@@ -315,7 +331,7 @@ function responseError(response: Response, fallback: string): Promise<ApiError> 
       } else if (code === 'TOTP_VERIFICATION_REQUIRED') {
         dispatchWindowEvent<MfaState>('aiconnect:mfa-required', 'VERIFICATION_REQUIRED')
       }
-      const error = new Error(body?.message ?? fallback) as ApiError
+      const error = new Error(formatHttpErrorMessage(response, body, fallback)) as ApiError
       error.code = code
       error.status = response.status
       return error
@@ -399,7 +415,10 @@ async function sendWithSessionGuard(
     let response: Response
     try {
       response = await send(overrideToken)
-    } catch {
+    } catch (error) {
+      // An intentional abort (caller-side timeout/cancel) is not a server outage: never end the session for it.
+      const name = typeof error === 'object' && error !== null ? (error as { name?: string }).name : undefined
+      if (name === 'AbortError' || name === 'TimeoutError') throw error
       notifySessionExpired('server_unavailable')
       throw serverUnavailableError(options.networkMessage)
     }

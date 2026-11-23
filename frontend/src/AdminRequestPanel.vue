@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { formatDateTime } from './dateTime'
 import { ref } from 'vue'
+import { readHttpErrorMessage } from './api'
 import { formatExecutionMode } from './requestMode'
 
 type Attempt = { deploymentId: string; attemptNumber: number; status: string; latencyMs?: number; httpStatus?: number; errorType?: string; errorMessage?: string }
@@ -26,7 +27,7 @@ async function search() {
     const query = new URLSearchParams({ failoverOnly: String(failoverOnly.value), size: '50' })
     if (status.value) query.set('status', status.value)
     const response = await fetch(`/api/admin/organizations/${organizationId.value}/requests?${query}`, { headers: authorization() })
-    if (!response.ok) throw new Error((await response.json().catch(() => ({ message: response.statusText }))).message ?? '요청 탐색 실패')
+    if (!response.ok) throw new Error(await readHttpErrorMessage(response, '요청 탐색 실패'))
     result.value = await response.json(); message.value = `${result.value?.totalElements ?? 0}개의 요청을 찾았습니다.`
   } catch (error) { message.value = error instanceof Error ? error.message : '요청 탐색 실패' }
   finally { busy.value = false }

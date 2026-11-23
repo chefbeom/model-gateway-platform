@@ -2,6 +2,7 @@
 import { formatDateTime } from './dateTime'
 import { ref } from 'vue'
 import RequestDetailModal from './RequestDetailModal.vue'
+import { readHttpErrorMessage } from './api'
 import type { RequestDetail } from './requestDetail'
 import { formatExecutionMode } from './requestMode'
 
@@ -20,7 +21,7 @@ const requestDetailLoading = ref(false)
 
 async function api<T>(path: string): Promise<T> {
   const response = await fetch(path, { headers: { Authorization: `Bearer ${apiKey.value}` } })
-  if (!response.ok) throw new Error((await response.json().catch(() => ({ message: response.statusText }))).message ?? '사용량 조회 실패')
+  if (!response.ok) throw new Error(await readHttpErrorMessage(response, '사용량 조회 실패'))
   return response.json() as Promise<T>
 }
 async function loadUsage() {
