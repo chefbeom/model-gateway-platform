@@ -240,6 +240,27 @@ paths:
         required: true
         content: { application/json: { schema: { $ref: '#/components/schemas/UpdateLogicalService' } } }
       responses: { '200': { description: Updated service policy } }
+  /api/admin/services/{serviceId}/flow-layout:
+    get:
+      tags: [Control plane]
+      summary: Get the saved service flow designer canvas layout
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/ServiceId' }]
+      responses:
+        '200': { description: 'Saved layout (revision 0 and no layout when none is stored)', content: { application/json: { schema: { $ref: '#/components/schemas/ServiceFlowLayoutView' } } } }
+        '404': { description: SERVICE_NOT_FOUND }
+    put:
+      tags: [Control plane]
+      summary: Save the service flow designer canvas layout (node ids, coordinates, viewport only)
+      security: [{ AdminBearer: [] }, { BreakGlassAdmin: [] }]
+      parameters: [{ $ref: '#/components/parameters/ServiceId' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ServiceFlowLayout' } } }
+      responses:
+        '200': { description: 'Saved layout with incremented revision', content: { application/json: { schema: { $ref: '#/components/schemas/ServiceFlowLayoutView' } } } }
+        '400': { description: FLOW_LAYOUT_INVALID or FLOW_LAYOUT_TOO_LARGE }
+        '404': { description: SERVICE_NOT_FOUND }
   /api/admin/services/{serviceId}/targets:
     post:
       tags: [Control plane]
@@ -1045,6 +1066,37 @@ components:
       description: OpenAI-compatible error
       content: { application/json: { schema: { $ref: '#/components/schemas/OpenAiError' } } }
   schemas:
+    ServiceFlowLayout:
+      type: object
+      required: [version, viewport, nodes]
+      properties:
+        version: { type: integer, enum: [1] }
+        viewport:
+          type: object
+          required: [x, y, zoom]
+          properties:
+            x: { type: number, minimum: -1000000, maximum: 1000000 }
+            y: { type: number, minimum: -1000000, maximum: 1000000 }
+            zoom: { type: number, minimum: 0.1, maximum: 4 }
+        nodes:
+          type: object
+          maxProperties: 500
+          description: Keyed by node id (service, guardrail, prompt, cache, router, masker, or kind:id).
+          additionalProperties:
+            type: object
+            required: [x, y]
+            properties:
+              x: { type: number, minimum: -1000000, maximum: 1000000 }
+              y: { type: number, minimum: -1000000, maximum: 1000000 }
+              collapsed: { type: boolean, description: Present only when true. }
+    ServiceFlowLayoutView:
+      type: object
+      required: [serviceId, revision]
+      properties:
+        serviceId: { type: string, format: uuid }
+        revision: { type: integer, format: int64 }
+        updatedAt: { type: string, format: date-time }
+        layout: { $ref: '#/components/schemas/ServiceFlowLayout' }
     ApiError:
       type: object
       required: [code, message]
