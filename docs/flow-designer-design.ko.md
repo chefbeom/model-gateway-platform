@@ -1705,7 +1705,9 @@ export JAVA_HOME="C:/Users/kjs99/.gradle/jdks/eclipse_adoptium-17-amd64-windows/
 | 실제 조직 관리자 범위(N15) | 비플랫폼 ORGANIZATION_ADMIN이 DIRECTOR로 승격되어 사실상 시스템 관리자 전용 | ServicesPage와 같은 노출 정책. 별도 조치 없음 |
 | ConsoleShell 해시 해석 의존 | `#flow-designer/<id>` 동작이 `split('/')[0]` 규칙에 의존 | C 테스트에서 소스 검사. ConsoleShell 수정 최소화 |
 
-### 12.2 이 설계에서 발견했지만 범위 밖으로 둔 기존 이슈 (수정하지 않음)
+### 12.2 이 설계에서 발견한 기존 이슈
+
+> 2026-11-23 후속 작업에서 아래 ServicesPage 3건은 수정했다(`frontend/tests/servicesPage.test.mjs`). `RoutingPolicyPanel.vue`는 동작 영향이 없어 그대로 두었다.
 
 - `ServicesPage.vue:326` 캐시 TTL을 5까지 허용하지만 서버는 `@Min(10)`(`RoutingPolicyController.java:107`) → 5–9를 입력하면 400.
 - `ServicesPage.vue:104`는 플랫폼 관리자에게 전 조직 Runtime의 Deployment를 노출한다(타 조직을 선택하면 서버가 `ORGANIZATION_MISMATCH`).

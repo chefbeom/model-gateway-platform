@@ -101,7 +101,7 @@ async function loadTargets(service: Service) {
 
 async function loadDeployments() {
   const [endpoints, providers] = await Promise.all([
-    adminFetch<Endpoint[]>('/api/admin/runtime-endpoints', props.auth),
+    adminFetch<Endpoint[]>(`/api/admin/organizations/${props.organizationId}/runtime-endpoints`, props.auth),
     adminFetch<Array<{ id: string; displayName?: string; zeroRetentionVerified?: boolean; zeroRetentionEvidence?: string | null }>>(`/api/admin/organizations/${props.organizationId}/external-providers`, props.auth)
   ])
   const [localGroups, externalGroups] = await Promise.all([
@@ -319,11 +319,11 @@ async function savePipeline() {
         maskerDeploymentId: draft.maskerDeploymentId || null,
         clearMaskerDeployment: !draft.maskerDeploymentId,
         maskPersonNames: draft.maskPersonNames,
-        guardrailAction: draft.guardrailAction,
+        ...(draft.guardrailAction !== (svc.guardrailAction ?? 'ALLOW') ? { guardrailAction: draft.guardrailAction } : {}),
         systemPromptTemplate: trimmedPrompt ? draft.systemPromptTemplate : null,
         clearSystemPromptTemplate: !trimmedPrompt,
         responseCacheEnabled: draft.responseCacheEnabled,
-        responseCacheTtlSeconds: Math.max(5, Math.min(86400, Number(draft.responseCacheTtlSeconds) || 300))
+        responseCacheTtlSeconds: Math.max(10, Math.min(86400, Number(draft.responseCacheTtlSeconds) || 300))
       })
     })
     services.value = services.value.map(item => item.id === updated.id ? updated : item)
@@ -582,7 +582,7 @@ onMounted(() => { void load() })
                   </label>
                   <label v-if="pipelineForm.responseCacheEnabled" class="ttl-input">
                     TTL(초)
-                    <input v-model.number="pipelineForm.responseCacheTtlSeconds" type="number" min="5" max="86400" />
+                    <input v-model.number="pipelineForm.responseCacheTtlSeconds" type="number" min="10" max="86400" />
                   </label>
                 </div>
               </article>

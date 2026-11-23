@@ -70,15 +70,17 @@ A와 D, B와 C를 각각 병렬로 진행했다. 패키지마다 파일 소유�
 
 ## 6. 현재 상태와 남은 일
 
-- **브랜치 `claude/flow-designer`에 푸시했고(PR `#9` OPEN), 아직 `main`에 병합·운영 배포하지 않았다.** 병합과 배포 여부는 사용자가 결정한다.
+- **개발 완료. PR `#9`로 `main`에 병합한다**(사용자 지시). 운영 배포는 별도로 진행한다.
+- Codex 리뷰 지적 2건 수정(`1ec4beb`): 부분 적용된 Target 교체가 rebase에서 사라지던 문제, 복원한 새 서비스 초안이 "변경 없음"으로 판정되어 유실되던 문제
+- 최종 검증: 프런트 테스트 14종 147건, `npm run build`, 백엔드 전체 `gradle test` 372건(실패 0, 스킵 3) 통과. ServicesPage 수정은 실제 브라우저에서 PATCH 본문과 조직별 Deployment 목록으로 확인했다.
 - 추가 확인(후속 검증)
   - 실제 TOTP 로그인 `platformAdmin` JWT 세션을 사용한 `GET /organizations/{id}/projects`, `POST/DELETE /projects/{id}/service-access`, `PUT /services/{id}/flow-layout` 및 프런트 캔버스 접근 부여·해제 `Plan → Execute → Rebase` 자동화 검증을 완료했다. (비상용 `X-Admin-Token`에서는 `canViewProject` 필터에 의해 프로젝트 목록이 빈 배열로 반환되는 기존 동작 유지)
   - MariaDB 11.4 대상 `gradle clean test bootJar`는 PR `#9` GitHub Actions CI(`45153027120`)에서 통과했다. (실제 운영 브라우저 화면에서의 로그인 계정 기반 프로젝트 접근 클릭 수동 확인만 선택 과제로 남음)
-- 범위 밖으로 남긴 기존 버그(설계서 §12.2, 수정하지 않음)
-  - `ServicesPage.vue`: 캐시 TTL 하한이 5지만 서버는 `@Min(10)`이라 5~9를 입력하면 400
-  - `ServicesPage.savePipeline`: `guardrailAction`을 항상 전송해서 저장할 때마다 서비스 DLP 탐지 항목이 재설정됨
-  - `ServicesPage.vue`: 플랫폼 관리자에게 다른 조직의 Deployment가 노출됨
-  - `RoutingPolicyPanel.vue`: 어디에서도 쓰지 않는 컴포넌트
+- 설계 중 발견한 기존 버그(설계서 §12.2) — **수정 완료**, 회귀 테스트 `frontend/tests/servicesPage.test.mjs`(`npm run test:services-page`, CI 포함)
+  - `ServicesPage.vue`: 캐시 TTL 하한을 서버와 같은 10으로 맞춤(이전에는 5~9 입력 시 400)
+  - `ServicesPage.savePipeline`: `guardrailAction`은 값이 바뀐 경우에만 전송(이전에는 저장할 때마다 서비스 DLP 탐지 항목이 재설정됨)
+  - `ServicesPage.vue`: Runtime 목록을 조직 경로(`/api/admin/organizations/{id}/runtime-endpoints`)로 조회해 플랫폼 관리자에게 다른 조직 Deployment가 노출되지 않음
+  - 남은 정리 항목: `RoutingPolicyPanel.vue`는 어디에서도 쓰지 않는 컴포넌트(동작 영향 없음, 삭제 여부는 별도 결정)
 - 후속 과제 후보(설계서 §12.3): 서버 측 원자적 적용 API와 낙관적 잠금, 가드레일 시뮬레이터 노드, 조직 전체 캔버스, 미니맵, ServicesPage의 "캔버스에서 열기" 링크
 
 ## 7. 이어서 작업할 때 주의할 점
