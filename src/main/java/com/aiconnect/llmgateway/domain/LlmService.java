@@ -25,6 +25,12 @@ public class LlmService {
     @Enumerated(EnumType.STRING) @Column(nullable = false, length = 24) private ReasoningEffort reasoningEffort = ReasoningEffort.REQUEST;
     @Column(nullable = false) private boolean openAiFastMode;
     @Enumerated(EnumType.STRING) @Column(name = "data_boundary_policy", nullable = false, length = 40) private DataBoundaryPolicy dataBoundaryPolicy = DataBoundaryPolicy.EXTERNAL_ALLOWED;
+    @Column(name = "masker_deployment_id", columnDefinition = "char(36)") private UUID maskerDeploymentId;
+    @Column(name = "mask_person_names", nullable = false) private boolean maskPersonNames = true;
+    @Column(name = "system_prompt_template", columnDefinition = "text") private String systemPromptTemplate;
+    @Column(name = "prompt_version", nullable = false) private int promptVersion = 1;
+    @Column(name = "response_cache_enabled", nullable = false) private boolean responseCacheEnabled;
+    @Column(name = "response_cache_ttl_seconds", nullable = false) private int responseCacheTtlSeconds = 300;
     @Column(nullable = false) private boolean enabled = true;
     /** Tombstones keep the service identity available to request history and usage aggregation. */
     @Column private Instant deletedAt;
@@ -132,6 +138,64 @@ public class LlmService {
     public boolean isOpenAiFastMode() { return openAiFastMode; }
     public DataBoundaryPolicy getDataBoundaryPolicy() { return dataBoundaryPolicy == null ? DataBoundaryPolicy.EXTERNAL_ALLOWED : dataBoundaryPolicy; }
     public void configureDataBoundaryPolicy(DataBoundaryPolicy policy) { if (policy != null) this.dataBoundaryPolicy = policy; }
+    public UUID getMaskerDeploymentId() { return maskerDeploymentId; }
+    public boolean isMaskPersonNames() { return maskPersonNames; }
+    public String getSystemPromptTemplate() { return systemPromptTemplate; }
+    public int getPromptVersion() { return Math.max(1, promptVersion); }
+    public boolean isResponseCacheEnabled() { return responseCacheEnabled; }
+    public int getResponseCacheTtlSeconds() { return Math.max(10, responseCacheTtlSeconds); }
+
+    public void configureGuardrailMasker(UUID maskerDeploymentId, boolean clearMaskerDeployment, Boolean maskPersonNames) {
+        if (clearMaskerDeployment) {
+            this.maskerDeploymentId = null;
+        } else if (maskerDeploymentId != null) {
+            this.maskerDeploymentId = maskerDeploymentId;
+        }
+        if (maskPersonNames != null) {
+            this.maskPersonNames = maskPersonNames;
+        }
+    }
+
+    public void configureSystemPromptTemplate(String template, boolean clearTemplate) {
+        if (clearTemplate) {
+            if (this.systemPromptTemplate != null) {
+                this.systemPromptTemplate = null;
+                this.promptVersion = Math.max(1, this.promptVersion + 1);
+            }
+            return;
+        }
+        if (template == null) return;
+        String normalized = template.isBlank() ? null : template.trim();
+        if (!java.util.Objects.equals(this.systemPromptTemplate, normalized)) {
+            this.systemPromptTemplate = normalized;
+            this.promptVersion = Math.max(1, this.promptVersion + 1);
+        }
+    }
+
+    public void configureResponseCache(Boolean enabled, Integer ttlSeconds) {
+        if (enabled != null) {
+            this.responseCacheEnabled = enabled;
+        }
+        if (ttlSeconds != null) {
+            this.responseCacheTtlSeconds = Math.max(10, Math.min(86_400, ttlSeconds));
+        }
+    }
+
+    public void applySystemPromptTemplate(ObjectNode request) {
+        if (request == null || systemPromptTemplate == null || systemPromptTemplate.isBlank()) return;
+        if (!(request.path("messages") instanceof com.fasterxml.jackson.databind.node.ArrayNode messages)) return;
+        if (messages.size() > 0 && "system".equalsIgnoreCase(messages.get(0).path("role").asText())
+                && messages.get(0) instanceof ObjectNode firstSys
+                && firstSys.path("content").isTextual()) {
+            firstSys.put("content", systemPromptTemplate + "\n\n" + firstSys.path("content").asText());
+        } else {
+            ObjectNode sys = request.objectNode();
+            sys.put("role", "system");
+            sys.put("content", systemPromptTemplate);
+            messages.insert(0, sys);
+        }
+    }
+
     public boolean isEnabled() { return enabled; }
     public Instant getDeletedAt() { return deletedAt; }
     public boolean isDeleted() { return deletedAt != null; }

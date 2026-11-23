@@ -14,7 +14,7 @@ const isOrgOrPlatformAdmin = computed(() => resolveOrgAdminAccess(props.auth, pr
 
 type Mode = 'OFF' | 'MONITOR' | 'ENFORCE'
 type Level = 'RELAXED' | 'BALANCED' | 'STRICT' | 'CUSTOM'
-type Action = 'ALLOW' | 'REDACT' | 'LOCAL_ONLY' | 'BLOCK'
+type Action = 'ALLOW' | 'REDACT_RESTORE' | 'REDACT' | 'LOCAL_ONLY' | 'BLOCK'
 type Policy = {
   id?: string | null
   organizationId?: string | null
@@ -225,7 +225,7 @@ onMounted(() => { void load() })
         <div class="form-grid">
           <label class="field">보호 모드<select v-model="editor.mode"><option value="OFF">OFF · 제한 없음</option><option value="MONITOR">MONITOR · 감지 후 허용</option><option value="ENFORCE">ENFORCE · 정책 적용</option></select></label>
           <label class="field">보호 수준<select v-model="editor.level"><option value="RELAXED">RELAXED</option><option value="BALANCED">BALANCED</option><option value="STRICT">STRICT</option><option value="CUSTOM">CUSTOM</option></select></label>
-          <label class="field">민감정보 감지 시<select v-model="editor.externalAction"><option value="ALLOW">외부 전송 허용</option><option value="REDACT">마스킹 후 허용 (현재 로컬 전용)</option><option value="LOCAL_ONLY">로컬 Target만 사용</option><option value="BLOCK">요청 차단</option></select></label>
+          <label class="field">민감정보 감지 시<select v-model="editor.externalAction"><option value="ALLOW">개인정보 허가 · 외부 전송 허용</option><option value="REDACT_RESTORE">개인정보 마스킹 후 외부 전송 · 응답 시 원본 복원</option><option value="REDACT">개인정보 마스킹 후 외부 전송 · 가명화 유지</option><option value="LOCAL_ONLY">외부 전송 금지 · 로컬 Target만 사용</option><option value="BLOCK">요청 차단</option></select></label>
           <label class="toggle-field"><span>외부 자동 Failover 허용<small>민감정보가 감지되면 자동 외부 전환을 제한합니다.</small></span><input v-model="editor.allowExternalFailover" type="checkbox" /></label>
         </div>
         <section class="detector-section" aria-labelledby="detector-heading">

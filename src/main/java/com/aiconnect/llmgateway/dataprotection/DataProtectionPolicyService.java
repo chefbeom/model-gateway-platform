@@ -55,11 +55,16 @@ public class DataProtectionPolicyService {
                 reasons.add("DATA_PROTECTION_MONITOR_ONLY");
             } else if (effective.mode() == DataProtectionMode.ENFORCE) {
                 action = effective.externalAction();
-                if (action == DataProtectionAction.REDACT) {
-                    // Redaction is intentionally fail-closed until a field-aware
-                    // redactor is configured; raw sensitive text must not escape.
-                    action = DataProtectionAction.LOCAL_ONLY;
-                    reasons.add("DATA_PROTECTION_REDACTION_UNAVAILABLE");
+                if (action == DataProtectionAction.REDACT || action == DataProtectionAction.REDACT_RESTORE) {
+                    if (scan.has(DataClassification.UNKNOWN_MEDIA) || scan.has(DataClassification.SCAN_INCOMPLETE)) {
+                        // Media payloads or truncated scans cannot be safely field-redacted; fail closed to local-only.
+                        action = DataProtectionAction.LOCAL_ONLY;
+                        reasons.add("DATA_PROTECTION_REDACTION_UNAVAILABLE");
+                    } else {
+                        reasons.add(action == DataProtectionAction.REDACT_RESTORE
+                                ? "DATA_PROTECTION_REDACT_AND_RESTORE"
+                                : "DATA_PROTECTION_REDACTED");
+                    }
                 }
                 reasons.add("DATA_PROTECTION_ENFORCED");
             }
@@ -99,7 +104,9 @@ public class DataProtectionPolicyService {
                 reasons.add("API_KEY_DATA_BOUNDARY_RESTRICTED");
             }
         }
-        boolean actionAllowsExternal = action == DataProtectionAction.ALLOW;
+        boolean actionAllowsExternal = action == DataProtectionAction.ALLOW
+                || action == DataProtectionAction.REDACT
+                || action == DataProtectionAction.REDACT_RESTORE;
         boolean externalNoRetentionGpuAllowed = actionAllowsExternal && effectiveBoundary.allowsExternalNoRetentionGpu();
         boolean externalApiAllowed = actionAllowsExternal && effectiveBoundary.allowsExternalApi();
         boolean externalAllowed = externalNoRetentionGpuAllowed || externalApiAllowed;
@@ -189,6 +196,14 @@ public class DataProtectionPolicyService {
                     mode = DataProtectionMode.ENFORCE;
                     level = strongerLevel(level, DataProtectionLevel.STRICT);
                 }
+                case "REDACT" -> {
+                    mode = DataProtectionMode.ENFORCE;
+                    action = strongerAction(action, DataProtectionAction.REDACT);
+                }
+                case "REDACT_RESTORE", "REDACT-RESTORE" -> {
+                    mode = DataProtectionMode.ENFORCE;
+                    action = strongerAction(action, DataProtectionAction.REDACT_RESTORE);
+                }
                 case "LOCAL_ONLY", "LOCAL-ONLY" -> {
                     mode = DataProtectionMode.ENFORCE;
                     action = strongerAction(action, DataProtectionAction.LOCAL_ONLY);
@@ -218,7 +233,16 @@ public class DataProtectionPolicyService {
     private DataProtectionAction strongerAction(DataProtectionAction left, DataProtectionAction right) {
         return actionRank(right) > actionRank(left) ? right : left;
     }
-    private int actionRank(DataProtectionAction value) { return value == DataProtectionAction.BLOCK ? 3 : value == DataProtectionAction.LOCAL_ONLY ? 2 : value == DataProtectionAction.REDACT ? 1 : 0; }
+    private int actionRank(DataProtectionAction value) {
+        if (value == null) return 0;
+        return switch (value) {
+            case BLOCK -> 4;
+            case LOCAL_ONLY -> 3;
+            case REDACT -> 2;
+            case REDACT_RESTORE -> 1;
+            case ALLOW -> 0;
+        };
+    }
 
     private void validatePatterns(String json) {
         if (json == null || json.isBlank()) return;

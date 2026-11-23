@@ -3,6 +3,7 @@ package com.aiconnect.llmgateway.gateway;
 import com.aiconnect.llmgateway.billing.TokenPricingResolver;
 import com.aiconnect.llmgateway.dataprotection.DataProtectionDecision;
 import com.aiconnect.llmgateway.dataprotection.DataProtectionPolicyService;
+import com.aiconnect.llmgateway.dataprotection.DataProtectionRedactor;
 import com.aiconnect.llmgateway.diagnostic.RequestDiagnosticService;
 import com.aiconnect.llmgateway.domain.*;
 import com.aiconnect.llmgateway.external.ProviderCapReservationService;
@@ -25,6 +26,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -58,6 +60,10 @@ public class ChatCompletionGateway {
     private ProviderCapReservationService providerCap;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private SpendQuotaService spendQuota;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private DataProtectionRedactor redactor;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ResponseCacheService responseCache;
 
     public ChatCompletionGateway(ApiKeyService apiKeyService, LlmServiceRepository services,
                                  ProjectServiceAccessRepository access, RoutingService routing,
@@ -158,6 +164,27 @@ public class ChatCompletionGateway {
         String serviceKey = service.getServiceKey(), requestId = audit.getRequestId();
         RoutingDecision decision = plan.decision();
         List<ResolvedTarget> candidates = plan.candidates();
+        ObjectNode preparedRequest = request.deepCopy();
+        service.applySystemPromptTemplate(preparedRequest);
+        String cacheKey = service.isResponseCacheEnabled() && responseCache != null
+                ? responseCache.cacheKey(service.getOrganizationId(), service, protection.action(), preparedRequest)
+                : null;
+        if (cacheKey != null && !candidates.isEmpty()) {
+            var cached = responseCache.get(cacheKey);
+            if (cached.isPresent()) {
+                ResolvedTarget firstTarget = candidates.get(0);
+                audit.succeed(firstTarget.deployment().getId(), 0, 0, elapsed(audit.getStartedAt()),
+                        200, 0, firstTarget.providerType(), "RESPONSE_CACHE_HIT",
+                        BigDecimal.ZERO, BigDecimal.ZERO, service.getCurrency());
+                requests.save(audit);
+                if (spendQuota != null) {
+                    spendQuota.releaseIfStillActive(spendReservation);
+                }
+                ObjectNode cachedBody = cached.get();
+                cachedBody.put("model", serviceKey);
+                return new GatewayResult(200, cachedBody, requestId);
+            }
+        }
         int failures = 0;
         int attemptedCount = 0;
         boolean sawCapacity = false;
@@ -195,9 +222,14 @@ public class ChatCompletionGateway {
                     failures++;
                     continue;
                 }
-                ObjectNode proxiedRequest = request.deepCopy();
+                ObjectNode proxiedRequest = preparedRequest.deepCopy();
                 proxiedRequest.put("model", candidate.deployment().getProviderModelId());
                 service.applyTemperaturePolicy(proxiedRequest);
+                DataProtectionRedactor.RedactionVault redactionVault = null;
+                if (protection.redactionRequired() && redactor != null
+                        && (candidate.external() || candidate.externalDataBoundary() || service.getMaskerDeploymentId() != null)) {
+                    redactionVault = redactor.redactRequest(proxiedRequest, protection.policy(), service, true);
+                }
                 if (candidate.external()) {
                     service.applyOpenAiRequestPolicy(proxiedRequest);
                     candidate.deployment().applyOpenAiDefaults(proxiedRequest);
@@ -262,7 +294,13 @@ public class ChatCompletionGateway {
                         if (spendQuota != null) spendQuota.holdUnsettled(spendReservation, costStatus);
                     }
                     ObjectNode response = runtimeResult.body().isObject() ? ((ObjectNode) runtimeResult.body()).deepCopy() : objectMapper.createObjectNode();
+                    if (protection.restoreRequired() && redactionVault != null && !redactionVault.isEmpty()) {
+                        redactionVault.restoreResponseNode(response);
+                    }
                     response.put("model", serviceKey);
+                    if (cacheKey != null && responseCache != null) {
+                        responseCache.put(cacheKey, response, service.getResponseCacheTtlSeconds());
+                    }
                     return new GatewayResult(runtimeResult.statusCode(), response, requestId);
                 }
                 JsonNode upstreamBody = runtimeResult.body();

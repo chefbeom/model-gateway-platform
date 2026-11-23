@@ -29,6 +29,8 @@ public record DataProtectionDecision(
     }
 
     public boolean blocked() { return action == DataProtectionAction.BLOCK; }
+    public boolean redactionRequired() { return action == DataProtectionAction.REDACT || action == DataProtectionAction.REDACT_RESTORE; }
+    public boolean restoreRequired() { return action == DataProtectionAction.REDACT_RESTORE; }
     public boolean projectLocalOnly() { return reasonCodes.contains("PROJECT_EXTERNAL_AI_BLOCKED"); }
 
     public String unavailableCode() {

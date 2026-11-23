@@ -1311,3 +1311,170 @@ test('relationship supports team chip, search/filter modes, compact density, and
     }
   })
 })
+
+test('ServicesPage visual pipeline configures REDACT_RESTORE, ZDR masker, 80:20 A/B weights, and runs simulator', async () => {
+  const { default: ServicesPage } = await compileVueComponent('../src/ServicesPage.vue', 'services-pipeline-test', {
+    '\\./BaseModal\\.vue': baseModalStubUrl,
+    '\\./CapabilityPicker\\.vue': emptyComponentStub('CapabilityPicker'),
+    '\\./ServiceSchedulingPanel\\.vue': emptyComponentStub('ServiceSchedulingPanel')
+  })
+
+  await withDomGlobals(async () => {
+    let currentService = {
+      id: 'svc-1',
+      organizationId: 'org-1',
+      serviceKey: 'support-ai',
+      displayName: 'Support AI',
+      failoverPolicy: 'COMPATIBLE',
+      retryPolicy: 'SAFE',
+      allowDegraded: false,
+      dataBoundaryPolicy: 'EXTERNAL_ALLOWED',
+      requiredCapabilitiesJson: '[]',
+      inputPricePerMillion: 0,
+      outputPricePerMillion: 0,
+      currency: 'KRW',
+      enabled: true,
+      temperaturePolicy: 'REQUEST',
+      temperatureValue: null,
+      reasoningEffort: 'REQUEST',
+      openAiFastMode: false,
+      maskerDeploymentId: null,
+      maskPersonNames: true,
+      guardrailAction: 'ALLOW',
+      systemPromptTemplate: '',
+      promptVersion: 1,
+      responseCacheEnabled: false,
+      responseCacheTtlSeconds: 300
+    }
+    let currentTargets = [
+      { id: 't-1', deploymentId: 'dep-local', priority: 1, weight: 50, degraded: false, enabled: true, maxConcurrencyOverride: null, followModelChanges: true },
+      { id: 't-2', deploymentId: 'dep-ext-zdr', priority: 1, weight: 50, degraded: false, enabled: true, maxConcurrencyOverride: null, followModelChanges: true }
+    ]
+    const calls = []
+
+    globalThis.fetch = async (url, init = {}) => {
+      const path = new URL(String(url), 'https://console.example.com').pathname
+      const method = (init.method ?? 'GET').toUpperCase()
+      const body = init.body ? JSON.parse(String(init.body)) : null
+      calls.push({ method, path, body })
+
+      if (method === 'GET' && path === '/api/admin/organizations/org-1/services') return okJson([currentService])
+      if (method === 'GET' && path === '/api/admin/services/svc-1/targets') return okJson(currentTargets)
+      if (method === 'GET' && path === '/api/admin/runtime-endpoints') {
+        return okJson([{ id: 'ep-local', displayName: '사내 Ollama', baseUrl: 'http://127.0.0.1:11434/v1', enabled: true }])
+      }
+      if (method === 'GET' && path === '/api/admin/runtime-endpoints/ep-local/deployments') {
+        return okJson([{ id: 'dep-local', displayName: 'Qwen3-Local', providerModelId: 'qwen3:14b', enabled: true }])
+      }
+      if (method === 'GET' && path === '/api/admin/organizations/org-1/external-providers') {
+        return okJson([
+          { id: 'prov-zdr', displayName: 'OpenAI ZDR', zeroRetentionVerified: true, zeroRetentionEvidence: 'Enterprise ZDR DPA', enabled: true },
+          { id: 'prov-raw', displayName: 'Public API', zeroRetentionVerified: false, enabled: true }
+        ])
+      }
+      if (method === 'GET' && path === '/api/admin/external-providers/prov-zdr/models') {
+        return okJson([{ id: 'dep-ext-zdr', displayName: 'GPT-ZDR', providerModelId: 'gpt-4o-zdr', enabled: true }])
+      }
+      if (method === 'GET' && path === '/api/admin/external-providers/prov-raw/models') {
+        return okJson([{ id: 'dep-ext-raw', displayName: 'Public-GPT', providerModelId: 'gpt-4o-mini', enabled: true }])
+      }
+      if (method === 'PATCH' && path === '/api/admin/services/svc-1') {
+        currentService = {
+          ...currentService,
+          guardrailAction: body.guardrailAction,
+          maskerDeploymentId: body.maskerDeploymentId,
+          maskPersonNames: body.maskPersonNames,
+          systemPromptTemplate: body.systemPromptTemplate,
+          promptVersion: body.systemPromptTemplate ? 2 : 1,
+          responseCacheEnabled: body.responseCacheEnabled,
+          responseCacheTtlSeconds: body.responseCacheTtlSeconds
+        }
+        return okJson(currentService)
+      }
+      if (method === 'PATCH' && path.startsWith('/api/admin/services/svc-1/targets/')) {
+        const id = path.split('/').pop()
+        currentTargets = currentTargets.map(t => (t.id === id ? { ...t, priority: body.priority, weight: body.weight } : t))
+        return okJson(currentTargets.find(t => t.id === id))
+      }
+      if (method === 'POST' && path === '/api/admin/services/svc-1/pipeline-preview') {
+        return okJson({
+          originalText: body.sampleText,
+          outboundTextForExternalLlm: '김가명 123456-7890123 , 010-0000-0000 어제 학교를 갔다',
+          simulatedExternalLlmReply: '확인된 내용: 김가명 (123456-7890123, 010-0000-0000) 어제 학교를 갔다',
+          finalUserResponse: '확인된 내용: 홍길동 (965034-3231111, 01012344321) 어제 학교를 갔다',
+          action: body.externalAction,
+          externalAllowed: true,
+          restoreOnReturn: body.externalAction === 'REDACT_RESTORE',
+          maskerUsed: 'EXTERNAL_ZERO_RETENTION:GPT-ZDR',
+          detectedClassifications: ['PII'],
+          redactions: [
+            { category: 'PII_NAME', original: '홍길동', surrogate: '김가명', source: 'REGEX' },
+            { category: 'PII_RESIDENT_NUMBER', original: '965034-3231111', surrogate: '123456-7890123', source: 'REGEX' },
+            { category: 'PII_PHONE', original: '01012344321', surrogate: '010-0000-0000', source: 'REGEX' }
+          ],
+          promptVersion: 2,
+          responseCacheEnabled: true
+        })
+      }
+      throw new Error(`Unexpected fetch: ${method} ${path}`)
+    }
+
+    const { renderer, root, walk, textContent, setSelect, setInput, setCheckbox } = createMemoryDom()
+    const app = renderer.createApp({
+      render: () => h(ServicesPage, { organizationId: 'org-1', auth: { accessToken: 'token' } })
+    })
+    try {
+      app.mount(root)
+      await flush()
+
+      // Unverified external model is excluded from eligible masker <select>
+      const maskerSelect = walk(root, el => el.tag === 'select' && el.props['aria-label'] === '1차 마스킹 AI 워커')[0]
+      assert.ok(maskerSelect)
+      assert.equal(maskerSelect.options.some(opt => opt.value === 'dep-ext-raw'), false)
+      assert.equal(maskerSelect.options.some(opt => opt.value === 'dep-ext-zdr'), true)
+
+      const policySelect = walk(root, el => el.tag === 'select' && el.props['aria-label'] === '가드레일 처리 정책')[0]
+      await setSelect(policySelect, 'REDACT_RESTORE')
+      await setSelect(maskerSelect, 'dep-ext-zdr')
+
+      const promptBox = walk(root, el => el.tag === 'textarea' && !el.props['aria-label'])[0]
+      await setInput(promptBox, '항상 한국어로 3줄 요약하세요.')
+
+      const cacheCheckbox = walk(root, el => el.tag === 'input' && el.props.type === 'checkbox')[0]
+      await setCheckbox(cacheCheckbox, true)
+
+      const savePipelineBtn = walk(root, el => el.tag === 'button' && textContent(el).includes('파이프라인 저장'))[0]
+      savePipelineBtn.props.onClick()
+      await flush()
+
+      const patchSvc = calls.find(c => c.method === 'PATCH' && c.path === '/api/admin/services/svc-1')
+      assert.ok(patchSvc)
+      assert.equal(patchSvc.body.guardrailAction, 'REDACT_RESTORE')
+      assert.equal(patchSvc.body.maskerDeploymentId, 'dep-ext-zdr')
+      assert.equal(patchSvc.body.responseCacheEnabled, true)
+      assert.match(textContent(root), /Prompt v2/)
+
+      const ab8020Btn = walk(root, el => el.tag === 'button' && textContent(el).trim() === '80% : 20%')[0]
+      assert.ok(ab8020Btn)
+      ab8020Btn.props.onClick()
+      await flush()
+
+      const t1Patch = calls.find(c => c.method === 'PATCH' && c.path === '/api/admin/services/svc-1/targets/t-1')
+      const t2Patch = calls.find(c => c.method === 'PATCH' && c.path === '/api/admin/services/svc-1/targets/t-2')
+      assert.equal(t1Patch?.body?.weight, 80)
+      assert.equal(t2Patch?.body?.weight, 20)
+
+      const simBtn = walk(root, el => el.tag === 'button' && textContent(el).includes('가드레일 시뮬레이션 실행'))[0]
+      simBtn.props.onClick()
+      await flush()
+
+      const finalText = textContent(root)
+      assert.match(finalText, /123456-7890123/)
+      assert.match(finalText, /010-0000-0000/)
+      assert.match(finalText, /965034-3231111/)
+      assert.match(finalText, /원본 복원됨/)
+    } finally {
+      app.unmount()
+    }
+  })
+})

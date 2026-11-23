@@ -3,6 +3,8 @@ package com.aiconnect.llmgateway.gateway;
 import com.aiconnect.llmgateway.billing.TokenPricingResolver;
 import com.aiconnect.llmgateway.dataprotection.DataProtectionDecision;
 import com.aiconnect.llmgateway.dataprotection.DataProtectionPolicyService;
+import com.aiconnect.llmgateway.dataprotection.DataProtectionRedactor;
+import com.aiconnect.llmgateway.dataprotection.SseRedactionRestoringInputStream;
 import com.aiconnect.llmgateway.diagnostic.RequestDiagnosticService;
 import com.aiconnect.llmgateway.domain.LlmRequest;
 import com.aiconnect.llmgateway.domain.LlmRequestAttempt;
@@ -72,6 +74,8 @@ public class StreamingChatCompletionGateway {
     private ProviderCapReservationService providerCap;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private SpendQuotaService spendQuota;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private DataProtectionRedactor redactor;
 
     public StreamingChatCompletionGateway(ApiKeyService apiKeyService, LlmServiceRepository services, ProjectServiceAccessRepository access,
                                           RoutingService routing, StreamingLmStudioRuntimeClient runtimeClient,
@@ -211,9 +215,15 @@ public class StreamingChatCompletionGateway {
                     continue;
                 }
                 ObjectNode proxied = request.deepCopy();
+                service.applySystemPromptTemplate(proxied);
                 proxied.put("model", candidate.deployment().getProviderModelId());
                 service.applyTemperaturePolicy(proxied);
                 proxied.withObject("stream_options").put("include_usage", true);
+                DataProtectionRedactor.RedactionVault redactionVault = null;
+                if (protection.redactionRequired() && redactor != null
+                        && (candidate.external() || candidate.externalDataBoundary() || service.getMaskerDeploymentId() != null)) {
+                    redactionVault = redactor.redactRequest(proxied, protection.policy(), service, true);
+                }
                 if (candidate.external()) {
                     service.applyOpenAiRequestPolicy(proxied);
                     candidate.deployment().applyOpenAiDefaults(proxied);
@@ -245,6 +255,9 @@ public class StreamingChatCompletionGateway {
                 if (result.statusCode() >= 200 && result.statusCode() < 300) {
                     try {
                         InputStream prefetched = StreamingResponsePrefetcher.requireFirstByte(result.body());
+                        if (protection.restoreRequired() && redactionVault != null && !redactionVault.isEmpty()) {
+                            prefetched = new SseRedactionRestoringInputStream(prefetched, objectMapper, redactionVault);
+                        }
                         attempt.markResponseStarted(); attempts.save(attempt);
                         transferred = true;
                         settleOrHoldDone = true;

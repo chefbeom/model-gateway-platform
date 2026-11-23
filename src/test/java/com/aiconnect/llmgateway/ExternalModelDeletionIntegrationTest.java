@@ -121,4 +121,41 @@ class ExternalModelDeletionIntegrationTest {
         assertThat(models.findByExternalProviderId(provider.getId())).hasSize(1);
         assertThat(models.findById(model.getId()).orElseThrow().getDisplayName()).isEqualTo("New");
     }
+
+    @Test void allowsMultipleProvidersWithSameBaseUrlAndDistinctDisplayNames() throws Exception {
+        var org = organizations.save(new Organization("Shared URL org " + UUID.randomUUID()));
+        String sharedUrl = "https://shared-openai.test/v1";
+
+        mvc.perform(post("/api/admin/external-providers")
+                        .header("X-Admin-Token", "integration-admin-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"organizationId\":\"" + org.getId() + "\",\"displayName\":\"OpenAI Account A\",\"baseUrl\":\"" + sharedUrl + "\",\"apiKey\":\"sk-account-a\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.baseUrl").value(sharedUrl));
+
+        mvc.perform(post("/api/admin/external-providers")
+                        .header("X-Admin-Token", "integration-admin-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"organizationId\":\"" + org.getId() + "\",\"displayName\":\"OpenAI Account B\",\"baseUrl\":\"" + sharedUrl + "\",\"apiKey\":\"sk-account-b\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.baseUrl").value(sharedUrl));
+
+        mvc.perform(post("/api/admin/external-providers")
+                        .header("X-Admin-Token", "integration-admin-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"organizationId\":\"" + org.getId() + "\",\"displayName\":\"openai account a\",\"baseUrl\":\"" + sharedUrl + "\",\"apiKey\":\"sk-account-c\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("EXTERNAL_PROVIDER_NAME_EXISTS"));
+
+        var third = providers.save(new ExternalProvider(org.getId(), ExternalProviderType.OPENAI,
+                "OpenAI Account C", "https://other-provider.test/v1", cipher.encrypt("sk-old-c")));
+        mvc.perform(patch("/api/admin/external-providers/{providerId}", third.getId())
+                        .header("X-Admin-Token", "integration-admin-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"displayName\":\"OpenAI Account C\",\"baseUrl\":\"" + sharedUrl + "\",\"apiKey\":\"sk-new-c\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.baseUrl").value(sharedUrl));
+
+        assertThat(providers.findByOrganizationIdOrderByDisplayNameAsc(org.getId())).hasSize(3);
+    }
 }

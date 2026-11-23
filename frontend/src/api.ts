@@ -830,3 +830,60 @@ export function createAccountInvitation(
 export function normalizeTotpDigits(value: string): string {
   return value.replace(/\D/g, '').slice(0, 6)
 }
+
+export type DataProtectionAction = 'ALLOW' | 'REDACT_RESTORE' | 'REDACT' | 'LOCAL_ONLY' | 'BLOCK'
+
+export type MaskerDeploymentOption = {
+  deploymentId: string
+  displayName: string
+  providerModelId: string
+  sourceType: 'LOCAL_RUNTIME' | 'EXTERNAL_ZERO_RETENTION' | 'EXTERNAL_UNVERIFIED' | string
+  sourceName: string
+  eligible: boolean
+  trustReason: string
+}
+
+export type RedactionEntry = {
+  category: string
+  original: string
+  surrogate: string
+  source: string
+}
+
+export type PipelinePreviewRequest = {
+  sampleText: string
+  externalAction?: DataProtectionAction
+  maskPersonNames?: boolean
+  maskerDeploymentId?: string | null
+  invokeMaskerLlm?: boolean
+}
+
+export type PipelinePreviewResponse = {
+  originalText: string
+  outboundTextForExternalLlm: string
+  simulatedExternalLlmReply: string
+  finalUserResponse: string
+  action: DataProtectionAction | string
+  externalAllowed: boolean
+  restoreOnReturn: boolean
+  maskerUsed: string
+  detectedClassifications: string[]
+  redactions: RedactionEntry[]
+  promptVersion: number
+  responseCacheEnabled: boolean
+}
+
+export function listMaskerDeployments(organizationId: string, auth: AdminAuth): Promise<MaskerDeploymentOption[]> {
+  return adminFetch<MaskerDeploymentOption[]>(`/api/admin/organizations/${organizationId}/masker-deployments`, auth)
+}
+
+export function previewServicePipeline(
+  serviceId: string,
+  payload: PipelinePreviewRequest,
+  auth: AdminAuth
+): Promise<PipelinePreviewResponse> {
+  return adminFetch<PipelinePreviewResponse>(`/api/admin/services/${serviceId}/pipeline-preview`, auth, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}

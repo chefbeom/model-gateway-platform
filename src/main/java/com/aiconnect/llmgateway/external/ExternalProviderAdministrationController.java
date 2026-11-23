@@ -24,10 +24,10 @@ public class ExternalProviderAdministrationController {
     public List<ExternalProviderAdministrationService.ProviderView> list(@PathVariable UUID organizationId) { return service.list(organizationId); }
 
     @PostMapping("/external-providers")
-    public ExternalProviderAdministrationService.ProviderView create(@Valid @RequestBody CreateProvider request) { return service.create(request.organizationId(), request.displayName(), request.baseUrl(), request.apiKey()); }
+    public ExternalProviderAdministrationService.ProviderView create(@Valid @RequestBody CreateProvider request) { return service.create(request.organizationId(), request.displayName(), request.baseUrl(), request.apiKey(), request.zeroRetentionVerified(), request.zeroRetentionEvidence()); }
 
     @PatchMapping("/external-providers/{providerId}")
-    public ExternalProviderAdministrationService.ProviderView update(@PathVariable UUID providerId, @RequestBody UpdateProvider request) { return service.update(providerId, request.displayName(), request.baseUrl(), request.apiKey(), request.enabled()); }
+    public ExternalProviderAdministrationService.ProviderView update(@PathVariable UUID providerId, @Valid @RequestBody UpdateProvider request) { return service.update(providerId, request.displayName(), request.baseUrl(), request.apiKey(), request.enabled(), request.zeroRetentionVerified(), request.zeroRetentionEvidence()); }
 
     @GetMapping("/external-providers/{providerId}/deletion-preview")
     public ExternalProviderAdministrationService.ProviderDeletePreview deletionPreview(@PathVariable UUID providerId) { return service.deletionPreview(providerId); }
@@ -89,8 +89,18 @@ public class ExternalProviderAdministrationController {
     }
 
     public record CreateProvider(@NotNull UUID organizationId, @NotBlank @Size(max = 160) String displayName,
-                                 @Size(max = 500) String baseUrl, @NotBlank @Size(max = 500) String apiKey) { }
-    public record UpdateProvider(String displayName, String baseUrl, String apiKey, Boolean enabled) { }
+                                 @Size(max = 500) String baseUrl, @NotBlank @Size(max = 500) String apiKey,
+                                 Boolean zeroRetentionVerified, @Size(max = 500) String zeroRetentionEvidence) {
+        public CreateProvider(UUID organizationId, String displayName, String baseUrl, String apiKey) {
+            this(organizationId, displayName, baseUrl, apiKey, null, null);
+        }
+    }
+    public record UpdateProvider(String displayName, String baseUrl, String apiKey, Boolean enabled,
+                                 Boolean zeroRetentionVerified, @Size(max = 500) String zeroRetentionEvidence) {
+        public UpdateProvider(String displayName, String baseUrl, String apiKey, Boolean enabled) {
+            this(displayName, baseUrl, apiKey, enabled, null, null);
+        }
+    }
     public record AddModel(@NotBlank @Size(max = 500) String providerModelId, @NotBlank @Size(max = 200) String displayName,
                            String compatibilityKey, @Positive Integer contextLength, @Positive Integer maxConcurrency,
                            String capabilitiesJson, @PositiveOrZero BigDecimal inputPricePerMillion,

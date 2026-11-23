@@ -67,28 +67,40 @@ public class ExternalProviderAdministrationService {
 
     @Transactional
     public ProviderView create(UUID organizationId, String displayName, String baseUrl, String apiKey) {
+        return create(organizationId, displayName, baseUrl, apiKey, null, null);
+    }
+
+    @Transactional
+    public ProviderView create(UUID organizationId, String displayName, String baseUrl, String apiKey,
+                               Boolean zeroRetentionVerified, String zeroRetentionEvidence) {
         requireOrganization(organizationId);
         String name = requireText(displayName, "EXTERNAL_PROVIDER_NAME_REQUIRED", "Provider display name is required.");
         String normalizedUrl = normalizeBaseUrl(baseUrl);
         if (providers.existsByOrganizationIdAndDisplayNameIgnoreCase(organizationId, name)) {
             throw new ApiException(HttpStatus.CONFLICT, "EXTERNAL_PROVIDER_NAME_EXISTS", "An external provider with this name already exists.");
         }
-        if (providers.existsByOrganizationIdAndProviderTypeAndBaseUrl(organizationId, ExternalProviderType.OPENAI, normalizedUrl)) {
-            throw new ApiException(HttpStatus.CONFLICT, "EXTERNAL_PROVIDER_URL_EXISTS", "This provider URL is already registered in the organization.");
-        }
         String validatedKey = requireText(apiKey, "EXTERNAL_PROVIDER_KEY_REQUIRED", "An API key is required.");
         if (hasControlChars(validatedKey)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_PROVIDER_API_KEY", "API key contains invalid control characters.");
         }
-        ExternalProvider provider = providers.save(new ExternalProvider(organizationId, ExternalProviderType.OPENAI,
-                name, normalizedUrl, cipher.encrypt(validatedKey)));
+        ExternalProvider created = new ExternalProvider(organizationId, ExternalProviderType.OPENAI,
+                name, normalizedUrl, cipher.encrypt(validatedKey));
+        created.configureZeroRetention(zeroRetentionVerified, zeroRetentionEvidence);
+        ExternalProvider provider = providers.save(created);
         audit.record(organizationId, CurrentActor.userIdOrNull(), "EXTERNAL_PROVIDER_CREATED", "EXTERNAL_PROVIDER",
-                provider.getId(), Map.of("displayName", provider.getDisplayName(), "providerType", provider.getProviderType().name()));
+                provider.getId(), Map.of("displayName", provider.getDisplayName(), "providerType", provider.getProviderType().name(),
+                        "zeroRetentionVerified", provider.isZeroRetentionVerified()));
         return ProviderView.from(provider);
     }
 
     @Transactional
     public ProviderView update(UUID providerId, String displayName, String baseUrl, String apiKey, Boolean enabled) {
+        return update(providerId, displayName, baseUrl, apiKey, enabled, null, null);
+    }
+
+    @Transactional
+    public ProviderView update(UUID providerId, String displayName, String baseUrl, String apiKey, Boolean enabled,
+                               Boolean zeroRetentionVerified, String zeroRetentionEvidence) {
         ExternalProvider provider = requireProvider(providerId);
         String nextName = displayName == null || displayName.isBlank() ? provider.getDisplayName() : displayName.trim();
         String nextUrl = baseUrl == null || baseUrl.isBlank() ? provider.getBaseUrl() : normalizeBaseUrl(baseUrl);
@@ -107,15 +119,16 @@ public class ExternalProviderAdministrationService {
         }
         boolean duplicate = providers.findByOrganizationIdOrderByDisplayNameAsc(provider.getOrganizationId()).stream()
                 .filter(item -> !item.getId().equals(providerId))
-                .anyMatch(item -> item.getDisplayName().equalsIgnoreCase(nextName)
-                        || (item.getProviderType() == provider.getProviderType() && item.getBaseUrl().equalsIgnoreCase(nextUrl)));
+                .anyMatch(item -> item.getDisplayName().equalsIgnoreCase(nextName));
         if (duplicate) throw new ApiException(HttpStatus.CONFLICT, "EXTERNAL_PROVIDER_DUPLICATE",
-                "Another external provider with the same name or URL already exists in this organization.");
+                "Another external provider with the same name already exists in this organization.");
         boolean baseUrlChanged = !provider.getBaseUrl().equals(nextUrl);
         provider.configure(nextName, nextUrl, replaceKey ? cipher.encrypt(apiKey) : null, replaceKey, enabled);
+        provider.configureZeroRetention(zeroRetentionVerified, zeroRetentionEvidence);
         providers.save(provider);
         audit.record(provider.getOrganizationId(), CurrentActor.userIdOrNull(), "EXTERNAL_PROVIDER_UPDATED", "EXTERNAL_PROVIDER",
-                provider.getId(), Map.of("displayName", provider.getDisplayName(), "enabled", provider.isEnabled(), "baseUrlChanged", baseUrlChanged));
+                provider.getId(), Map.of("displayName", provider.getDisplayName(), "enabled", provider.isEnabled(),
+                        "baseUrlChanged", baseUrlChanged, "zeroRetentionVerified", provider.isZeroRetentionVerified()));
         return ProviderView.from(provider);
     }
 
@@ -465,8 +478,19 @@ public class ExternalProviderAdministrationService {
     private void requireOrganization(UUID id) { if (!organizations.existsById(id)) throw new ApiException(HttpStatus.NOT_FOUND, "ORGANIZATION_NOT_FOUND", "The organization does not exist."); }
 
     public record ProviderView(UUID id, UUID organizationId, String providerType, String displayName, String baseUrl,
-                               boolean enabled, String healthStatus, Instant lastCheckedAt, Instant lastSuccessAt, boolean apiKeyConfigured) {
-        static ProviderView from(ExternalProvider provider) { return new ProviderView(provider.getId(), provider.getOrganizationId(), provider.getProviderType().name(), provider.getDisplayName(), provider.getBaseUrl(), provider.isEnabled(), provider.getHealthStatus().name(), provider.getLastCheckedAt(), provider.getLastSuccessAt(), true); }
+                               boolean enabled, String healthStatus, Instant lastCheckedAt, Instant lastSuccessAt, boolean apiKeyConfigured,
+                               boolean zeroRetentionVerified, String zeroRetentionEvidence, Instant zeroRetentionVerifiedAt) {
+        public ProviderView(UUID id, UUID organizationId, String providerType, String displayName, String baseUrl,
+                            boolean enabled, String healthStatus, Instant lastCheckedAt, Instant lastSuccessAt, boolean apiKeyConfigured) {
+            this(id, organizationId, providerType, displayName, baseUrl, enabled, healthStatus, lastCheckedAt, lastSuccessAt,
+                    apiKeyConfigured, false, null, null);
+        }
+        static ProviderView from(ExternalProvider provider) {
+            return new ProviderView(provider.getId(), provider.getOrganizationId(), provider.getProviderType().name(),
+                    provider.getDisplayName(), provider.getBaseUrl(), provider.isEnabled(), provider.getHealthStatus().name(),
+                    provider.getLastCheckedAt(), provider.getLastSuccessAt(), true,
+                    provider.isZeroRetentionVerified(), provider.getZeroRetentionEvidence(), provider.getZeroRetentionVerifiedAt());
+        }
     }
     public record ProviderDeletePreview(UUID providerId, String displayName, UUID organizationId, boolean enabled,
                                         long modelCount, long targetCount, long projectAccessCount, long requestHistoryCount, String behavior) { }

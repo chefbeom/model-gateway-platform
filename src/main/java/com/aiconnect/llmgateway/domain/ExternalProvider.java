@@ -14,6 +14,9 @@ public class ExternalProvider {
     @Column(nullable = false, length = 500) private String baseUrl;
     @Column(nullable = false, columnDefinition = "text") private String encryptedApiKey;
     @Column(nullable = false) private boolean enabled = true;
+    @Column(name = "zero_retention_verified", nullable = false) private boolean zeroRetentionVerified;
+    @Column(name = "zero_retention_evidence", length = 500) private String zeroRetentionEvidence;
+    @Column(name = "zero_retention_verified_at") private Instant zeroRetentionVerifiedAt;
     @Enumerated(EnumType.STRING) @Column(nullable = false, length = 24) private HealthStatus healthStatus = HealthStatus.UNKNOWN;
     private Instant lastCheckedAt;
     private Instant lastSuccessAt;
@@ -39,6 +42,16 @@ public class ExternalProvider {
         if (enabled != null) this.enabled = enabled;
     }
 
+    public void configureZeroRetention(Boolean verified, String evidence) {
+        if (verified != null) {
+            this.zeroRetentionVerified = verified;
+            this.zeroRetentionEvidence = verified && evidence != null && !evidence.isBlank() ? evidence.trim() : null;
+            this.zeroRetentionVerifiedAt = verified ? Instant.now() : null;
+        } else if (evidence != null && this.zeroRetentionVerified) {
+            this.zeroRetentionEvidence = evidence.isBlank() ? null : evidence.trim();
+        }
+    }
+
     public void recordHealth(boolean healthy) {
         lastCheckedAt = Instant.now();
         if (healthy) {
@@ -60,6 +73,9 @@ public class ExternalProvider {
     public String getBaseUrl() { return baseUrl; }
     public String getEncryptedApiKey() { return encryptedApiKey; }
     public boolean isEnabled() { return enabled; }
+    public boolean isZeroRetentionVerified() { return zeroRetentionVerified; }
+    public String getZeroRetentionEvidence() { return zeroRetentionEvidence; }
+    public Instant getZeroRetentionVerifiedAt() { return zeroRetentionVerifiedAt; }
     public HealthStatus getHealthStatus() { return healthStatus; }
     public Instant getLastCheckedAt() { return lastCheckedAt; }
     public Instant getLastSuccessAt() { return lastSuccessAt; }

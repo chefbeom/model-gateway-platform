@@ -168,4 +168,82 @@ class DataProtectionPolicyServiceTest {
         assertThat(decision.classificationSummary()).isEqualTo("PII");
         assertThat(decision.reasonCodes()).contains("DATA_DETECTED_PII", "DATA_PROTECTION_EXTERNAL_BLOCKED");
     }
+
+    @Test
+    void redactAndRedactRestoreAllowExternalForTextPiiAndFailClosedToLocalOnlyOnUnknownMedia() throws Exception {
+        DataProtectionPolicyRepository policies = org.mockito.Mockito.mock(DataProtectionPolicyRepository.class);
+        DataProtectionPolicyService service = new DataProtectionPolicyService(
+                policies,
+                org.mockito.Mockito.mock(com.aiconnect.llmgateway.repository.ApiKeyRepository.class),
+                new DataProtectionScanner(new ObjectMapper()),
+                new ObjectMapper()
+        );
+
+        UUID organizationId = UUID.randomUUID();
+        UUID projectId = UUID.randomUUID();
+        UUID keyId = UUID.randomUUID();
+        UUID serviceId = UUID.randomUUID();
+
+        Project project = new Project(organizationId, "Guardrail Project");
+        ReflectionTestUtils.setField(project, "id", projectId);
+        ApiKey key = new ApiKey(projectId, "test", "sk_test", "hash", null);
+        ReflectionTestUtils.setField(key, "id", keyId);
+        LlmService logicalService = new LlmService(organizationId, "text-pro", "Text Pro",
+                FailoverPolicy.COMPATIBLE, RetryPolicy.SAFE, false, "[]", BigDecimal.ZERO, BigDecimal.ZERO);
+        ReflectionTestUtils.setField(logicalService, "id", serviceId);
+
+        DataProtectionPolicy redactRestorePolicy = org.mockito.Mockito.mock(DataProtectionPolicy.class);
+        org.mockito.Mockito.when(redactRestorePolicy.getScopeType()).thenReturn(DataProtectionScopeType.SERVICE);
+        org.mockito.Mockito.when(redactRestorePolicy.getMode()).thenReturn(DataProtectionMode.ENFORCE);
+        org.mockito.Mockito.when(redactRestorePolicy.getLevel()).thenReturn(DataProtectionLevel.BALANCED);
+        org.mockito.Mockito.when(redactRestorePolicy.getExternalAction()).thenReturn(DataProtectionAction.REDACT_RESTORE);
+        org.mockito.Mockito.when(redactRestorePolicy.isAllowExternalFailover()).thenReturn(true);
+        org.mockito.Mockito.when(redactRestorePolicy.isDetectPii()).thenReturn(true);
+        org.mockito.Mockito.when(redactRestorePolicy.isDetectFinancial()).thenReturn(true);
+        org.mockito.Mockito.when(redactRestorePolicy.isDetectSecrets()).thenReturn(true);
+        org.mockito.Mockito.when(redactRestorePolicy.isDetectConfidential()).thenReturn(false);
+        org.mockito.Mockito.when(redactRestorePolicy.isDetectMedia()).thenReturn(true);
+        org.mockito.Mockito.when(redactRestorePolicy.getCustomPatternsJson()).thenReturn("[]");
+
+        org.mockito.Mockito.when(policies.findByScopeTypeAndOrganizationIdAndScopeId(
+                DataProtectionScopeType.SERVICE, organizationId, serviceId))
+                .thenReturn(java.util.Optional.of(redactRestorePolicy));
+
+        var piiTextRequest = new ObjectMapper().readTree(
+                "{\"messages\":[{\"role\":\"user\",\"content\":\"홍길동 965034-3231111 , 01012344321 어제 학교를 갔다\"}]}");
+
+        DataProtectionDecision restoreDecision = service.inspect(project, key, logicalService, piiTextRequest, null);
+        assertThat(restoreDecision.blocked()).isFalse();
+        assertThat(restoreDecision.externalAllowed()).isTrue();
+        assertThat(restoreDecision.redactionRequired()).isTrue();
+        assertThat(restoreDecision.restoreRequired()).isTrue();
+
+        DataProtectionPolicy redactOnlyPolicy = org.mockito.Mockito.mock(DataProtectionPolicy.class);
+        org.mockito.Mockito.when(redactOnlyPolicy.getScopeType()).thenReturn(DataProtectionScopeType.SERVICE);
+        org.mockito.Mockito.when(redactOnlyPolicy.getMode()).thenReturn(DataProtectionMode.ENFORCE);
+        org.mockito.Mockito.when(redactOnlyPolicy.getLevel()).thenReturn(DataProtectionLevel.BALANCED);
+        org.mockito.Mockito.when(redactOnlyPolicy.getExternalAction()).thenReturn(DataProtectionAction.REDACT);
+        org.mockito.Mockito.when(redactOnlyPolicy.isAllowExternalFailover()).thenReturn(true);
+        org.mockito.Mockito.when(redactOnlyPolicy.isDetectPii()).thenReturn(true);
+        org.mockito.Mockito.when(redactOnlyPolicy.isDetectFinancial()).thenReturn(true);
+        org.mockito.Mockito.when(redactOnlyPolicy.isDetectSecrets()).thenReturn(true);
+        org.mockito.Mockito.when(redactOnlyPolicy.isDetectConfidential()).thenReturn(false);
+        org.mockito.Mockito.when(redactOnlyPolicy.isDetectMedia()).thenReturn(true);
+        org.mockito.Mockito.when(redactOnlyPolicy.getCustomPatternsJson()).thenReturn("[]");
+        org.mockito.Mockito.when(policies.findByScopeTypeAndOrganizationIdAndScopeId(
+                DataProtectionScopeType.SERVICE, organizationId, serviceId))
+                .thenReturn(java.util.Optional.of(redactOnlyPolicy));
+
+        DataProtectionDecision redactDecision = service.inspect(project, key, logicalService, piiTextRequest, null);
+        assertThat(redactDecision.blocked()).isFalse();
+        assertThat(redactDecision.externalAllowed()).isTrue();
+        assertThat(redactDecision.redactionRequired()).isTrue();
+        assertThat(redactDecision.restoreRequired()).isFalse();
+
+        var mediaRequest = new ObjectMapper().readTree(
+                "{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,AAA\"}}]}]}");
+        DataProtectionDecision mediaDecision = service.inspect(project, key, logicalService, mediaRequest, null);
+        assertThat(mediaDecision.externalAllowed()).isFalse();
+        assertThat(mediaDecision.action()).isEqualTo(DataProtectionAction.LOCAL_ONLY);
+    }
 }

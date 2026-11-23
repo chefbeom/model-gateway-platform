@@ -24,15 +24,29 @@ public class WeightedTargetSelector {
         return ordered;
     }
     private List<ResolvedTarget> orderPriority(List<ResolvedTarget> group) {
-        double minimumLoad = group.stream().mapToDouble(this::load).min().orElse(0);
-        List<ResolvedTarget> leastLoaded = group.stream().filter(candidate -> Math.abs(load(candidate) - minimumLoad) < 0.000001d).toList();
-        ResolvedTarget preferred = leastLoaded.stream().min(Comparator.comparingDouble(this::weightedSelectionScore)
-                .thenComparing(candidate -> candidate.deployment().getId())).orElseThrow();
+        Map<ResolvedTarget, Double> loadByCandidate = new IdentityHashMap<>(group.size());
+        double minimumLoad = Double.POSITIVE_INFINITY;
+        for (ResolvedTarget candidate : group) {
+            double currentLoad = load(candidate);
+            loadByCandidate.put(candidate, currentLoad);
+            if (currentLoad < minimumLoad) minimumLoad = currentLoad;
+        }
+        final double targetMinimum = minimumLoad;
+        List<ResolvedTarget> leastLoaded = group.stream()
+                .filter(candidate -> Math.abs(loadByCandidate.get(candidate) - targetMinimum) < 0.000001d)
+                .toList();
+        ResolvedTarget preferred = leastLoaded.stream()
+                .min(Comparator.comparingDouble(this::weightedSelectionScore)
+                        .thenComparing(candidate -> candidate.deployment().getId()))
+                .orElse(group.get(0));
         selections.increment(preferred.target().getId());
-        List<ResolvedTarget> ordered = new ArrayList<>(); ordered.add(preferred);
+        List<ResolvedTarget> ordered = new ArrayList<>(group.size());
+        ordered.add(preferred);
         group.stream().filter(candidate -> candidate != preferred)
-                .sorted(Comparator.comparingDouble(this::load).thenComparing(Comparator.comparingInt((ResolvedTarget candidate) -> candidate.target().getWeight()).reversed())
-                        .thenComparing(candidate -> candidate.deployment().getId())).forEach(ordered::add);
+                .sorted(Comparator.comparingDouble((ResolvedTarget candidate) -> loadByCandidate.get(candidate))
+                        .thenComparing(Comparator.comparingInt((ResolvedTarget candidate) -> candidate.target().getWeight()).reversed())
+                        .thenComparing(candidate -> candidate.deployment().getId()))
+                .forEach(ordered::add);
         return ordered;
     }
     private double load(ResolvedTarget candidate) { return (double) activeRequests.count(candidate.deployment().getId()) / candidate.maxConcurrency(); }
