@@ -1212,6 +1212,8 @@ test('23. applyTemplate builds the three starter workflows', () => {
   assert.equal(lfc.service.dataBoundaryPolicy, 'EXTERNAL_ALLOWED')
   assert.deepEqual(lfc.targets.map((t) => [t.deploymentId, t.priority]).sort(), [['a', 1], ['x', 2]])
   assert.ok(node(lf, 'router'))
+  assert.equal(lfc.service.failoverPolicy, 'COMPATIBLE')
+  assert.equal(compile(run(empty, { type: 'applyTemplate', template: 'basic', projectIds: [], deploymentIds: ['a', 'x'] }, s), s).service.failoverPolicy, 'STRICT')
   assert.equal(analyzeWorkflow(lf, s).head, 'guardrail')
   assert.equal(presetOf(node(lf, 'guardrail').props), 'mask-restore')
   assert.equal(applyCommand(empty, { type: 'applyTemplate', template: 'local-first', projectIds: [], deploymentIds: ['a'] }, s).error, '로컬 LLM과 외부 LLM을 하나 이상씩 고르세요.')

@@ -935,5 +935,10 @@ function applyTemplateCommand(
     const error = run({ type: 'addNode', nodeType: 'llm', refId: deploymentId })
     if (error) return fail(error)
   }
+  if (command.template === 'local-first') {
+    // The external model only works as a fallback when failover is not STRICT (STRICT excludes targets with a different compatibility key).
+    const error = run({ type: 'updateProps', nodeId: 'router', patch: { failoverPolicy: 'COMPATIBLE' } })
+    if (error) return fail(error)
+  }
   return ok(autoLayout(g, snapshot), true, selectNode('start'))
 }
