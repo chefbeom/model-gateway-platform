@@ -1,3 +1,4 @@
+import { branchPromptNodeId, targetKeyOf } from './catalog'
 import type {
   FlowConfigState,
   FlowGraph,
@@ -38,7 +39,7 @@ export function sameValue(a: unknown, b: unknown): boolean {
   return x === y
 }
 
-/** Field-aware comparison: capabilities and prompts are compared in their normalized form. */
+/** Field-aware comparison: capabilities and prompts (service and target) are compared in their normalized form. */
 export function sameFieldValue(field: string, a: unknown, b: unknown): boolean {
   if (field === 'requiredCapabilitiesJson') {
     return sameValue(typeof a === 'string' ? canonicalCapabilities(a) : a, typeof b === 'string' ? canonicalCapabilities(b) : b)
@@ -64,75 +65,72 @@ function nullableNumber(value: FlowPropValue | undefined): number | null {
   return Number(value)
 }
 
-function propsOf(graph: FlowGraph, id: string): Record<string, FlowPropValue> {
-  const node = graph.nodes.find((n) => n.id === id)
-  return node ? node.props : {}
-}
-
+/**
+ * §7.3: compiles the graph into the server configuration. Only the existence and ids of nodes matter (never
+ * coordinates, trunk order or connectivity): a missing optional node means the server default.
+ */
 export function compile(graph: FlowGraph, snapshot: ServiceFlowSnapshot): FlowConfigState {
   const base = snapshot.config
-  const s = propsOf(graph, 'service')
-  const g = propsOf(graph, 'guardrail')
-  const p = propsOf(graph, 'prompt')
-  const c = propsOf(graph, 'cache')
-  const r = propsOf(graph, 'router')
-
   const nodesById = new Map<string, FlowNode>(graph.nodes.map((n) => [n.id, n]))
+  const S = nodesById.get('start')?.props ?? {}
+  const G = nodesById.get('guardrail')
+  const M = nodesById.get('masker')
+  const P = nodesById.get('prompt')
+  const Q = nodesById.get('params')
+  const C = nodesById.get('cache')
+  const R = nodesById.get('router')
   const existingService = (graph.serviceId ?? snapshot.serviceId) !== null
+  const maskerLinked = graph.edges.some((e) => e.kind === 'masker' && e.from.nodeId === 'masker' && e.to.nodeId === 'guardrail')
+  const maskerId = M ? M.props.deploymentId : null
+  const g = G ? G.props : {}
+  const q = Q ? Q.props : {}
+  const c = C ? C.props : {}
+  const r = R ? R.props : {}
 
-  const temperaturePolicy = text(p.temperaturePolicy, base.service.temperaturePolicy) as ServiceState['temperaturePolicy']
-  const maskerNode = nodesById.get('masker')
-  const maskerConnected = graph.edges.some((e) => e.kind === 'masker' && e.from.nodeId === 'masker' && e.to.nodeId === 'guardrail')
-  const maskerId = maskerNode ? maskerNode.props.deploymentId : null
-  const maskerDeploymentId = maskerNode && maskerConnected && typeof maskerId === 'string' && maskerId !== '' ? maskerId : null
-
+  const temperaturePolicy = (Q ? text(q.temperaturePolicy, 'REQUEST') : 'REQUEST') as ServiceState['temperaturePolicy']
   const service: ServiceState = {
-    serviceKey: existingService ? base.service.serviceKey : text(s.serviceKey, '').trim(),
-    displayName: text(s.displayName, base.service.displayName),
-    enabled: bool(s.enabled, base.service.enabled),
-    dataBoundaryPolicy: text(s.dataBoundaryPolicy, base.service.dataBoundaryPolicy) as ServiceState['dataBoundaryPolicy'],
-    requiredCapabilitiesJson: canonicalCapabilities(text(s.requiredCapabilitiesJson, base.service.requiredCapabilitiesJson)),
-    currency: text(s.currency, base.service.currency) as ServiceState['currency'],
-    inputPricePerMillion: numeric(s.inputPricePerMillion, base.service.inputPricePerMillion),
-    outputPricePerMillion: numeric(s.outputPricePerMillion, base.service.outputPricePerMillion),
-    guardrailAction: text(g.guardrailAction, base.service.guardrailAction) as ServiceState['guardrailAction'],
-    maskerDeploymentId,
-    maskPersonNames: bool(g.maskPersonNames, base.service.maskPersonNames),
-    systemPromptTemplate: normalizePrompt(p.systemPromptTemplate === undefined ? base.service.systemPromptTemplate : (p.systemPromptTemplate as string | null)),
+    serviceKey: existingService ? base.service.serviceKey : text(S.serviceKey, '').trim(),
+    displayName: text(S.displayName, base.service.displayName),
+    enabled: bool(S.enabled, base.service.enabled),
+    dataBoundaryPolicy: (G ? text(g.dataBoundaryPolicy, 'EXTERNAL_ALLOWED') : 'EXTERNAL_ALLOWED') as ServiceState['dataBoundaryPolicy'],
+    requiredCapabilitiesJson: canonicalCapabilities(text(S.requiredCapabilitiesJson, base.service.requiredCapabilitiesJson)),
+    currency: text(S.currency, base.service.currency) as ServiceState['currency'],
+    inputPricePerMillion: numeric(S.inputPricePerMillion, base.service.inputPricePerMillion),
+    outputPricePerMillion: numeric(S.outputPricePerMillion, base.service.outputPricePerMillion),
+    guardrailAction: (G ? text(g.guardrailAction, 'ALLOW') : 'ALLOW') as ServiceState['guardrailAction'],
+    maskerDeploymentId: G && M && maskerLinked && typeof maskerId === 'string' && maskerId !== '' ? maskerId : null,
+    maskPersonNames: G ? bool(g.maskPersonNames, base.service.maskPersonNames) : base.service.maskPersonNames,
+    systemPromptTemplate: P ? normalizePrompt(P.props.systemPromptTemplate as string | null | undefined) : null,
     temperaturePolicy,
-    temperatureValue: temperaturePolicy === 'FIXED' ? nullableNumber(p.temperatureValue) : null,
-    reasoningEffort: text(p.reasoningEffort, base.service.reasoningEffort) as ServiceState['reasoningEffort'],
-    openAiFastMode: bool(p.openAiFastMode, base.service.openAiFastMode),
-    responseCacheEnabled: bool(c.responseCacheEnabled, base.service.responseCacheEnabled),
-    responseCacheTtlSeconds: numeric(c.responseCacheTtlSeconds, base.service.responseCacheTtlSeconds),
-    failoverPolicy: text(r.failoverPolicy, base.service.failoverPolicy) as ServiceState['failoverPolicy'],
-    retryPolicy: text(r.retryPolicy, base.service.retryPolicy) as ServiceState['retryPolicy'],
-    allowDegraded: bool(r.allowDegraded, base.service.allowDegraded),
+    temperatureValue: Q && temperaturePolicy === 'FIXED' ? nullableNumber(q.temperatureValue) : null,
+    reasoningEffort: (Q ? text(q.reasoningEffort, 'REQUEST') : 'REQUEST') as ServiceState['reasoningEffort'],
+    openAiFastMode: Q ? bool(q.openAiFastMode, false) : false,
+    responseCacheEnabled: C !== undefined,
+    responseCacheTtlSeconds: C ? numeric(c.responseCacheTtlSeconds, base.service.responseCacheTtlSeconds) : base.service.responseCacheTtlSeconds,
+    failoverPolicy: (R ? text(r.failoverPolicy, 'STRICT') : 'STRICT') as ServiceState['failoverPolicy'],
+    retryPolicy: (R ? text(r.retryPolicy, 'SAFE') : 'SAFE') as ServiceState['retryPolicy'],
+    allowDegraded: R ? bool(r.allowDegraded, false) : false,
   }
 
-  const scheduling: SchedulingState = {
-    mode: text(r.schedulingMode, base.scheduling.mode) as SchedulingState['mode'],
-    localWaitMs: numeric(r.localWaitMs, base.scheduling.localWaitMs),
-    maxWaitMs: numeric(r.maxWaitMs, base.scheduling.maxWaitMs),
-    maxQueuedRequests: numeric(r.maxQueuedRequests, base.scheduling.maxQueuedRequests),
-    maxQueuedBytes: numeric(r.maxQueuedBytes, base.scheduling.maxQueuedBytes),
-    maxQueuedPerKey: numeric(r.maxQueuedPerKey, base.scheduling.maxQueuedPerKey),
-  }
+  const scheduling: SchedulingState = R
+    ? {
+        mode: text(r.schedulingMode, 'IMMEDIATE') as SchedulingState['mode'],
+        localWaitMs: numeric(r.localWaitMs, base.scheduling.localWaitMs),
+        maxWaitMs: numeric(r.maxWaitMs, base.scheduling.maxWaitMs),
+        maxQueuedRequests: numeric(r.maxQueuedRequests, base.scheduling.maxQueuedRequests),
+        maxQueuedBytes: numeric(r.maxQueuedBytes, base.scheduling.maxQueuedBytes),
+        maxQueuedPerKey: numeric(r.maxQueuedPerKey, base.scheduling.maxQueuedPerKey),
+      }
+    : { ...base.scheduling, mode: 'IMMEDIATE' }
 
-  const bindingByTarget = new Map<string, string>()
-  for (const e of [...graph.edges].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))) {
-    if (e.kind === 'binding' && !bindingByTarget.has(e.from.nodeId)) bindingByTarget.set(e.from.nodeId, e.to.nodeId)
-  }
   const targets: TargetState[] = []
   for (const node of graph.nodes) {
-    if (node.type !== 'target') continue
-    const depNodeId = bindingByTarget.get(node.id)
-    if (!depNodeId) continue
-    const dep = nodesById.get(depNodeId)
-    const deploymentId = dep ? (dep.refId ?? depNodeId.slice('deployment:'.length)) : depNodeId.slice('deployment:'.length)
+    if (node.type !== 'llm') continue
+    const deploymentId = node.refId ?? (node.id.startsWith('deployment:') ? node.id.slice('deployment:'.length) : node.id)
+    const prompt = nodesById.get(branchPromptNodeId(deploymentId))
     targets.push({
-      key: node.id,
-      id: node.refId,
+      key: targetKeyOf(node),
+      id: node.targetId,
       deploymentId,
       priority: numeric(node.props.priority, 1),
       weight: numeric(node.props.weight, 100),
@@ -140,14 +138,15 @@ export function compile(graph: FlowGraph, snapshot: ServiceFlowSnapshot): FlowCo
       enabled: bool(node.props.enabled, true),
       maxConcurrencyOverride: nullableNumber(node.props.maxConcurrencyOverride),
       followModelChanges: bool(node.props.followModelChanges, true),
+      systemPromptTemplate: prompt ? normalizePrompt(prompt.props.systemPromptTemplate as string | null | undefined) : null,
     })
   }
   targets.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
 
   const access = new Set<string>()
   for (const e of graph.edges) {
-    if (e.kind !== 'access' || e.to.nodeId !== 'service') continue
-    const project = nodesById.get(e.from.nodeId)
+    if (e.kind !== 'entry' || e.from.nodeId !== 'start') continue
+    const project = nodesById.get(e.to.nodeId)
     if (project && project.type === 'project' && project.refId) access.add(project.refId)
   }
 

@@ -1,82 +1,72 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { deploymentNodeId, projectNodeId, toneOf } from './catalog'
-import type { AddableNodeType, DeploymentInfo, FlowCommand, FlowGraph, HealthTone, ProjectInfo, ServiceFlowSnapshot } from './types'
+import { llmNodeId, projectNodeId } from './catalog'
+import { buildPalette } from './palette'
+import type { AddableNodeType, DesignerMode, FlowCommand, FlowGraph, HealthTone, PaletteGroupId, PaletteModelItem, PaletteNodeItem, PaletteProjectItem, ServiceFlowSnapshot } from './types'
 
 const DND_MIME = 'application/x-aiconnect-flow-node'
 
-const props = defineProps<{ snapshot: ServiceFlowSnapshot; graph: FlowGraph; readOnly: boolean }>()
+const props = withDefaults(defineProps<{ snapshot: ServiceFlowSnapshot; graph: FlowGraph; readOnly: boolean; mode?: DesignerMode }>(), { mode: 'advanced' })
 const emit = defineEmits<{ command: [FlowCommand]; 'select-node': [string] }>()
 
 const query = ref('')
+const showInactive = ref(false)
+// In-memory only: group id -> collapsed.
+const collapsed = ref<Record<string, boolean>>({})
 
 const TONE_LABEL: Record<HealthTone, string> = { healthy: '정상', warning: '주의', error: '오류', muted: '비활성', unknown: '미확인' }
 
-const nodeIds = computed(() => new Set(props.graph.nodes.map((n) => n.id)))
-const hasMasker = computed(() => nodeIds.value.has('masker'))
-const accessProjectIds = computed(() => {
-  const ids = new Set<string>()
-  for (const edge of props.graph.edges) {
-    if (edge.kind === 'access' && edge.from.nodeId.startsWith('project:')) ids.add(edge.from.nodeId.slice('project:'.length))
+const searching = computed(() => query.value.trim() !== '')
+const groups = computed(() => buildPalette(props.snapshot, props.graph, { query: query.value, showInactive: showInactive.value, mode: props.mode }))
+const projectsHidden = computed(() => props.snapshot.projectsHidden === true)
+
+function isOpen(id: PaletteGroupId): boolean {
+  return searching.value || !collapsed.value[id]
+}
+
+function toggleGroup(id: PaletteGroupId) {
+  if (searching.value) return
+  collapsed.value = { ...collapsed.value, [id]: !collapsed.value[id] }
+}
+
+function itemCount(g: { nodes: unknown[]; projects: unknown[]; models: unknown[] }): number {
+  return g.nodes.length + g.projects.length + g.models.length
+}
+
+/* ------------------------------ click / drag ------------------------------ */
+function clickNode(item: PaletteNodeItem) {
+  if (item.onCanvas) {
+    // Singleton node ids equal their type name ('prompt' selects the common prompt).
+    emit('select-node', item.nodeType)
+    return
   }
-  return ids
-})
-
-function matches(...values: Array<string | null | undefined>): boolean {
-  const q = query.value.trim().toLowerCase()
-  if (!q) return true
-  return values.some((v) => !!v && v.toLowerCase().includes(q))
+  if (props.readOnly || item.clickDisabledReason !== null) return
+  emit('command', { type: 'addNode', nodeType: item.nodeType, refId: null, position: null })
 }
 
-const showTarget = computed(() => matches('target', '타깃', '타겟', '라우팅', '라우팅 Target 추가'))
-const showMasker = computed(() => matches('masker', '마스킹', '마스킹 워커', '마스커', '라우팅'))
-
-function sourceName(d: DeploymentInfo): string {
-  if (d.runtimeEndpointId) return props.snapshot.catalog.endpoints.find((e) => e.id === d.runtimeEndpointId)?.displayName ?? '로컬 런타임'
-  if (d.externalProviderId) return props.snapshot.catalog.providers.find((p) => p.id === d.externalProviderId)?.displayName ?? '외부 제공자'
-  return '알 수 없는 소스'
+function clickProject(item: PaletteProjectItem) {
+  if (item.onCanvas) emit('select-node', projectNodeId(item.projectId))
+  else if (!props.readOnly) emit('command', { type: 'addNode', nodeType: 'project', refId: item.projectId, position: null })
 }
 
-function deploymentTone(d: DeploymentInfo): HealthTone {
-  if (!d.external && !d.loaded && d.enabled) return 'warning'
-  return toneOf(d.enabled, d.healthStatus)
+function clickModel(item: PaletteModelItem) {
+  if (item.onCanvas) emit('select-node', llmNodeId(item.deploymentId))
+  else if (!props.readOnly) emit('command', { type: 'addNode', nodeType: 'llm', refId: item.deploymentId, position: null })
 }
 
-const deployments = computed(() =>
-  props.snapshot.catalog.deployments
-    .filter((d) => matches(d.displayName, d.providerModelId, sourceName(d), d.external ? '외부' : '로컬'))
-    .slice()
-    .sort((a, b) => Number(a.external) - Number(b.external) || a.displayName.localeCompare(b.displayName, 'ko') || a.id.localeCompare(b.id))
-    .map((d) => ({ info: d, source: sourceName(d), tone: deploymentTone(d), onCanvas: nodeIds.value.has(deploymentNodeId(d.id)) })),
-)
-
-const projects = computed(() =>
-  props.snapshot.catalog.projects
-    .filter((p) => matches(p.name, p.status))
-    .slice()
-    .sort((a, b) => a.name.localeCompare(b.name, 'ko') || a.id.localeCompare(b.id))
-    .map((p) => ({ info: p, onCanvas: nodeIds.value.has(projectNodeId(p.id)), granted: accessProjectIds.value.has(p.id) })),
-)
-
-function add(nodeType: AddableNodeType, refId: string | null) {
-  if (props.readOnly) return
-  emit('command', { type: 'addNode', nodeType, refId, position: null })
-}
-
-function clickDeployment(d: DeploymentInfo, onCanvas: boolean) {
-  if (onCanvas) emit('select-node', deploymentNodeId(d.id))
-  else add('deployment', d.id)
-}
-
-function clickProject(p: ProjectInfo, onCanvas: boolean) {
-  if (onCanvas) emit('select-node', projectNodeId(p.id))
-  else add('project', p.id)
+function nodeClickable(item: PaletteNodeItem): boolean {
+  return item.onCanvas || (!props.readOnly && item.clickDisabledReason === null)
 }
 
 function dragStart(event: DragEvent, nodeType: AddableNodeType, refId: string | null) {
   if (props.readOnly || !event.dataTransfer) { event.preventDefault(); return }
   event.dataTransfer.setData(DND_MIME, JSON.stringify({ nodeType, refId }))
   event.dataTransfer.effectAllowed = 'copy'
+}
+
+function nodeTitle(item: PaletteNodeItem): string {
+  if (item.clickDisabledReason) return item.clickDisabledReason
+  return item.draggable ? '클릭하거나 워크플로우로 끌어 놓아 추가합니다.' : item.description
 }
 </script>
 
@@ -87,87 +77,92 @@ function dragStart(event: DragEvent, nodeType: AddableNodeType, refId: string | 
     </div>
 
     <div class="fd-palette-scroll">
-      <section v-if="showTarget || showMasker" class="fd-section" aria-labelledby="fd-pal-routing">
-        <h3 id="fd-pal-routing" class="fd-section-title">라우팅</h3>
-        <button
-          v-if="showTarget"
-          type="button"
-          class="fd-item fd-item--action"
-          :disabled="readOnly"
-          :draggable="!readOnly"
-          title="클릭하거나 캔버스로 끌어 놓아 추가합니다."
-          @click="add('target', null)"
-          @dragstart="dragStart($event, 'target', null)"
-        >
-          <span class="fd-item-icon" aria-hidden="true">↝</span>
-          <span class="fd-item-main"><strong>Target 추가</strong><small>라우터에 연결되는 새 Target</small></span>
-        </button>
-        <button
-          v-if="showMasker"
-          type="button"
-          class="fd-item fd-item--action"
-          :disabled="readOnly || hasMasker"
-          :draggable="!readOnly && !hasMasker"
-          :title="hasMasker ? '마스킹 워커는 하나만 둘 수 있습니다.' : '클릭하거나 캔버스로 끌어 놓아 추가합니다.'"
-          @click="add('masker', null)"
-          @dragstart="dragStart($event, 'masker', null)"
-        >
-          <span class="fd-item-icon" aria-hidden="true">◍</span>
-          <span class="fd-item-main"><strong>마스킹 워커 추가</strong><small>{{ hasMasker ? '이미 캔버스에 있음' : '가드레일에 연결하는 워커' }}</small></span>
-        </button>
-      </section>
+      <p v-if="searching && groups.length === 0" class="fd-empty">검색 결과가 없습니다.</p>
 
-      <section class="fd-section" aria-labelledby="fd-pal-deployment">
-        <h3 id="fd-pal-deployment" class="fd-section-title">Deployment <span class="fd-count">{{ deployments.length }}</span></h3>
-        <p v-if="deployments.length === 0" class="fd-empty">표시할 Deployment가 없습니다.</p>
-        <button
-          v-for="item in deployments"
-          :key="item.info.id"
-          type="button"
-          class="fd-item"
-          :disabled="readOnly && !item.onCanvas"
-          :draggable="!readOnly && !item.onCanvas"
-          :aria-label="`${item.info.displayName} ${item.onCanvas ? '선택' : '캔버스에 추가'}`"
-          @click="clickDeployment(item.info, item.onCanvas)"
-          @dragstart="dragStart($event, 'deployment', item.info.id)"
-        >
-          <span class="fd-item-icon fd-item-icon--infra" aria-hidden="true">◇</span>
-          <span class="fd-item-main">
-            <strong :title="item.info.displayName">{{ item.info.displayName }}</strong>
-            <small :title="item.info.providerModelId">{{ item.info.providerModelId }}</small>
-            <small class="fd-source">{{ item.info.external ? '외부' : '로컬' }} · {{ item.source }}</small>
-            <span class="fd-chips">
-              <span class="fd-chip" :class="`fd-chip--${item.tone}`">{{ item.info.external ? '' : (!item.info.loaded ? '미로드 · ' : '') }}{{ TONE_LABEL[item.tone] }}</span>
-              <span v-if="item.onCanvas" class="fd-chip fd-chip--accent">캔버스에 있음</span>
-            </span>
-          </span>
-        </button>
-      </section>
+      <section v-for="group in groups" :key="group.id" class="fd-section" :aria-labelledby="`fd-pal-${group.id}`">
+        <h3 :id="`fd-pal-${group.id}`" class="fd-section-title">
+          <button type="button" class="fd-section-toggle" :aria-expanded="isOpen(group.id)" @click="toggleGroup(group.id)">
+            <span class="fd-caret" aria-hidden="true">{{ isOpen(group.id) ? '▾' : '▸' }}</span>
+            <span>{{ group.label }}</span>
+            <span class="fd-count">{{ itemCount(group) }}</span>
+          </button>
+        </h3>
 
-      <section class="fd-section" aria-labelledby="fd-pal-project">
-        <h3 id="fd-pal-project" class="fd-section-title">프로젝트 <span class="fd-count">{{ projects.length }}</span></h3>
-        <p v-if="projects.length === 0" class="fd-empty">표시할 프로젝트가 없습니다.</p>
-        <button
-          v-for="item in projects"
-          :key="item.info.id"
-          type="button"
-          class="fd-item"
-          :disabled="readOnly && !item.onCanvas"
-          :draggable="!readOnly && !item.onCanvas"
-          :aria-label="`${item.info.name} ${item.onCanvas ? '선택' : '캔버스에 추가'}`"
-          @click="clickProject(item.info, item.onCanvas)"
-          @dragstart="dragStart($event, 'project', item.info.id)"
-        >
-          <span class="fd-item-icon fd-item-icon--entry" aria-hidden="true">⌘</span>
-          <span class="fd-item-main">
-            <strong :title="item.info.name">{{ item.info.name }}</strong>
-            <span class="fd-chips">
-              <span class="fd-chip" :class="item.info.status === 'ACTIVE' ? 'fd-chip--healthy' : 'fd-chip--muted'">{{ item.info.status === 'ACTIVE' ? '활성' : item.info.status }}</span>
-              <span v-if="item.granted" class="fd-chip fd-chip--accent">접근 허용됨</span>
-              <span v-if="item.onCanvas && !item.granted" class="fd-chip fd-chip--accent">캔버스에 있음</span>
+        <div v-if="isOpen(group.id)" class="fd-section-body">
+          <p v-if="group.id === 'entry' && projectsHidden" class="fd-empty">플랫폼 토큰 세션에서는 프로젝트가 표시되지 않습니다.</p>
+          <p v-else-if="group.id === 'entry' && group.projects.length === 0" class="fd-empty">표시할 프로젝트가 없습니다.</p>
+
+          <button
+            v-for="item in group.nodes"
+            :key="item.nodeType"
+            type="button"
+            class="fd-item fd-item--action"
+            :class="{ 'is-dimmed': !nodeClickable(item) }"
+            :aria-disabled="!nodeClickable(item)"
+            :draggable="!readOnly && item.draggable"
+            :title="nodeTitle(item)"
+            :aria-label="`${item.label} ${item.onCanvas ? '선택' : '워크플로우에 추가'}`"
+            @click="clickNode(item)"
+            @dragstart="dragStart($event, item.nodeType, null)"
+          >
+            <span class="fd-item-icon" :class="`fd-item-icon--${group.id}`" aria-hidden="true">{{ item.icon }}</span>
+            <span class="fd-item-main">
+              <strong>{{ item.label }}</strong>
+              <small>{{ item.clickDisabledReason ?? item.description }}</small>
+              <span v-if="item.onCanvas" class="fd-chips"><span class="fd-chip fd-chip--accent">워크플로우에 있음</span></span>
             </span>
-          </span>
-        </button>
+          </button>
+
+          <button
+            v-for="item in group.projects"
+            :key="item.projectId"
+            type="button"
+            class="fd-item"
+            :disabled="readOnly && !item.onCanvas"
+            :draggable="!readOnly && !item.onCanvas"
+            :aria-label="`${item.name} ${item.onCanvas ? '선택' : '워크플로우에 추가'}`"
+            @click="clickProject(item)"
+            @dragstart="dragStart($event, 'project', item.projectId)"
+          >
+            <span class="fd-item-icon fd-item-icon--entry" aria-hidden="true">⌘</span>
+            <span class="fd-item-main">
+              <strong :title="item.name">{{ item.name }}</strong>
+              <span class="fd-chips">
+                <span class="fd-chip" :class="item.status === 'ACTIVE' ? 'fd-chip--healthy' : 'fd-chip--muted'">{{ item.status === 'ACTIVE' ? '활성' : item.status }}</span>
+                <span v-if="item.granted" class="fd-chip fd-chip--accent">접근 허용됨</span>
+                <span v-else-if="item.onCanvas" class="fd-chip fd-chip--accent">워크플로우에 있음</span>
+                <span v-if="item.guarded" class="fd-chip fd-chip--warning">보호 정책</span>
+              </span>
+            </span>
+          </button>
+
+          <button
+            v-for="item in group.models"
+            :key="item.deploymentId"
+            type="button"
+            class="fd-item"
+            :class="{ 'is-dimmed': item.availability === 'inactive' }"
+            :disabled="readOnly && !item.onCanvas"
+            :draggable="!readOnly && !item.onCanvas"
+            :aria-label="`${item.displayName} ${item.onCanvas ? '선택' : '워크플로우에 추가'}`"
+            @click="clickModel(item)"
+            @dragstart="dragStart($event, 'llm', item.deploymentId)"
+          >
+            <span class="fd-item-icon fd-item-icon--llm" aria-hidden="true">◆</span>
+            <span class="fd-item-main">
+              <strong :title="item.displayName">{{ item.displayName }}</strong>
+              <small :title="item.providerModelId">{{ item.providerModelId }}</small>
+              <small class="fd-source">{{ item.sourceName }}</small>
+              <span class="fd-chips">
+                <span class="fd-chip" :class="`fd-chip--${item.tone}`">{{ item.availability === 'inactive' ? item.reason : TONE_LABEL[item.tone] }}</span>
+                <span v-if="item.onCanvas" class="fd-chip fd-chip--accent">워크플로우에 있음</span>
+              </span>
+            </span>
+          </button>
+
+          <button v-if="group.hiddenCount > 0" type="button" class="fd-hidden-link" @click="showInactive = true">중지·미로드 {{ group.hiddenCount }}개 숨김 · 표시</button>
+          <button v-else-if="showInactive && (group.id === 'llm-local' || group.id === 'llm-external') && group.models.some((m) => m.availability === 'inactive' && !m.onCanvas)" type="button" class="fd-hidden-link" @click="showInactive = false">중지·미로드 숨기기</button>
+        </div>
       </section>
     </div>
   </aside>
@@ -185,10 +180,28 @@ function dragStart(event: DragEvent, nodeType: AddableNodeType, refId: string | 
 .fd-palette-search { padding: 10px; border-bottom: 1px solid var(--border); }
 .fd-palette-search input { min-height: 36px; font-size: 11px; }
 .fd-palette-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 10px 14px; }
-.fd-section { display: grid; gap: 6px; margin-top: 12px; }
-.fd-section-title { margin: 0 0 2px; display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .04em; }
+.fd-section { display: grid; gap: 6px; margin-top: 10px; }
+.fd-section-title { margin: 0; }
+.fd-section-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-align: left;
+  cursor: pointer;
+}
+.fd-section-toggle:hover { color: var(--text); }
+.fd-caret { width: 10px; }
+.fd-section-body { display: grid; gap: 6px; }
 .fd-count { padding: 1px 6px; border-radius: 999px; background: var(--surface-3); color: var(--muted); font-size: 8px; }
-.fd-empty { margin: 0; color: var(--faint); font-size: 10px; }
+.fd-empty { margin: 0; color: var(--faint); font-size: 10px; line-height: 1.5; }
 
 .fd-item {
   width: 100%;
@@ -205,15 +218,20 @@ function dragStart(event: DragEvent, nodeType: AddableNodeType, refId: string | 
   transition: border-color .15s, background .15s;
 }
 .fd-item[draggable='true'] { cursor: grab; }
-.fd-item:hover:not(:disabled) { border-color: var(--accent-border); background: var(--accent-dim); }
+.fd-item:hover:not(:disabled):not(.is-dimmed) { border-color: var(--accent-border); background: var(--accent-dim); }
 .fd-item:disabled { cursor: not-allowed; opacity: .55; }
+.fd-item.is-dimmed { opacity: .6; }
+.fd-item.is-dimmed:not([draggable='true']) { cursor: not-allowed; }
 .fd-item--action { align-items: center; }
 .fd-item-icon { flex: none; width: 18px; text-align: center; font-size: 14px; color: var(--warning); line-height: 18px; }
-.fd-item-icon--infra { color: var(--muted); }
 .fd-item-icon--entry { color: var(--info); }
+.fd-item-icon--prompt, .fd-item-icon--cache { color: var(--accent-strong); }
+.fd-item-icon--llm, .fd-item-icon--llm-local, .fd-item-icon--llm-external { color: var(--accent); }
 .fd-item-main { min-width: 0; display: grid; gap: 2px; }
 .fd-item-main strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; font-weight: 800; }
-.fd-item-main small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font-size: 9px; }
+.fd-item-main small { overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 9px; line-height: 1.4; }
+.fd-item--action .fd-item-main small { white-space: normal; }
+.fd-item:not(.fd-item--action) .fd-item-main small { white-space: nowrap; }
 .fd-source { color: var(--text-soft); }
 .fd-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
 .fd-chip { display: inline-flex; align-items: center; height: 17px; padding: 0 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-3); color: var(--muted); font-size: 8px; font-weight: 800; white-space: nowrap; }
@@ -221,4 +239,6 @@ function dragStart(event: DragEvent, nodeType: AddableNodeType, refId: string | 
 .fd-chip--warning { border-color: var(--warning); background: var(--warning-dim); color: var(--warning); }
 .fd-chip--error { border-color: var(--danger); background: var(--danger-dim); color: var(--danger); }
 .fd-chip--accent { border-color: var(--accent-border); background: var(--accent-dim); color: var(--accent-strong); }
+.fd-hidden-link { padding: 4px 2px; border: 0; background: transparent; color: var(--accent-strong); font-size: 10px; font-weight: 700; text-align: left; cursor: pointer; }
+.fd-hidden-link:hover { text-decoration: underline; }
 </style>

@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick } from 'vue'
 import CapabilityPicker from '../CapabilityPicker.vue'
-import { describeEdge, describeNode, nodeFacts, nodeSpec } from './catalog'
+import { GUARDRAIL_PRESETS, NODE_TYPES, PROMPT_HELP_COMMON, PROMPT_HELP_MODEL, describeEdge, describeNode, modelAvailability, nodeFacts, nodeSpec, presetOf } from './catalog'
+import { insertableTypesForEdge, isBranchPrompt, promptScopeForSplice } from './workflow'
 import type {
+  AddableNodeType,
+  DesignerMode,
   FieldSpec,
   FlowCommand,
   FlowEdge,
@@ -14,13 +17,14 @@ import type {
   ValidationIssue,
 } from './types'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   graph: FlowGraph
   snapshot: ServiceFlowSnapshot
   selection: FlowSelection
   issues: ValidationIssue[]
   readOnly: boolean
-}>()
+  mode?: DesignerMode
+}>(), { mode: 'advanced' })
 
 const emit = defineEmits<{
   command: [FlowCommand]
@@ -40,7 +44,7 @@ const edge = computed<FlowEdge | null>(() => {
   if (props.selection.edgeIds.length !== 1 || props.selection.nodeIds.length !== 0) return null
   return props.graph.edges.find((e) => e.id === props.selection.edgeIds[0]) ?? null
 })
-const mode = computed<'issues' | 'node' | 'edge' | 'multi'>(() => {
+const panel = computed<'issues' | 'node' | 'edge' | 'multi'>(() => {
   if (totalSelected.value === 0) return 'issues'
   if (node.value) return 'node'
   if (edge.value) return 'edge'
@@ -75,6 +79,11 @@ function pickIssue(issue: ValidationIssue) {
   }
 }
 
+function applyFix(issue: ValidationIssue) {
+  if (props.readOnly || !issue.fix) return
+  emit('command', issue.fix.command)
+}
+
 function issueClickable(issue: ValidationIssue): boolean {
   return !!(issue.nodeId || issue.edgeId)
 }
@@ -90,12 +99,24 @@ function isVisible(field: FieldSpec): boolean {
   return field.visibleWhen.oneOf.includes((node.value.props[field.visibleWhen.key] ?? null))
 }
 
-const fields = computed(() => (spec.value ? spec.value.fields.filter(isVisible) : []))
+function inMode(field: FieldSpec): boolean {
+  if (field.advanced && props.mode === 'basic') return false
+  if (field.basicOnly && props.mode !== 'basic') return false
+  return true
+}
+
+const fields = computed(() => (spec.value ? spec.value.fields.filter((f) => inMode(f) && isVisible(f)) : []))
 
 function fieldKeys(field: FieldSpec): string[] {
-  if (field.key === '$binding') return ['$binding', 'deploymentId']
+  if (field.key === '$model') return ['$model', 'deploymentId']
   if (field.key === '$access') return ['$access', 'access']
+  if (field.key === '$preset') return ['$preset', 'dataBoundaryPolicy', 'guardrailAction']
   return [field.key]
+}
+
+function fieldHelp(field: FieldSpec): string | undefined {
+  if (field.key === 'systemPromptTemplate' && node.value?.type === 'prompt') return isBranchPrompt(node.value) ? PROMPT_HELP_MODEL : PROMPT_HELP_COMMON
+  return field.help
 }
 
 function fieldIssues(field: FieldSpec): ValidationIssue[] {
@@ -198,41 +219,65 @@ function connectMasker() {
   emit('command', { type: 'connect', from: { nodeId: node.value.id, portId: 'masker' }, to: { nodeId: 'guardrail', portId: 'masker' } })
 }
 
-/* target binding */
-const boundDeploymentId = computed(() => {
-  if (!node.value || node.value.type !== 'target') return ''
-  const bind = props.graph.edges.find((e) => e.kind === 'binding' && e.from.nodeId === node.value!.id)
-  if (!bind) return ''
-  return props.graph.nodes.find((n) => n.id === bind.to.nodeId)?.refId ?? ''
-})
+/* guardrail preset (basic mode '보호 수준') */
+const currentPreset = computed(() => (node.value ? presetOf(node.value.props) ?? '' : ''))
+
+function onPreset(event: Event) {
+  const el = event.target as HTMLSelectElement
+  const preset = GUARDRAIL_PRESETS.find((item) => item.id === el.value)
+  if (preset && node.value && !props.readOnly) {
+    emit('command', { type: 'updateProps', nodeId: node.value.id, patch: { dataBoundaryPolicy: preset.dataBoundaryPolicy, guardrailAction: preset.guardrailAction } })
+  }
+  void nextTick(() => { el.value = currentPreset.value })
+}
+
+const presetDescription = computed(() => GUARDRAIL_PRESETS.find((item) => item.id === currentPreset.value)?.description ?? null)
+
+/* llm model replacement */
+const currentDeploymentId = computed(() => (node.value && node.value.type === 'llm' ? node.value.refId ?? '' : ''))
 
 const takenDeploymentIds = computed(() => {
   const taken = new Set<string>()
-  for (const e of props.graph.edges) {
-    if (e.kind !== 'binding' || !node.value || e.from.nodeId === node.value.id) continue
-    const ref = props.graph.nodes.find((n) => n.id === e.to.nodeId)?.refId
-    if (ref) taken.add(ref)
-  }
+  for (const n of props.graph.nodes) if (n.type === 'llm' && n.refId && n.id !== node.value?.id) taken.add(n.refId)
   return taken
 })
 
-const bindingOptions = computed(() =>
-  props.snapshot.catalog.deployments
-    .slice()
-    .sort((a, b) => Number(a.external) - Number(b.external) || a.displayName.localeCompare(b.displayName, 'ko') || a.id.localeCompare(b.id))
-    .map((d) => ({
-      id: d.id,
-      label: `${d.displayName} (${d.providerModelId})${d.external ? ' · 외부' : ' · 로컬'}${takenDeploymentIds.value.has(d.id) ? ' · 이미 Target 있음' : ''}`,
-      disabled: takenDeploymentIds.value.has(d.id),
-    })),
-)
-
-function onBinding(event: Event) {
-  const el = event.target as HTMLSelectElement
-  if (node.value && el.value !== '' && !props.readOnly) {
-    emit('command', { type: 'bindTarget', targetNodeId: node.value.id, deploymentId: el.value })
+const modelOptions = computed(() => {
+  const groups = [
+    { label: '로컬 LLM', items: [] as Array<{ id: string; label: string }> },
+    { label: '외부 LLM', items: [] as Array<{ id: string; label: string }> },
+  ]
+  const sorted = props.snapshot.catalog.deployments.slice().sort((x, y) => x.displayName.localeCompare(y.displayName, 'ko') || x.id.localeCompare(y.id))
+  for (const d of sorted) {
+    if (takenDeploymentIds.value.has(d.id)) continue
+    const inactive = modelAvailability(d, props.snapshot.catalog).availability === 'inactive'
+    groups[d.external ? 1 : 0].items.push({ id: d.id, label: `${d.displayName} (${d.providerModelId})${inactive ? ' (중지)' : ''}` })
   }
-  void nextTick(() => { el.value = boundDeploymentId.value })
+  return groups.filter((g) => g.items.length > 0)
+})
+
+function onModelReplace(event: Event) {
+  const el = event.target as HTMLSelectElement
+  if (node.value && el.value !== '' && el.value !== currentDeploymentId.value && !props.readOnly) {
+    emit('command', { type: 'replaceModel', nodeId: node.value.id, deploymentId: el.value })
+  }
+  void nextTick(() => { el.value = currentDeploymentId.value })
+}
+
+/** The flow edge that enters this LLM (where a model-specific prompt would be spliced in). */
+const incomingFlowEdge = computed(() => {
+  if (!node.value || node.value.type !== 'llm') return null
+  return props.graph.edges.find((e) => (e.kind === 'flow' || e.kind === 'route') && e.to.nodeId === node.value!.id) ?? null
+})
+const branchPromptExists = computed(() => !!node.value && node.value.type === 'llm' && node.value.refId !== null && props.graph.nodes.some((n) => n.id === `prompt:${node.value!.refId}`))
+const canAddBranchPrompt = computed(() =>
+  !props.readOnly && !!incomingFlowEdge.value && !branchPromptExists.value && props.snapshot.features?.targetPrompt !== false &&
+  insertableTypesForEdge(props.graph, incomingFlowEdge.value.id, props.snapshot).includes('prompt'))
+
+function addBranchPrompt() {
+  const incoming = incomingFlowEdge.value
+  if (!incoming || !canAddBranchPrompt.value) return
+  emit('command', { type: 'addNode', nodeType: 'prompt', spliceEdgeId: incoming.id })
 }
 
 /* project access */
@@ -247,7 +292,13 @@ function onAccess(event: Event) {
 }
 
 /* ------------------------------ actions ------------------------------ */
-const canDeleteNode = computed(() => !!spec.value && spec.value.deletable && !view.value?.locked && !props.readOnly)
+const canDeleteNode = computed(() => !!spec.value && spec.value.deletable && !view.value?.locked && !view.value?.protected && !props.readOnly)
+
+function releaseAndRemove() {
+  if (!node.value || !view.value?.protected || props.readOnly) return
+  if (!window.confirm('외부 노출 방지 정책을 해제하고 가드레일을 삭제할까요? 적용하면 데이터 경계와 민감정보 처리가 기본값으로 바뀝니다.')) return
+  emit('command', { type: 'removeItems', nodeIds: ['guardrail'], edgeIds: [], force: true })
+}
 
 function removeNode() {
   if (!node.value || !canDeleteNode.value) return
@@ -270,12 +321,26 @@ function removeSelection() {
 }
 
 const edgeInfo = computed(() => (edge.value ? describeEdge(edge.value) : null))
+
+const edgeInsertables = computed(() => {
+  if (!edge.value || props.readOnly) return []
+  const scope = promptScopeForSplice(props.graph, edge.value.id)
+  return insertableTypesForEdge(props.graph, edge.value.id, props.snapshot).map((type: AddableNodeType) => ({
+    type,
+    label: type === 'prompt' ? (scope === 'model' ? '모델별 시스템 프롬프트' : '공통 시스템 프롬프트') : NODE_TYPES[type as keyof typeof NODE_TYPES].label,
+  }))
+})
+
+function insertOnEdge(type: AddableNodeType) {
+  if (!edge.value || props.readOnly) return
+  emit('command', { type: 'addNode', nodeType: type, spliceEdgeId: edge.value.id })
+}
 </script>
 
 <template>
   <aside class="fd-inspector" aria-label="인스펙터">
     <!-- No selection: validation results -->
-    <div v-if="mode === 'issues'" class="fd-panel">
+    <div v-if="panel === 'issues'" class="fd-panel">
       <h2 class="fd-heading">검증 결과</h2>
       <p v-if="issues.length === 0" class="fd-empty">검증 이슈가 없습니다. 노드를 선택하면 속성을 편집할 수 있습니다.</p>
       <section v-for="group in groupedIssues" :key="group.severity" class="fd-group">
@@ -290,13 +355,14 @@ const edgeInfo = computed(() => (edge.value ? describeEdge(edge.value) : null))
               <span class="fd-issue-code">{{ issue.code }}</span>
               <span>{{ issue.message }}</span>
             </div>
+            <button v-if="issue.fix" type="button" class="secondary-button fd-small-button fd-fix" :disabled="readOnly" @click="applyFix(issue)">{{ issue.fix.label }}</button>
           </li>
         </ul>
       </section>
     </div>
 
     <!-- Single node -->
-    <div v-else-if="mode === 'node' && node && view && spec" class="fd-panel">
+    <div v-else-if="panel === 'node' && node && view && spec" class="fd-panel">
       <header class="fd-node-head" :data-category="view.category">
         <span class="fd-node-icon" aria-hidden="true">{{ view.icon }}</span>
         <div class="fd-node-text">
@@ -307,6 +373,9 @@ const edgeInfo = computed(() => (edge.value ? describeEdge(edge.value) : null))
       <div v-if="view.badges.length > 0" class="fd-badges">
         <span v-for="badge in view.badges" :key="badge" class="fd-chip">{{ badge }}</span>
       </div>
+
+      <p v-if="view.lockReason && (view.locked || view.protected)" class="fd-note" :class="{ 'fd-note--warning': view.protected }">{{ view.lockReason }}</p>
+      <p v-if="node.type === 'policy'" class="fd-note"><a href="#projects">프로젝트 화면에서 변경</a></p>
 
       <dl v-if="facts.length > 0" class="fd-facts">
         <template v-for="row in facts" :key="row.label">
@@ -404,12 +473,24 @@ const edgeInfo = computed(() => (edge.value ? describeEdge(edge.value) : null))
               </div>
             </template>
 
-            <select v-else-if="field.kind === 'deployment-binding'" :id="fieldId(field)" :aria-label="field.label" :value="boundDeploymentId" :disabled="readOnly" @change="onBinding">
-              <option value="" disabled>Deployment 선택</option>
-              <option v-for="o in bindingOptions" :key="o.id" :value="o.id" :disabled="o.disabled">{{ o.label }}</option>
-            </select>
+            <template v-else-if="field.kind === 'guardrail-preset'">
+              <select :id="fieldId(field)" :aria-label="field.label" :value="currentPreset" :disabled="fieldDisabled(field)" @change="onPreset">
+                <option v-if="currentPreset === ''" value="" disabled>사용자 지정 — 고급 모드에서 편집</option>
+                <option v-for="preset in GUARDRAIL_PRESETS" :key="preset.id" :value="preset.id">{{ preset.label }}</option>
+              </select>
+              <p v-if="presetDescription" class="fd-help">{{ presetDescription }}</p>
+            </template>
 
-            <p v-if="field.help" class="fd-help">{{ field.help }}</p>
+            <template v-else-if="field.kind === 'model-replace'">
+              <select :id="fieldId(field)" :aria-label="field.label" :value="currentDeploymentId" :disabled="fieldDisabled(field)" @change="onModelReplace">
+                <option v-if="!modelOptions.some((g) => g.items.some((i) => i.id === currentDeploymentId))" :value="currentDeploymentId" disabled>{{ view.title }} (현재)</option>
+                <optgroup v-for="group in modelOptions" :key="group.label" :label="group.label">
+                  <option v-for="item in group.items" :key="item.id" :value="item.id">{{ item.label }}</option>
+                </optgroup>
+              </select>
+            </template>
+
+            <p v-if="fieldHelp(field)" class="fd-help">{{ fieldHelp(field) }}</p>
           </template>
 
           <ul v-if="fieldIssues(field).length > 0" class="fd-field-issues">
@@ -431,20 +512,26 @@ const edgeInfo = computed(() => (edge.value ? describeEdge(edge.value) : null))
               <span class="fd-issue-code">{{ issue.code }}</span>
               <span>{{ issue.message }}</span>
             </div>
+            <button v-if="issue.fix" type="button" class="secondary-button fd-small-button fd-fix" :disabled="readOnly" @click="applyFix(issue)">{{ issue.fix.label }}</button>
           </li>
         </ul>
       </section>
 
+      <div v-if="node.type === 'llm'" class="fd-actions">
+        <button type="button" class="secondary-button fd-small-button" :disabled="!canAddBranchPrompt" :title="branchPromptExists ? '이 LLM에는 모델별 프롬프트가 이미 있습니다.' : '이 LLM 앞에 모델별 시스템 프롬프트를 넣습니다.'" @click="addBranchPrompt">모델별 프롬프트 추가</button>
+      </div>
+
       <div class="fd-actions">
+        <button v-if="view.protected" type="button" class="secondary-button fd-small-button fd-danger" :disabled="readOnly" @click="releaseAndRemove">보호 해제 후 삭제</button>
         <button type="button" class="secondary-button fd-small-button" :disabled="readOnly" @click="toggleCollapse">{{ node.collapsed ? '펼치기' : '접기' }}</button>
         <button type="button" class="secondary-button fd-small-button" @click="emit('focus-node', node.id)">화면 중앙</button>
-        <button type="button" class="secondary-button fd-small-button fd-danger" :disabled="!canDeleteNode" :title="spec.deletable ? '' : '삭제할 수 없는 노드입니다.'" @click="removeNode">삭제</button>
+        <button type="button" class="secondary-button fd-small-button fd-danger" :disabled="!canDeleteNode" :title="spec.deletable && !view.protected ? '' : '삭제할 수 없는 노드입니다.'" @click="removeNode">삭제</button>
       </div>
     </div>
 
     <!-- Single edge -->
-    <div v-else-if="mode === 'edge' && edge && edgeInfo" class="fd-panel">
-      <h2 class="fd-heading">연결</h2>
+    <div v-else-if="panel === 'edge' && edge && edgeInfo" class="fd-panel">
+      <h2 class="fd-heading">간선</h2>
       <p class="fd-meta">{{ edgeInfo.label }}</p>
       <p class="fd-text">{{ edgeInfo.meaning }}</p>
       <dl class="fd-facts">
@@ -453,16 +540,22 @@ const edgeInfo = computed(() => (edge.value ? describeEdge(edge.value) : null))
         <dt>끝</dt>
         <dd>{{ nodeTitle(edge.to.nodeId) }}</dd>
       </dl>
-      <p v-if="edge.locked" class="fd-note">자동으로 관리되는 연결이라 삭제할 수 없습니다.</p>
+      <section v-if="edgeInsertables.length > 0" class="fd-group">
+        <h3 class="fd-subheading">이 간선에 노드 넣기</h3>
+        <div class="fd-actions">
+          <button v-for="item in edgeInsertables" :key="item.type" type="button" class="secondary-button fd-small-button" @click="insertOnEdge(item.type)">{{ item.label }}</button>
+        </div>
+      </section>
+      <p v-if="edge.locked" class="fd-note">자동으로 관리되는 간선이라 삭제할 수 없습니다.</p>
       <div class="fd-actions">
-        <button type="button" class="secondary-button fd-small-button fd-danger" :disabled="edge.locked || readOnly" @click="removeEdge">연결 삭제</button>
+        <button type="button" class="secondary-button fd-small-button fd-danger" :disabled="edge.locked || readOnly" @click="removeEdge">간선 삭제</button>
       </div>
     </div>
 
     <!-- Multi selection -->
     <div v-else class="fd-panel">
       <h2 class="fd-heading">{{ totalSelected }}개 항목 선택됨</h2>
-      <p class="fd-meta">노드 {{ selection.nodeIds.length }}개 · 연결 {{ selection.edgeIds.length }}개</p>
+      <p class="fd-meta">노드 {{ selection.nodeIds.length }}개 · 간선 {{ selection.edgeIds.length }}개</p>
       <div class="fd-actions">
         <button type="button" class="secondary-button fd-small-button fd-danger" :disabled="readOnly" @click="removeSelection">선택 삭제</button>
       </div>
@@ -483,8 +576,11 @@ const edgeInfo = computed(() => (edge.value ? describeEdge(edge.value) : null))
 
 .fd-node-head { display: flex; align-items: center; gap: 10px; padding-left: 10px; border-left: 4px solid var(--muted); }
 .fd-node-head[data-category='entry'] { border-left-color: var(--info); }
-.fd-node-head[data-category='pipeline'] { border-left-color: var(--accent-strong); }
+.fd-node-head[data-category='guard'] { border-left-color: var(--warning); }
+.fd-node-head[data-category='prompt'] { border-left-color: var(--accent-strong); }
+.fd-node-head[data-category='cache'] { border-left-color: var(--accent-strong); }
 .fd-node-head[data-category='routing'] { border-left-color: var(--warning); }
+.fd-node-head[data-category='llm'] { border-left-color: var(--accent); }
 .fd-node-icon { font-size: 18px; color: var(--text-soft); }
 .fd-node-text { min-width: 0; }
 
@@ -541,5 +637,6 @@ button.fd-issue:hover { background: var(--accent-dim); }
 .fd-small-button { min-height: 32px; padding: 0 12px; }
 .fd-danger { color: var(--danger); border-color: var(--danger); }
 .fd-danger:hover:not(:disabled) { background: var(--danger-dim); border-color: var(--danger); }
+.fd-fix { margin-top: 4px; }
 .fd-small-button:disabled { cursor: not-allowed; opacity: .5; }
 </style>

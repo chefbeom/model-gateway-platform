@@ -222,7 +222,14 @@ public class ChatCompletionGateway {
                     failures++;
                     continue;
                 }
-                ObjectNode proxiedRequest = preparedRequest.deepCopy();
+                String targetPrompt = candidate.target() == null ? null : candidate.target().getSystemPromptTemplate();
+                ObjectNode proxiedRequest;
+                if (targetPrompt == null || targetPrompt.isBlank()) {
+                    proxiedRequest = preparedRequest.deepCopy();
+                } else {
+                    proxiedRequest = request.deepCopy();
+                    service.applySystemPromptTemplate(proxiedRequest, targetPrompt);
+                }
                 proxiedRequest.put("model", candidate.deployment().getProviderModelId());
                 service.applyTemperaturePolicy(proxiedRequest);
                 DataProtectionRedactor.RedactionVault redactionVault = null;

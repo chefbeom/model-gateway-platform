@@ -5,12 +5,16 @@ import {
   SCHEDULING_FIELDS,
   SERVICE_FIELDS,
   TARGET_FIELDS,
+  branchPromptDeploymentId,
   fieldLabel,
+  presenceOf,
+  targetKeyOf,
   targetNodeId,
 } from './catalog'
 import { compile, sameFieldValue } from './compile'
 import { syncGraphToConfig } from './decompile'
 import { detachTargetNodes, renameTargetNodes } from './graphOps'
+import { isBranchPrompt } from './workflow'
 import type {
   CreateServiceBody,
   CreateTargetBody,
@@ -183,7 +187,7 @@ function analyze(base: FlowConfigState, local: FlowConfigState, remote: FlowConf
         conflicts.push({
           code: 'DEPLOYMENT_TARGETED_REMOTELY', entity: 'target', key: l.key, field: null,
           base: '없음', local: describeTarget(l, nameOf), remote: describeTarget(hit, nameOf),
-          message: `${nameOf(l.deploymentId)}: 불러온 이후 서버에 같은 Deployment의 Target이 이미 만들어졌습니다.`,
+          message: `${nameOf(l.deploymentId)}: 불러온 이후 서버에 같은 모델의 LLM 연결(Target)이 이미 만들어졌습니다.`,
         })
       } else {
         decisions.push({ type: 'create', key: l.key, l })
@@ -203,7 +207,7 @@ function analyze(base: FlowConfigState, local: FlowConfigState, remote: FlowConf
           conflicts.push({
             code: 'FIELD_CONFLICT', entity: 'target', key: l.key, field: f,
             base: fmt(f, b[f], nameOf), local: fmt(f, l[f], nameOf), remote: fmt(f, r[f], nameOf),
-            message: `${nameOf(r.deploymentId)} Target의 ${fieldLabel('target', f)}: 불러온 이후 서버에서도 다른 값으로 변경되었습니다.`,
+            message: `${nameOf(r.deploymentId)} LLM 연결의 ${fieldLabel('target', f)}: 불러온 이후 서버에서도 다른 값으로 변경되었습니다.`,
           })
         }
       }
@@ -215,7 +219,7 @@ function analyze(base: FlowConfigState, local: FlowConfigState, remote: FlowConf
         conflicts.push({
           code: 'TARGET_REMOVED_REMOTELY', entity: 'target', key: l.key, field: null,
           base: describeTarget(b, nameOf), local: describeTarget(l, nameOf), remote: '삭제됨',
-          message: `${nameOf(b.deploymentId)} Target이 불러온 이후 서버에서 삭제되었는데 로컬에서 수정했습니다.`,
+          message: `${nameOf(b.deploymentId)} LLM 연결(Target)이 불러온 이후 서버에서 삭제되었는데 로컬에서 수정했습니다.`,
         })
       }
     } else if (!b && r) {
@@ -231,7 +235,7 @@ function analyze(base: FlowConfigState, local: FlowConfigState, remote: FlowConf
       conflicts.push({
         code: 'TARGET_CHANGED_REMOTELY', entity: 'target', key: b.key, field: null,
         base: describeTarget(b, nameOf), local: '삭제', remote: describeTarget(r, nameOf),
-        message: `${nameOf(b.deploymentId)} Target을 로컬에서 삭제했지만 불러온 이후 서버에서 변경되었습니다.`,
+        message: `${nameOf(b.deploymentId)} LLM 연결(Target)을 로컬에서 삭제했지만 불러온 이후 서버에서 변경되었습니다.`,
       })
     } else {
       decisions.push({ type: 'delete', key: b.key, b, r })
@@ -329,10 +333,11 @@ const CREATE_COVERED_FIELDS: ServiceField[] = [
 ]
 
 const NOTE_GUARDRAIL = '가드레일 처리 정책을 바꾸면 서버가 서비스 범위 데이터 보호 정책을 다시 저장합니다. 모드·수준·외부 Failover 허용이 새 정책에 맞게 재설정되고 비밀정보·개인정보·금융 탐지가 켜집니다. 기밀·미디어 탐지와 사용자 정의 패턴은 유지됩니다.'
-const NOTE_REPLACE = 'Deployment를 바꾼 Target은 새 Target을 만든 뒤 기존 Target을 삭제합니다. Target ID가 바뀝니다.'
-const NOTE_PREDELETE = '같은 Deployment를 다시 쓰려고 기존 Target을 먼저 삭제합니다. 적용하는 동안 잠시 라우팅 대상이 줄어듭니다.'
-const NOTE_NO_TARGET = '적용 후 활성 Target이 없어 이 서비스 요청은 실패합니다.'
-const NOTE_NEW_SERVICE = '새 서비스는 프로젝트 접근을 허용하기 전까지 호출되지 않습니다.'
+const NOTE_REPLACE = 'LLM 노드의 모델이 바뀌어 새 연결(Target)을 만든 뒤 기존 연결을 삭제합니다. 서버 ID가 바뀝니다.'
+const NOTE_PREDELETE = '같은 모델을 다시 쓰려고 기존 연결을 먼저 삭제합니다. 적용하는 동안 잠시 라우팅 대상이 줄어듭니다.'
+const NOTE_NO_TARGET = '적용 후 사용 중인 LLM이 없어 이 워크플로우의 요청은 실패합니다.'
+const NOTE_NEW_SERVICE = '새 워크플로우는 시작 노드에 프로젝트를 연결(접근 허용)하기 전까지 호출되지 않습니다.'
+const NOTE_PROTECTION_RELAXED = '외부 노출 방지 정책이 완화됩니다(데이터 경계 또는 민감정보 처리). 영향을 받는 프로젝트와 모델을 확인한 뒤 적용하세요.'
 const NOTE_DRIFT = '불러온 이후 다른 곳에서 변경된 항목이 있습니다. 충돌하지 않는 원격 변경은 유지됩니다.'
 
 function issueKey(i: ValidationIssue): string { return `${i.code}|${i.nodeId ?? ''}|${i.edgeId ?? ''}|${i.field ?? ''}` }
@@ -390,7 +395,7 @@ export function planChanges(input: PlanInput): FlowPlan {
     }
     createServiceOps.push({
       kind: 'createService', opId: 'create-service', risk: 'caution',
-      summary: `새 논리 서비스 생성: ${s.serviceKey}`,
+      summary: `새 워크플로우(논리 서비스) 생성: ${s.serviceKey}`,
       changes: [
         { field: 'serviceKey', label: fieldLabel('service', 'serviceKey'), before: '없음', after: s.serviceKey },
         { field: 'displayName', label: fieldLabel('service', 'displayName'), before: '없음', after: s.displayName },
@@ -398,7 +403,7 @@ export function planChanges(input: PlanInput): FlowPlan {
       body,
     })
     if (remote.catalog.services.some((x) => x.serviceKey === s.serviceKey)) {
-      pushBlocking({ code: 'SERVICE_KEY_TAKEN', severity: 'error', message: '이 조직에 이미 있는 Service Key입니다.', nodeId: 'service', edgeId: null, field: 'serviceKey' })
+      pushBlocking({ code: 'SERVICE_KEY_TAKEN', severity: 'error', message: '이 조직에 이미 있는 호출 이름입니다.', nodeId: 'start', edgeId: null, field: 'serviceKey' })
     }
   }
 
@@ -427,18 +432,20 @@ export function planChanges(input: PlanInput): FlowPlan {
       before: fmt(f, R.service[f], deploymentName), after: fmt(f, s[f], deploymentName),
     }))
     let risk: OperationRisk = 'caution'
+    let protectionRelaxed = false
     if (!isNew) {
       if (has('enabled') && R.service.enabled && !s.enabled) risk = 'danger'
-      if (has('dataBoundaryPolicy') && BOUNDARY_RANK[s.dataBoundaryPolicy] > BOUNDARY_RANK[R.service.dataBoundaryPolicy]) risk = 'danger'
-      if (has('guardrailAction') && GUARDRAIL_STRICTNESS[s.guardrailAction] < GUARDRAIL_STRICTNESS[R.service.guardrailAction]) risk = 'danger'
+      if (has('dataBoundaryPolicy') && BOUNDARY_RANK[s.dataBoundaryPolicy] > BOUNDARY_RANK[R.service.dataBoundaryPolicy]) { risk = 'danger'; protectionRelaxed = true }
+      if (has('guardrailAction') && GUARDRAIL_STRICTNESS[s.guardrailAction] < GUARDRAIL_STRICTNESS[R.service.guardrailAction]) { risk = 'danger'; protectionRelaxed = true }
       if (has('maskerDeploymentId') && R.service.maskerDeploymentId !== null && s.maskerDeploymentId === null) risk = 'danger'
     }
     patchServiceOps.push({
       kind: 'patchService', opId: 'patch-service', risk,
-      summary: `서비스 정책 변경 (${applied.length}개 항목)`,
+      summary: `워크플로우 설정 변경 (${applied.length}개 항목)`,
       changes, service: serviceRef, body: body as PatchServiceBody,
     })
     if (has('guardrailAction')) notes.push({ level: 'warning', message: NOTE_GUARDRAIL })
+    if (protectionRelaxed) notes.push({ level: 'warning', message: NOTE_PROTECTION_RELAXED })
     if (has('systemPromptTemplate')) {
       const n = remote.promptVersion
       notes.push({ level: 'info', message: `시스템 프롬프트가 바뀌면 프롬프트 버전이 v${n}에서 v${n + 1}로 올라가고 기존 응답 캐시는 더 이상 쓰이지 않습니다.` })
@@ -452,7 +459,7 @@ export function planChanges(input: PlanInput): FlowPlan {
     for (const f of a.schedulingApplied) target[f] = L.scheduling[f]
     schedulingOps.push({
       kind: 'updateScheduling', opId: 'update-scheduling', risk: 'caution',
-      summary: '요청 배분·대기열 정책 변경',
+      summary: '라우터 배분·대기열 정책 변경',
       changes: a.schedulingApplied.map((f) => ({ field: f, label: fieldLabel('scheduling', f), before: fmt(f, R.scheduling[f], deploymentName), after: fmt(f, L.scheduling[f], deploymentName) })),
       service: serviceRef, body,
     })
@@ -464,26 +471,34 @@ export function planChanges(input: PlanInput): FlowPlan {
     for (const f of appliedFields) out[f] = l[f]
     return out as unknown as TargetState
   }
+  let promptTouched = false
   const addCreate = (key: string, t: TargetState, replacementOf: string | null) => {
     const body: CreateTargetBody = {
       deploymentId: t.deploymentId, priority: t.priority, weight: t.weight, degraded: t.degraded, followModelChanges: t.followModelChanges,
     }
     if (t.maxConcurrencyOverride !== null) body.maxConcurrencyOverride = t.maxConcurrencyOverride
+    const prompt = t.systemPromptTemplate ?? null
+    if (prompt !== null) body.systemPromptTemplate = prompt
     const name = deploymentName(t.deploymentId)
+    const createChanges: OperationChange[] = [
+      { field: 'deploymentId', label: fieldLabel('target', 'deploymentId'), before: replacementOf ? deploymentName(replacementOf) : '없음', after: name },
+      { field: 'priority', label: fieldLabel('target', 'priority'), before: '없음', after: String(t.priority) },
+      { field: 'weight', label: fieldLabel('target', 'weight'), before: '없음', after: String(t.weight) },
+    ]
+    if (prompt !== null) {
+      createChanges.push({ field: 'systemPromptTemplate', label: fieldLabel('target', 'systemPromptTemplate'), before: '없음', after: fmt('systemPromptTemplate', prompt, deploymentName) })
+      promptTouched = true
+    }
     const ops: FlowOperation[] = [{
       kind: 'createTarget', opId: `create-target:${key}`, risk: isExternal(t.deploymentId) ? 'caution' : 'safe',
-      summary: `Target 추가: ${name} (P${t.priority} · W${t.weight})`,
-      changes: [
-        { field: 'deploymentId', label: fieldLabel('target', 'deploymentId'), before: replacementOf ? deploymentName(replacementOf) : '없음', after: name },
-        { field: 'priority', label: fieldLabel('target', 'priority'), before: '없음', after: String(t.priority) },
-        { field: 'weight', label: fieldLabel('target', 'weight'), before: '없음', after: String(t.weight) },
-      ],
+      summary: `LLM 연결 추가: ${name} (P${t.priority} · W${t.weight})`,
+      changes: createChanges,
       service: serviceRef, key, body,
     }]
     if (!t.enabled) {
       ops.push({
         kind: 'patchTarget', opId: `disable-created-target:${key}`, risk: 'safe',
-        summary: `새 Target 비활성화: ${name}`,
+        summary: `새 LLM 연결 사용 중지: ${name}`,
         changes: [{ field: 'enabled', label: fieldLabel('target', 'enabled'), before: '사용', after: '사용 안 함' }],
         service: serviceRef, target: { kind: 'created', key }, body: { enabled: false },
       })
@@ -492,6 +507,7 @@ export function planChanges(input: PlanInput): FlowPlan {
   }
 
   let replaced = false
+  const hadPrompt = (t: TargetState | undefined): boolean => !!t && (t.systemPromptTemplate ?? null) !== null
   for (const d of a.decisions) {
     switch (d.type) {
       case 'create':
@@ -506,17 +522,19 @@ export function planChanges(input: PlanInput): FlowPlan {
           deletes.push({
             op: {
               kind: 'deleteTarget', opId: `delete-target:${d.r.id}`, risk: 'danger',
-              summary: `Target 삭제: ${deploymentName(d.r.deploymentId)}`,
+              summary: `LLM 연결 삭제: ${deploymentName(d.r.deploymentId)}`,
               changes: [], service: serviceRef, targetId: d.r.id,
             },
             id: d.r.id, remoteDeploymentId: d.r.deploymentId, replacement: true,
           })
+          if (hadPrompt(d.r)) promptTouched = true
           replaced = true
           break
         }
         const body: PatchTargetBody = {}
         const changes: OperationChange[] = []
         let disabling = false
+        let promptChanged = false
         for (const f of d.applied) {
           if (f === 'maxConcurrencyOverride') {
             if (d.l.maxConcurrencyOverride === null) continue
@@ -526,14 +544,20 @@ export function planChanges(input: PlanInput): FlowPlan {
           else if (f === 'degraded') body.degraded = d.l.degraded
           else if (f === 'enabled') { body.enabled = d.l.enabled; if (d.r.enabled && !d.l.enabled) disabling = true }
           else if (f === 'followModelChanges') body.followModelChanges = d.l.followModelChanges
-          else continue
+          else if (f === 'systemPromptTemplate') {
+            const value = d.l.systemPromptTemplate ?? null
+            if (value !== null) body.systemPromptTemplate = value
+            else body.clearSystemPromptTemplate = true
+            promptChanged = true
+          } else continue
           changes.push({ field: f, label: fieldLabel('target', f), before: fmt(f, d.r[f], deploymentName), after: fmt(f, d.l[f], deploymentName) })
         }
         if (changes.length === 0) break
+        if (promptChanged) promptTouched = true
         patches.push({
           op: {
-            kind: 'patchTarget', opId: `patch-target:${d.r.id}`, risk: disabling ? 'danger' : 'safe',
-            summary: `Target 변경: ${deploymentName(d.r.deploymentId)}`,
+            kind: 'patchTarget', opId: `patch-target:${d.r.id}`, risk: disabling ? 'danger' : promptChanged ? 'caution' : 'safe',
+            summary: `LLM 설정 변경: ${deploymentName(d.r.deploymentId)}`,
             changes, service: serviceRef, target: { kind: 'existing', id: d.r.id }, body,
           },
           priority: body.priority ?? d.r.priority,
@@ -546,11 +570,12 @@ export function planChanges(input: PlanInput): FlowPlan {
         deletes.push({
           op: {
             kind: 'deleteTarget', opId: `delete-target:${d.b.id}`, risk: 'danger',
-            summary: `Target 삭제: ${deploymentName(d.r.deploymentId)}`,
+            summary: `LLM 연결 삭제: ${deploymentName(d.r.deploymentId)}`,
             changes: [], service: serviceRef, targetId: d.b.id,
           },
           id: d.b.id, remoteDeploymentId: d.r.deploymentId, replacement: false,
         })
+        if (hadPrompt(d.r)) promptTouched = true
         break
       default:
         break
@@ -563,6 +588,9 @@ export function planChanges(input: PlanInput): FlowPlan {
   const preDeletes = deletes.filter((x) => createdDeployments.has(x.remoteDeploymentId)).sort((x, y) => cmp(x.id, y.id))
   const postDeletes = deletes.filter((x) => !createdDeployments.has(x.remoteDeploymentId)).sort((x, y) => cmp(x.id, y.id))
   if (replaced) notes.push({ level: 'info', message: NOTE_REPLACE })
+  if (promptTouched) {
+    notes.push({ level: 'info', message: `모델별 시스템 프롬프트가 바뀌어 프롬프트 버전(현재 v${remote.promptVersion})이 올라가고 기존 응답 캐시는 더 이상 쓰이지 않습니다.` })
+  }
   if (preDeletes.length > 0) notes.push({ level: 'warning', message: NOTE_PREDELETE })
 
   /* ---- access ---- */
@@ -633,27 +661,45 @@ export function computeNodeChanges(graph: FlowGraph, base: ServiceFlowSnapshot):
   const out: Record<string, NodeChangeKind> = {}
   const anyDiff = (fields: ServiceField[]) => fields.some((f) => !sameFieldValue(f, L.service[f], B.service[f]))
   const schedDiff = SCHEDULING_FIELDS.some((f) => !sameFieldValue(f, L.scheduling[f], B.scheduling[f]))
-
   const has = (id: string) => graph.nodes.some((n) => n.id === id)
-  if (has('service') && anyDiff(['serviceKey', 'displayName', 'enabled', 'dataBoundaryPolicy', 'requiredCapabilitiesJson', 'currency', 'inputPricePerMillion', 'outputPricePerMillion'])) out.service = 'modified'
-  if (has('guardrail') && anyDiff(['guardrailAction', 'maskPersonNames'])) out.guardrail = 'modified'
-  if (has('prompt') && anyDiff(['systemPromptTemplate', 'temperaturePolicy', 'temperatureValue', 'reasoningEffort', 'openAiFastMode'])) out.prompt = 'modified'
-  if (has('cache') && anyDiff(['responseCacheEnabled', 'responseCacheTtlSeconds'])) out.cache = 'modified'
-  if (has('router') && (anyDiff(['failoverPolicy', 'retryPolicy', 'allowDegraded']) || schedDiff)) out.router = 'modified'
-  if (has('masker')) {
+  const presentL = presenceOf(L)
+  const presentB = presenceOf(B)
+
+  if (has('start') && anyDiff(['serviceKey', 'displayName', 'enabled', 'requiredCapabilitiesJson', 'currency', 'inputPricePerMillion', 'outputPricePerMillion'])) out.start = 'modified'
+  const trunk: Array<['guardrail' | 'prompt' | 'params' | 'cache' | 'router', ServiceField[], boolean]> = [
+    ['guardrail', ['dataBoundaryPolicy', 'guardrailAction', 'maskPersonNames'], false],
+    ['prompt', ['systemPromptTemplate'], false],
+    ['params', ['temperaturePolicy', 'temperatureValue', 'reasoningEffort', 'openAiFastMode'], false],
+    ['cache', ['responseCacheEnabled', 'responseCacheTtlSeconds'], false],
+    ['router', ['failoverPolicy', 'retryPolicy', 'allowDegraded'], true],
+  ]
+  for (const [id, fields, withScheduling] of trunk) {
+    if (!has(id) || !presentL[id]) continue
+    if (!presentB[id]) out[id] = 'added'
+    else if (anyDiff(fields) || (withScheduling && schedDiff)) out[id] = 'modified'
+  }
+  if (has('masker') && L.service.maskerDeploymentId !== null) {
     if (B.service.maskerDeploymentId === null) out.masker = 'added'
     else if (!sameFieldValue('maskerDeploymentId', L.service.maskerDeploymentId, B.service.maskerDeploymentId)) out.masker = 'modified'
   }
 
   const baseTargets = new Map(B.targets.map((t) => [t.key, t]))
   const localTargets = new Map(L.targets.map((t) => [t.key, t]))
+  const llmFields = TARGET_FIELDS.filter((f) => f !== 'systemPromptTemplate')
   for (const node of graph.nodes) {
-    if (node.type === 'target') {
-      if (node.refId === null) { out[node.id] = 'added'; continue }
-      const before = baseTargets.get(node.id)
-      const now = localTargets.get(node.id)
-      if (!before) { out[node.id] = 'added'; continue }
-      if (!now || TARGET_FIELDS.some((f) => !sameFieldValue(f, before[f], now[f]))) out[node.id] = 'modified'
+    if (node.type === 'llm') {
+      const key = targetKeyOf(node)
+      const before = baseTargets.get(key)
+      const now = localTargets.get(key)
+      if (node.targetId === null || !before) { out[node.id] = 'added'; continue }
+      if (!now || llmFields.some((f) => !sameFieldValue(f, before[f], now[f]))) out[node.id] = 'modified'
+    } else if (isBranchPrompt(node)) {
+      const deploymentId = branchPromptDeploymentId(node.id) as string
+      const before = B.targets.find((t) => t.deploymentId === deploymentId)?.systemPromptTemplate ?? null
+      const now = L.targets.find((t) => t.deploymentId === deploymentId)?.systemPromptTemplate ?? null
+      if (now === null) continue
+      if (before === null) out[node.id] = 'added'
+      else if (!sameFieldValue('systemPromptTemplate', before, now)) out[node.id] = 'modified'
     } else if (node.type === 'project' && node.refId) {
       const inBase = B.accessProjectIds.includes(node.refId)
       const inLocal = L.accessProjectIds.includes(node.refId)

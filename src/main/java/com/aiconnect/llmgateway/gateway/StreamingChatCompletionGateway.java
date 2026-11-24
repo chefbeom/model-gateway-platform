@@ -215,7 +215,7 @@ public class StreamingChatCompletionGateway {
                     continue;
                 }
                 ObjectNode proxied = request.deepCopy();
-                service.applySystemPromptTemplate(proxied);
+                service.applySystemPromptTemplate(proxied, candidate.target() == null ? null : candidate.target().getSystemPromptTemplate());
                 proxied.put("model", candidate.deployment().getProviderModelId());
                 service.applyTemperaturePolicy(proxied);
                 proxied.withObject("stream_options").put("include_usage", true);

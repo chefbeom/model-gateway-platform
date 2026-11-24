@@ -1,4 +1,4 @@
-// Shared contracts for the experimental Service Flow Designer.
+// Shared contracts for the experimental Workflow Designer (v2; page key 'flow-designer').
 // Pure type declarations only: no runtime values, no imports.
 
 /* ---------------- Domain enums (mirror backend enums) ---------------- */
@@ -48,7 +48,7 @@ export interface SchedulingState {
 export type SchedulingField = keyof SchedulingState
 
 export interface TargetState {
-  /** FlowNode id of the target node: 'target:<uuid>' or 'target:new-<n>'. */
+  /** 'target:<targetId>' for persisted targets, 'target:new-<deploymentId>' for pending ones. */
   key: string
   /** Server id; null until created. */
   id: string | null
@@ -59,8 +59,10 @@ export interface TargetState {
   enabled: boolean
   maxConcurrencyOverride: number | null
   followModelChanges: boolean
+  /** v2 (backend V54): model-specific system prompt, trimmed; null = none. Readers treat undefined as null. */
+  systemPromptTemplate?: string | null
 }
-export type TargetField = 'deploymentId' | 'priority' | 'weight' | 'degraded' | 'enabled' | 'maxConcurrencyOverride' | 'followModelChanges'
+export type TargetField = 'deploymentId' | 'priority' | 'weight' | 'degraded' | 'enabled' | 'maxConcurrencyOverride' | 'followModelChanges' | 'systemPromptTemplate'
 
 export interface FlowConfigState {
   service: ServiceState
@@ -90,7 +92,21 @@ export interface DeploymentInfo {
 }
 export interface EndpointInfo { id: string; displayName: string; runtimeType: string; enabled: boolean; healthStatus: string; addressLabel: string }
 export interface ProviderInfo { id: string; displayName: string; providerType: string; enabled: boolean; healthStatus: string; apiKeyConfigured: boolean; zeroRetentionVerified: boolean }
-export interface ProjectInfo { id: string; name: string; status: string; dataBoundaryPolicy: DataBoundaryPolicy | null }
+/** Stored PROJECT-scope data-protection policy: only what the designer needs (never custom patterns). */
+export interface ProjectDlpInfo { mode: string; externalAction: GuardrailAction }
+export interface ProjectInfo {
+  id: string
+  name: string
+  status: string
+  /** Server getter value (already INTERNAL_ONLY when externalAiBlocked). */
+  dataBoundaryPolicy: DataBoundaryPolicy | null
+  /** v2. Readers treat undefined as null. */
+  maxDataBoundaryPolicy?: DataBoundaryPolicy | null
+  /** v2: project "외부 AI 전송 금지". Readers treat undefined as false. */
+  externalAiBlocked?: boolean
+  /** v2: stored PROJECT-scope DLP policy; null/undefined = none stored or unknown. */
+  dlp?: ProjectDlpInfo | null
+}
 export interface MaskerInfo { deploymentId: string; displayName: string; providerModelId: string; sourceType: string; sourceName: string; eligible: boolean; trustReason: string }
 export interface ServiceDataProtectionInfo {
   mode: string
@@ -103,6 +119,8 @@ export interface ServiceDataProtectionInfo {
   detectConfidential: boolean
   detectMedia: boolean
 }
+/** Effective organization (platform + organization) data-protection policy. */
+export interface OrgDataProtectionInfo { mode: string; externalAction: string }
 export interface FlowCatalog {
   services: ServiceSummary[]
   deployments: DeploymentInfo[]
@@ -110,6 +128,10 @@ export interface FlowCatalog {
   providers: ProviderInfo[]
   projects: ProjectInfo[]
   maskers: MaskerInfo[]
+}
+export interface SnapshotFeatures {
+  /** false when the server does not persist model-specific system prompts (pre-V54 backend). */
+  targetPrompt: boolean
 }
 export interface ServiceFlowSnapshot {
   organizationId: string
@@ -126,21 +148,32 @@ export interface ServiceFlowSnapshot {
   loadedAt: string
   /** API paths whose (non-fatal) read failed. */
   unavailable: string[]
+  /** v2. Readers treat undefined as null. */
+  orgDataProtection?: OrgDataProtectionInfo | null
+  /** v2: false when project-scope DLP policies could not be read. Readers treat undefined as true. */
+  projectPoliciesComplete?: boolean
+  /** v2: break-glass platform-token session (projects invisible). Readers treat undefined as false. */
+  projectsHidden?: boolean
+  /** v2. Readers treat undefined as { targetPrompt: true }. */
+  features?: SnapshotFeatures
 }
 
 /* ---------------- Graph ---------------- */
-export type NodeType = 'project' | 'service' | 'masker' | 'guardrail' | 'prompt' | 'cache' | 'router' | 'target' | 'deployment' | 'endpoint' | 'provider'
-export type NodeCategory = 'entry' | 'pipeline' | 'routing' | 'infra'
-export type PortType = 'access' | 'request' | 'masker' | 'route' | 'binding' | 'host'
+export type NodeType = 'start' | 'project' | 'policy' | 'guardrail' | 'masker' | 'prompt' | 'params' | 'cache' | 'router' | 'llm' | 'endpoint' | 'provider'
+export type NodeCategory = 'entry' | 'guard' | 'prompt' | 'cache' | 'routing' | 'llm' | 'infra'
+export type PortType = 'flow' | 'masker' | 'host'
 export type PortDirection = 'in' | 'out'
-export type EdgeKind = 'access' | 'pipeline' | 'masker' | 'route' | 'binding' | 'host'
+export type EdgeKind = 'entry' | 'policy' | 'access' | 'flow' | 'route' | 'masker' | 'host'
 export type FlowPropValue = string | number | boolean | null
+export type PromptScope = 'common' | 'model'
 
 export interface FlowNode {
   id: string
   type: NodeType
-  /** Referenced entity id (project/target/deployment/endpoint/provider); null otherwise or for new targets. */
+  /** Primary entity: projectId (project, policy), deploymentId (llm), endpoint/provider id (hosts); null otherwise. */
   refId: string | null
+  /** llm only: server ServiceTarget id, null while pending creation. Always null for other types. */
+  targetId: string | null
   /** World coordinates of the top-left corner. */
   x: number
   y: number
@@ -150,19 +183,17 @@ export interface FlowNode {
 export interface PortRef { nodeId: string; portId: string }
 export interface FlowEdge { id: string; kind: EdgeKind; from: PortRef; to: PortRef; locked: boolean }
 export interface FlowGraph {
-  schemaVersion: 1
+  schemaVersion: 2
   serviceId: string | null
   nodes: FlowNode[]
   edges: FlowEdge[]
-  /** Sequence for 'target:new-<n>' ids; starts at 1. */
-  nextSeq: number
 }
 
 export interface PortSpec { id: string; direction: PortDirection; type: PortType; label: string; multiple: boolean }
-export type FieldKind = 'text' | 'textarea' | 'number' | 'integer' | 'boolean' | 'select' | 'capabilities' | 'masker-select' | 'deployment-binding' | 'access-toggle'
+export type FieldKind = 'text' | 'textarea' | 'number' | 'integer' | 'boolean' | 'select' | 'capabilities' | 'masker-select' | 'access-toggle' | 'guardrail-preset' | 'model-replace'
 export interface FieldOption { value: string; label: string }
 export interface FieldSpec {
-  /** Prop key, or a virtual key starting with '$' ('$binding', '$access'). */
+  /** Prop key, or a virtual key starting with '$' ('$access', '$preset', '$model'). */
   key: string
   label: string
   kind: FieldKind
@@ -178,16 +209,30 @@ export interface FieldSpec {
   visibleWhen?: { key: string; oneOf: FlowPropValue[] }
   /** Editable only while graph.serviceId === null. */
   newServiceOnly?: boolean
+  /** v2: shown only in advanced mode. */
+  advanced?: boolean
+  /** v2: shown only in basic mode. */
+  basicOnly?: boolean
 }
 export interface NodeTypeSpec {
   type: NodeType
   label: string
+  /** v2: one-line palette description. */
+  description: string
+  /** v2: extra lowercase search words (Korean and English, space separated). */
+  keywords: string
   category: NodeCategory
   icon: string
-  column: number
+  /** v2: canonical server-order rank (§6.3); model-specific prompts use PROMPT_BRANCH_RANK instead. */
+  rank: number
+  /** At most one node of this type (prompt is false: one common + one per LLM). */
   singleton: boolean
   deletable: boolean
   paletteAddable: boolean
+  /** v2: hidden from the palette in basic mode. */
+  advanced: boolean
+  /** v2: created and removed only by synchronisation (policy, endpoint, provider). */
+  derived: boolean
   ports: PortSpec[]
   fields: FieldSpec[]
 }
@@ -202,9 +247,50 @@ export interface NodeView {
   badges: string[]
   /** At most 2 lines. */
   summary: string[]
+  /** Never deletable (start, derived nodes). */
   locked: boolean
+  /** v2: deletable only through the explicit "보호 해제 후 삭제" action. */
+  protected: boolean
+  /** v2: reason shown for locked/protected nodes; null otherwise. */
+  lockReason: string | null
+  /** v2: prompt nodes only; null for other types. */
+  promptScope: PromptScope | null
 }
 export interface FactRow { label: string; value: string }
+
+/* ---------------- Workflow analysis & policy (v2) ---------------- */
+export interface WorkflowBranch { llmNodeId: string; promptNodeId: string | null }
+export interface WorkflowAnalysis {
+  /** First flow node after the entry layer; null when the workflow has no flow node. */
+  head: string | null
+  /** Trunk node ids in visual order (head first; ends with the router when present; excludes LLMs and model prompts). */
+  trunk: string[]
+  router: string | null
+  /** Last trunk node; null when the trunk is empty. */
+  tail: string | null
+  /** Reachable branches in server dispatch order (local first, then priority asc, weight desc, id). */
+  branches: WorkflowBranch[]
+  /** Flow nodes not reachable from head, sorted by id. */
+  detached: string[]
+  /** Structural issues (WF_* codes, CYCLE_DETECTED is reported by validate). */
+  issues: ValidationIssue[]
+}
+export type PolicySignalCode = 'PROJECT_LOCAL_ONLY' | 'PROJECT_BOUNDARY' | 'PROJECT_DLP'
+export interface PolicySignal { code: PolicySignalCode; label: string; /** External LLMs are skipped entirely for this project. */ blocksExternal: boolean }
+export type GuardrailPresetId = 'mask-restore' | 'local-sensitive' | 'no-retention' | 'internal-only' | 'block'
+export interface GuardrailPreset { id: GuardrailPresetId; label: string; description: string; dataBoundaryPolicy: DataBoundaryPolicy; guardrailAction: GuardrailAction }
+export type WorkflowTemplateId = 'basic' | 'local-first' | 'internal-only'
+export interface WorkflowTemplate { id: WorkflowTemplateId; label: string; description: string }
+
+/* ---------------- Palette (v2) ---------------- */
+export type DesignerMode = 'basic' | 'advanced'
+export type ModelAvailability = 'active' | 'degraded' | 'inactive'
+export type PaletteGroupId = 'entry' | 'guard' | 'prompt' | 'cache' | 'routing' | 'llm-local' | 'llm-external'
+export interface PaletteNodeItem { nodeType: AddableNodeType; label: string; description: string; icon: string; clickDisabledReason: string | null; draggable: boolean; onCanvas: boolean }
+export interface PaletteProjectItem { projectId: string; name: string; status: string; onCanvas: boolean; granted: boolean; guarded: boolean }
+export interface PaletteModelItem { deploymentId: string; displayName: string; providerModelId: string; sourceName: string; external: boolean; availability: ModelAvailability; tone: HealthTone; reason: string | null; onCanvas: boolean }
+export interface PaletteGroup { id: PaletteGroupId; label: string; nodes: PaletteNodeItem[]; projects: PaletteProjectItem[]; models: PaletteModelItem[]; hiddenCount: number }
+export interface PaletteOptions { query: string; showInactive: boolean; mode: DesignerMode }
 
 /* ---------------- Geometry ---------------- */
 export interface Point { x: number; y: number }
@@ -218,25 +304,29 @@ export interface FlowLayout { version: 1; viewport: Viewport; nodes: Record<stri
 
 /* ---------------- Editing ---------------- */
 export interface FlowSelection { nodeIds: string[]; edgeIds: string[] }
-export type AddableNodeType = 'project' | 'deployment' | 'target' | 'masker'
+export type AddableNodeType = 'project' | 'guardrail' | 'masker' | 'prompt' | 'params' | 'cache' | 'router' | 'llm'
 export type FlowCommand =
   | { type: 'moveNodes'; moves: Array<{ nodeId: string; x: number; y: number }> }
-  | { type: 'addNode'; nodeType: AddableNodeType; refId?: string | null; position?: Point | null }
-  | { type: 'removeItems'; nodeIds: string[]; edgeIds: string[] }
+  | { type: 'addNode'; nodeType: AddableNodeType; refId?: string | null; position?: Point | null; spliceEdgeId?: string | null; autoWire?: boolean }
+  | { type: 'removeItems'; nodeIds: string[]; edgeIds: string[]; force?: boolean }
   | { type: 'connect'; from: PortRef; to: PortRef }
   | { type: 'updateProps'; nodeId: string; patch: Record<string, FlowPropValue> }
-  | { type: 'bindTarget'; targetNodeId: string; deploymentId: string }
+  | { type: 'replaceModel'; nodeId: string; deploymentId: string }
   | { type: 'setAccess'; projectNodeId: string; granted: boolean }
+  | { type: 'normalizeOrder' }
+  | { type: 'applyTemplate'; template: WorkflowTemplateId; projectIds: string[]; deploymentIds: string[] }
   | { type: 'toggleCollapse'; nodeIds: string[]; collapsed: boolean }
   | { type: 'autoLayout' }
 export interface CommandResult { graph: FlowGraph; changed: boolean; error: string | null; select: FlowSelection | null }
 export type ConnectCheck = { ok: true; replaces: string[] } | { ok: false; reason: string }
 export type NodeChangeKind = 'added' | 'modified'
-export type FlowToolbarAction = 'undo' | 'redo' | 'fit' | 'auto-layout' | 'validate' | 'plan' | 'revert' | 'reload' | 'save-layout' | 'toggle-palette' | 'toggle-inspector'
+export type FlowToolbarAction = 'undo' | 'redo' | 'fit' | 'auto-layout' | 'zoom-in' | 'zoom-out' | 'zoom-reset' | 'validate' | 'plan' | 'revert' | 'reload' | 'save-layout' | 'toggle-palette' | 'toggle-inspector' | 'mode-basic' | 'mode-advanced' | 'normalize-order'
 
 /* ---------------- Validation ---------------- */
 export type IssueSeverity = 'error' | 'warning' | 'info'
-export interface ValidationIssue { code: string; severity: IssueSeverity; message: string; nodeId: string | null; edgeId: string | null; field: string | null }
+/** v2: a one-click fix offered next to the issue. */
+export interface IssueFix { label: string; command: FlowCommand }
+export interface ValidationIssue { code: string; severity: IssueSeverity; message: string; nodeId: string | null; edgeId: string | null; field: string | null; fix?: IssueFix }
 
 /* ---------------- Plan ---------------- */
 export type ServiceRef = { kind: 'existing'; id: string } | { kind: 'created' }
@@ -283,8 +373,8 @@ export interface PatchServiceBody {
   retryPolicy?: RetryPolicy
   allowDegraded?: boolean
 }
-export interface CreateTargetBody { deploymentId: string; priority: number; weight: number; degraded: boolean; followModelChanges: boolean; maxConcurrencyOverride?: number }
-export interface PatchTargetBody { priority?: number; weight?: number; degraded?: boolean; enabled?: boolean; maxConcurrencyOverride?: number; followModelChanges?: boolean }
+export interface CreateTargetBody { deploymentId: string; priority: number; weight: number; degraded: boolean; followModelChanges: boolean; maxConcurrencyOverride?: number; systemPromptTemplate?: string }
+export interface PatchTargetBody { priority?: number; weight?: number; degraded?: boolean; enabled?: boolean; maxConcurrencyOverride?: number; followModelChanges?: boolean; systemPromptTemplate?: string; clearSystemPromptTemplate?: true }
 export interface OperationChange { field: string; label: string; before: string; after: string }
 export interface OperationCommon { opId: string; risk: OperationRisk; summary: string; changes: OperationChange[] }
 export type FlowOperation =
@@ -332,9 +422,9 @@ export interface ExecutionReport {
   results: OperationResult[]
   /** Service id after execution (the created id for new services). */
   serviceId: string | null
-  /** Target key (FlowNode id) -> created server id. */
+  /** Target key -> created server id. */
   createdTargetIds: Record<string, string>
-  /** Target keys (FlowNode ids) whose server row this run deleted (succeeded or already gone). */
+  /** Target keys whose server row this run deleted (succeeded or already gone). */
   deletedTargetKeys?: string[]
   completed: boolean
   failedOpId: string | null

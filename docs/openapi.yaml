@@ -1081,7 +1081,7 @@ components:
         nodes:
           type: object
           maxProperties: 500
-          description: Keyed by node id (service, guardrail, prompt, cache, router, masker, or kind:id).
+          description: Keyed by node id (start, service, guardrail, prompt, params, cache, router, masker, or kind:id where kind is project, policy, prompt, target, deployment, endpoint or provider).
           additionalProperties:
             type: object
             required: [x, y]
@@ -1265,3 +1265,7 @@ components:
           type: boolean
           default: true
           description: Automatically move this Target to an unambiguous replacement Deployment when the same runtime model changes.
+        systemPromptTemplate:
+          type: [string, 'null']
+          maxLength: 16000
+          description: Model-specific system prompt appended after the service prompt for this target only. Changing it increments the service promptVersion.

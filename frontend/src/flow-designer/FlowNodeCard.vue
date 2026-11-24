@@ -49,6 +49,9 @@ function portState(port: PortSpec): { compatible: boolean; hot: boolean } {
   return { compatible: props.highlightPortIds.includes(key), hot: props.highlightPortIds.includes(`hot:${key}`) }
 }
 
+// locked: start = 고정, policy = 정책, derived hosts = 자동.
+const lockChip = computed(() => (props.node.type === 'policy' ? '정책' : props.node.type === 'endpoint' || props.node.type === 'provider' ? '자동' : '고정'))
+
 const bodyHeight = computed(() => HEADER_HEIGHT + rows.value * PORT_ROW_HEIGHT + SUMMARY_HEIGHT + NODE_PADDING)
 const ariaLabel = computed(() => `${props.view.typeLabel} ${props.view.title}, ${TONE_LABEL[props.view.tone]}`)
 
@@ -85,7 +88,9 @@ function onKeydown(event: KeyboardEvent) {
         <span class="fd-node-marks">
           <i v-if="change === 'modified'" class="fd-change-dot" title="변경됨" aria-label="변경됨"></i>
           <span v-if="change === 'added'" class="fd-chip fd-chip--accent">신규</span>
-          <span v-if="view.locked" class="fd-chip">고정</span>
+          <span v-if="view.protected" class="fd-chip fd-chip--warning" title="서버 정책으로 보호 중입니다.">보호</span>
+          <span v-if="view.locked" class="fd-chip" :title="view.lockReason ?? undefined">{{ lockChip }}</span>
+          <span v-if="view.promptScope" class="fd-chip fd-chip--accent">{{ view.promptScope === 'common' ? '공통' : '모델별' }}</span>
           <span v-if="counts.error > 0" class="fd-chip fd-chip--danger" :title="`오류 ${counts.error}건`">{{ counts.error }}</span>
           <span v-if="counts.warning > 0" class="fd-chip fd-chip--warning" :title="`경고 ${counts.warning}건`">{{ counts.warning }}</span>
         </span>
@@ -144,11 +149,17 @@ function onKeydown(event: KeyboardEvent) {
   outline: none;
   user-select: none;
   touch-action: none;
+  text-rendering: geometricPrecision;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   --fd-cat: var(--muted);
 }
 .fd-node[data-category='entry'] { --fd-cat: var(--info); }
-.fd-node[data-category='pipeline'] { --fd-cat: var(--accent-strong); }
+.fd-node[data-category='guard'] { --fd-cat: var(--warning); }
+.fd-node[data-category='prompt'] { --fd-cat: var(--accent-strong); }
+.fd-node[data-category='cache'] { --fd-cat: var(--accent-strong); }
 .fd-node[data-category='routing'] { --fd-cat: var(--warning); }
+.fd-node[data-category='llm'] { --fd-cat: var(--accent); }
 .fd-node[data-category='infra'] { --fd-cat: var(--muted); }
 
 .fd-node-body {
@@ -156,17 +167,21 @@ function onKeydown(event: KeyboardEvent) {
   box-sizing: border-box;
   width: 100%;
   overflow: hidden;
+  border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface);
-  box-shadow: inset 0 0 0 1px var(--border);
   cursor: grab;
 }
 .fd-node.is-readonly .fd-node-body { cursor: default; }
-.fd-node:hover .fd-node-body { box-shadow: inset 0 0 0 1px var(--border-strong); }
+.fd-node:hover .fd-node-body { border-color: var(--border-strong); }
 .fd-node.is-selected .fd-node-body {
-  box-shadow: inset 0 0 0 2px var(--accent-border), var(--shadow-soft);
+  border-color: var(--accent-strong);
+  box-shadow: 0 0 0 1px var(--accent-border), var(--shadow-soft);
 }
-.fd-node:focus-visible .fd-node-body { box-shadow: inset 0 0 0 2px var(--accent-strong); }
+.fd-node:focus-visible .fd-node-body {
+  border-color: var(--accent-strong);
+  box-shadow: 0 0 0 1px var(--accent-strong);
+}
 
 .fd-node-header {
   position: relative;
@@ -178,12 +193,12 @@ function onKeydown(event: KeyboardEvent) {
   border-bottom: 1px solid var(--border);
   background: var(--surface-2);
 }
-.fd-node.is-collapsed .fd-node-header { border-bottom: 0; }
+.fd-node.is-collapsed .fd-node-header { border-bottom: 0; max-height: 100%; }
 .fd-node-strip { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--fd-cat); }
 .fd-node-icon { flex: none; width: 18px; text-align: center; font-size: 14px; color: var(--fd-cat); }
 .fd-node-heading { flex: 1; min-width: 0; display: grid; gap: 1px; }
-.fd-node-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; font-weight: 800; line-height: 15px; }
-.fd-node-subtitle { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 9px; line-height: 12px; color: var(--muted); }
+.fd-node-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11.5px; font-weight: 800; line-height: 15px; }
+.fd-node-subtitle { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 9.5px; line-height: 12px; color: var(--muted); }
 .fd-node-marks { flex: none; display: inline-flex; align-items: center; gap: 3px; }
 .fd-change-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 1px var(--accent-strong); }
 .fd-collapse {
@@ -217,7 +232,7 @@ function onKeydown(event: KeyboardEvent) {
   border-radius: 5px;
   background: var(--surface-3);
   color: var(--muted);
-  font-size: 8px;
+  font-size: 8.5px;
   font-weight: 800;
   line-height: 1;
   white-space: nowrap;
@@ -228,7 +243,7 @@ function onKeydown(event: KeyboardEvent) {
 
 .fd-ports { position: relative; }
 .fd-row { position: relative; box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; padding: 0 14px; }
-.fd-port-label { font-size: 9px; font-weight: 700; color: var(--text-soft); white-space: nowrap; }
+.fd-port-label { font-size: 10px; font-weight: 700; color: var(--text-soft); white-space: nowrap; }
 
 .fd-summary {
   box-sizing: border-box;
@@ -237,8 +252,8 @@ function onKeydown(event: KeyboardEvent) {
   display: flex;
   flex-direction: column;
 }
-.fd-badges { height: 16px; flex: none; display: flex; gap: 4px; overflow: hidden; }
-.fd-summary-line { height: 14px; flex: none; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 10px; line-height: 14px; color: var(--text-soft); }
+.fd-badges { height: 16px; margin-bottom: 2px; flex: none; display: flex; gap: 4px; overflow: hidden; }
+.fd-summary-line { height: 15px; flex: none; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 10.5px; line-height: 15px; color: var(--text-soft); }
 .fd-muted { color: var(--muted); }
 
 .fd-port {

@@ -127,7 +127,7 @@ function requestClose() {
         </section>
 
         <label v-if="dangerCount && phase === 'review'" class="toggle-field fd-confirm">
-          <span>위험 작업 {{ dangerCount }}건을 확인했습니다<small>서비스 중단, 보호 수준 완화, 삭제 또는 접근 해제가 포함되어 있습니다.</small></span>
+          <span>위험 작업 {{ dangerCount }}건을 확인했습니다<small>서비스 중단, 외부 노출 방지 정책 완화, 삭제 또는 접근 해제가 포함되어 있습니다.</small></span>
           <input v-model="confirmed" type="checkbox" :disabled="busy" />
         </label>
 
@@ -135,7 +135,7 @@ function requestClose() {
           <strong v-if="!failed">{{ succeededCount }}개 작업을 적용했습니다.</strong>
           <template v-else>
             <strong>작업 {{ succeededCount }}건 적용 후 실패하여 중단했습니다.</strong>
-            <p class="fd-hint">남은 변경은 캔버스에 그대로 유지됩니다. 서버 상태를 다시 불러와 반영했습니다.</p>
+            <p class="fd-hint">남은 변경은 워크플로우에 그대로 유지됩니다. 서버 상태를 다시 불러와 반영했습니다.</p>
           </template>
         </section>
       </template>

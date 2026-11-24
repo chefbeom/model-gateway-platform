@@ -181,17 +181,31 @@ public class LlmService {
         }
     }
 
+    public void bumpPromptVersion() {
+        this.promptVersion = Math.max(1, this.promptVersion + 1);
+    }
+
     public void applySystemPromptTemplate(ObjectNode request) {
-        if (request == null || systemPromptTemplate == null || systemPromptTemplate.isBlank()) return;
+        applySystemPromptTemplate(request, null);
+    }
+
+    /** Service prompt first, then the target prompt, then the client's own first system message. */
+    public void applySystemPromptTemplate(ObjectNode request, String targetTemplate) {
+        boolean hasTarget = targetTemplate != null && !targetTemplate.isBlank();
+        boolean hasService = systemPromptTemplate != null && !systemPromptTemplate.isBlank();
+        if (!hasTarget && !hasService) return;
+        String combined = !hasTarget ? systemPromptTemplate
+                : (hasService ? systemPromptTemplate + "\n\n" : "") + targetTemplate.trim();
+        if (request == null) return;
         if (!(request.path("messages") instanceof com.fasterxml.jackson.databind.node.ArrayNode messages)) return;
         if (messages.size() > 0 && "system".equalsIgnoreCase(messages.get(0).path("role").asText())
                 && messages.get(0) instanceof ObjectNode firstSys
                 && firstSys.path("content").isTextual()) {
-            firstSys.put("content", systemPromptTemplate + "\n\n" + firstSys.path("content").asText());
+            firstSys.put("content", combined + "\n\n" + firstSys.path("content").asText());
         } else {
             ObjectNode sys = request.objectNode();
             sys.put("role", "system");
-            sys.put("content", systemPromptTemplate);
+            sys.put("content", combined);
             messages.insert(0, sys);
         }
     }

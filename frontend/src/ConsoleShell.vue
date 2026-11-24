@@ -58,7 +58,7 @@ const adminNavItems: NavItem[] = [
   { id: 'system', label: '시스템 구조', description: '요청 경로 · Target · 서버 연결 상태', keywords: '시스템 구조 연결도 상태 architecture structure topology infrastructure provider llm team project api key', icon: '~', group: 'Operations' },
   { id: 'external', label: '외부 AI', description: 'OpenAI·승인·수동·자동 Failover', keywords: 'openai external provider cloud approval failover', icon: '◎', group: '운영' },
   { id: 'services', label: 'LLM 서비스', description: '논리 모델과 라우팅 정책', keywords: 'service model failover routing', icon: '▣', group: '운영' },
-  { id: 'flow-designer', label: '플로우 디자이너', description: '노드 캔버스로 서비스 파이프라인 구성 · 실험', keywords: 'flow designer canvas node graph pipeline routing 플로우 디자이너 배치 노드 캔버스 실험 experimental', icon: '⌬', group: '운영' },
+  { id: 'flow-designer', label: '워크플로우 디자이너', description: '노드와 간선으로 서비스 워크플로우 구성 · 실험', keywords: 'workflow designer flow canvas node edge graph pipeline routing 워크플로우 노드 간선 플로우 디자이너 배치 캔버스 실험 experimental', icon: '⌬', group: '운영' },
   { id: 'teams', label: '팀과 부서', description: '부서·역할·프로젝트 소유', keywords: 'team department role audit', icon: '⌘', group: '워크스페이스 관리' },
   { id: 'projects', label: '프로젝트', description: '프로젝트·권한·API 키', keywords: 'project key quota credential', icon: '⌘', group: '워크스페이스 관리' },
   { id: 'relationship', label: '조직 관계도', description: '최고 관리자·조직·프로젝트·구성원 계층도', keywords: 'organization relationship hierarchy chart tree member manager 조직 관계도 계층도', icon: '◈', group: '워크스페이스' },

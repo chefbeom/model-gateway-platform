@@ -16,6 +16,7 @@ public class ServiceTarget {
     @Column(nullable = false) private boolean enabled = true;
     @Column(nullable = false) private boolean followModelChanges = true;
     private Integer maxConcurrencyOverride;
+    @Column(name = "system_prompt_template", columnDefinition = "text") private String systemPromptTemplate;
     @Column(nullable = false) private Instant createdAt = Instant.now();
     @Column(nullable = false) private Instant updatedAt = Instant.now();
 
@@ -41,6 +42,17 @@ public class ServiceTarget {
         if (maxConcurrencyOverride != null) this.maxConcurrencyOverride = Math.max(1, maxConcurrencyOverride);
         if (followModelChanges != null) this.followModelChanges = followModelChanges;
     }
+    /** Returns true when the stored value changed. Blank means none; values are trimmed. */
+    public boolean configureSystemPromptTemplate(String template, boolean clear) {
+        String next;
+        if (clear) next = null;
+        else if (template == null) return false;
+        else next = template.isBlank() ? null : template.trim();
+        if (java.util.Objects.equals(this.systemPromptTemplate, next)) return false;
+        this.systemPromptTemplate = next;
+        return true;
+    }
+    public String getSystemPromptTemplate() { return systemPromptTemplate; }
     public void rebindTo(UUID deploymentId) { this.deploymentId = deploymentId; }
     @PreUpdate void updateTimestamp() { updatedAt = Instant.now(); }
     public UUID getId() { return id; }

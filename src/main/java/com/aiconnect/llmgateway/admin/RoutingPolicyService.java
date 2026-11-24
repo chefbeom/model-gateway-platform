@@ -264,17 +264,28 @@ public class RoutingPolicyService {
 
     @Transactional
     public ServiceTarget configureTarget(UUID serviceId, UUID targetId, RoutingPolicyController.UpdateTarget request) {
-        requireService(serviceId);
+        LlmService service = requireService(serviceId);
         ServiceTarget target = requireTarget(serviceId, targetId);
         target.configure(request.priority(), request.weight(), request.degraded(), request.enabled(),
                 request.maxConcurrencyOverride(), request.followModelChanges());
+        boolean promptChanged = target.configureSystemPromptTemplate(request.systemPromptTemplate(),
+                Boolean.TRUE.equals(request.clearSystemPromptTemplate()));
+        if (promptChanged) {
+            service.bumpPromptVersion();
+            services.save(service);
+        }
         return targets.save(target);
     }
 
     @Transactional
     public void deleteTarget(UUID serviceId, UUID targetId) {
-        requireService(serviceId);
-        targets.delete(requireTarget(serviceId, targetId));
+        LlmService service = requireService(serviceId);
+        ServiceTarget target = requireTarget(serviceId, targetId);
+        if (target.getSystemPromptTemplate() != null) {
+            service.bumpPromptVersion();
+            services.save(service);
+        }
+        targets.delete(target);
     }
 
     private LlmService requireService(UUID serviceId) {
