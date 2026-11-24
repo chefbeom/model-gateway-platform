@@ -678,3 +678,30 @@ kbd { padding: 3px 6px; border: 1px solid var(--border-strong); border-radius: 5
 @media (max-width: 520px) {
   .login-stepper { grid-template-columns: 1fr; }
 }
+
+/* Full-viewport adaptive workspace for Service Flow Designer (FHD/QHD/4K) */
+.console-content:has(> .fd-page) {
+  width: 100%;
+  max-width: none;
+  padding: clamp(12px, 1.2vw, 20px) clamp(16px, 1.8vw, 28px);
+}
+@media (min-width: 981px) and (min-height: 720px) {
+  .console-stage:has(.fd-page) {
+    height: calc(100vh / var(--console-zoom, 1));
+    height: calc(100dvh / var(--console-zoom, 1));
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .console-stage:has(.fd-page) > .topbar {
+    flex-shrink: 0;
+  }
+  .console-content:has(> .fd-page) {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+}

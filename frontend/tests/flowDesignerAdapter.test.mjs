@@ -454,3 +454,27 @@ test('executePlan reports deletedTargetKeys for succeeded and already-applied de
   assert.deepEqual(report.results.map(item => item.status), ['succeeded', 'already-applied', 'failed', 'skipped'])
   assert.deepEqual(report.deletedTargetKeys, ['target:a', 'target:b'])
 })
+
+test('FlowCanvas avoids permanent will-change rasterization lock and isolates layer painting', () => {
+  const canvas = readFileSync(new URL('../src/flow-designer/FlowCanvas.vue', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+  const worldRuleMatch = canvas.match(/\.fd-world\s*\{[^}]*\}/)
+  assert.ok(worldRuleMatch, '.fd-world CSS rule must exist')
+  assert.doesNotMatch(worldRuleMatch[0], /will-change\s*:/, '.fd-world must not permanently lock compositor rasterization')
+  assert.match(canvas, /\.fd-canvas\.is-panning\s+\.fd-world,\s*\.fd-canvas\.is-zooming\s+\.fd-world\s*\{[^}]*will-change:\s*transform;/)
+  assert.match(canvas, /\.fd-canvas\s*\{[^}]*contain:\s*layout paint style;/)
+  assert.match(canvas, /const isZooming = ref\(false\)/)
+})
+
+test('FlowDesignerPage and style.css provide QHD full-width and zoom-compensated adaptive workspace', () => {
+  const style = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+  const page = readFileSync(new URL('../src/flow-designer/FlowDesignerPage.vue', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+  const toolbar = readFileSync(new URL('../src/flow-designer/FlowToolbar.vue', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+
+  assert.match(style, /\.console-content:has\(>\s*\.fd-page\)\s*\{[^}]*max-width:\s*none;/)
+  assert.match(style, /\.console-stage:has\(\.fd-page\)\s*\{[^}]*calc\(100dvh\s*\/\s*var\(--console-zoom,\s*1\)\)/)
+  assert.match(page, /\.fd-stage\s*\{[^}]*grid-template-columns:\s*clamp\([^)]+\)\s+minmax\(480px,\s*1fr\)\s+clamp\([^)]+\)/)
+  assert.match(page, /calc\(100dvh\s*\/\s*var\(--console-zoom,\s*1\)\s*-\s*240px\)/)
+  assert.match(toolbar, /fire\('zoom-out'\)/)
+  assert.match(toolbar, /fire\('zoom-reset'\)/)
+  assert.match(toolbar, /fire\('zoom-in'\)/)
+})

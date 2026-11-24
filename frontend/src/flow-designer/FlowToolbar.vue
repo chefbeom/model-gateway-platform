@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { FlowToolbarAction } from './types'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   canUndo: boolean
   canRedo: boolean
   changeCount: number
@@ -12,7 +12,8 @@ const props = defineProps<{
   busy: boolean
   readOnly: boolean
   compact: boolean
-}>()
+  zoom?: number
+}>(), { zoom: 1 })
 
 const emit = defineEmits<{ action: [FlowToolbarAction] }>()
 
@@ -35,6 +36,12 @@ const editBlocked = () => props.readOnly || props.busy
     <div class="fd-group">
       <button type="button" class="fd-btn" aria-label="화면 맞춤" title="화면 맞춤 (F)" @click="fire('fit')">화면 맞춤</button>
       <button type="button" class="fd-btn" aria-label="자동 정렬" title="노드를 열 기준으로 자동 정렬합니다." :disabled="editBlocked()" @click="fire('auto-layout')">자동 정렬</button>
+    </div>
+
+    <div class="fd-group" aria-label="확대/축소">
+      <button type="button" class="fd-btn fd-btn--icon" aria-label="축소" title="축소 (-)" @click="fire('zoom-out')">−</button>
+      <button type="button" class="fd-btn fd-zoom-readout" aria-label="배율 100%로 초기화" title="100%로 보기 (0)" @click="fire('zoom-reset')">{{ Math.round((zoom ?? 1) * 100) }}%</button>
+      <button type="button" class="fd-btn fd-btn--icon" aria-label="확대" title="확대 (+)" @click="fire('zoom-in')">＋</button>
     </div>
 
     <button
@@ -81,12 +88,14 @@ const editBlocked = () => props.readOnly || props.busy
   align-items: center;
   gap: 8px 12px;
   padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
+  border: 1px solid var(--border);
+  border-radius: 12px;
   background: var(--surface);
 }
 .fd-group { display: inline-flex; align-items: center; gap: 4px; padding-right: 12px; border-right: 1px solid var(--border); }
 .fd-group:last-of-type { border-right: 0; }
 .fd-spacer { flex: 1; }
+.fd-zoom-readout { min-width: 54px; font-variant-numeric: tabular-nums; }
 
 .fd-btn, .fd-toggle {
   min-height: 32px;

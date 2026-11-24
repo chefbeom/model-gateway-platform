@@ -55,11 +55,12 @@ const emit = defineEmits<{
 const DND_MIME = 'application/x-aiconnect-flow-node'
 const ADDABLE: AddableNodeType[] = ['project', 'deployment', 'target', 'masker']
 const CLICK_THRESHOLD = 3
-const WHEEL_DEBOUNCE_MS = 150
+const WHEEL_DEBOUNCE_MS = 140
 
 const root = ref<HTMLElement | null>(null)
 const size = ref({ width: 0, height: 0 })
 const live = ref<Viewport | null>(null)
+const isZooming = ref(false)
 const announcement = ref('')
 const marquee = ref<{ x: number; y: number; width: number; height: number } | null>(null)
 const spaceDown = ref(false)
@@ -179,14 +180,23 @@ const selectedEdgeButton = computed(() => {
   return items.length === 1 ? items[0] : null
 })
 
+const isViewportMoving = computed(() => isZooming.value || (interactionMode.value === 'pan' && live.value !== null))
+
+function snapOffset(value: number): number {
+  if (isViewportMoving.value) return value
+  const dpr = typeof window !== 'undefined' && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1
+  return Math.round(value * dpr) / dpr
+}
+
 const worldStyle = computed(() => ({
-  transform: `translate(${vp.value.x}px, ${vp.value.y}px) scale(${vp.value.zoom})`,
+  transform: `translate(${snapOffset(vp.value.x)}px, ${snapOffset(vp.value.y)}px) scale(${vp.value.zoom})`,
   transformOrigin: '0 0',
 }))
 
 const gridStyle = computed(() => {
-  const cell = `${GRID_SIZE * vp.value.zoom}px`
-  return { backgroundSize: `${cell} ${cell}`, backgroundPosition: `${vp.value.x}px ${vp.value.y}px` }
+  const step = vp.value.zoom < 0.5 ? GRID_SIZE * 2 : GRID_SIZE
+  const cell = `${step * vp.value.zoom}px`
+  return { backgroundSize: `${cell} ${cell}`, backgroundPosition: `${snapOffset(vp.value.x)}px ${snapOffset(vp.value.y)}px` }
 })
 
 const marqueeStyle = computed(() => {
@@ -254,7 +264,7 @@ function visibleWorldRect() {
   return { x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y }
 }
 
-defineExpose({ fit, centerOn, viewportCenterWorld, visibleWorldRect })
+defineExpose({ fit, centerOn, zoomCenter, viewportCenterWorld, visibleWorldRect })
 
 function localPoint(event: { clientX: number; clientY: number }): Point {
   const el = root.value
@@ -536,11 +546,13 @@ function selectEdge(id: string, shift: boolean) {
 }
 
 function onWheel(event: WheelEvent) {
+  isZooming.value = true
   const factor = Math.exp(-(event.deltaY * (event.deltaMode === 1 ? 16 : 1)) * 0.0015)
   live.value = zoomAt(vp.value, localPoint(event), factor)
   if (wheelTimer !== null) window.clearTimeout(wheelTimer)
   wheelTimer = window.setTimeout(() => {
     wheelTimer = null
+    isZooming.value = false
     if (live.value) commitViewport(live.value)
   }, WHEEL_DEBOUNCE_MS)
 }
@@ -701,6 +713,7 @@ onBeforeUnmount(() => {
   if (wheelTimer !== null) window.clearTimeout(wheelTimer)
   rafId = null
   wheelTimer = null
+  isZooming.value = false
   viewCache.clear()
 })
 
@@ -729,7 +742,7 @@ watch(() => props.selection, (selection) => {
   <div
     ref="root"
     class="fd-canvas"
-    :class="{ 'is-panning': interactionMode === 'pan' && live !== null, 'is-space': spaceDown, 'is-wiring': interactionMode === 'wire', 'is-readonly': readOnly }"
+    :class="{ 'is-panning': interactionMode === 'pan' && live !== null, 'is-zooming': isZooming, 'is-space': spaceDown, 'is-wiring': interactionMode === 'wire', 'is-readonly': readOnly }"
     :style="gridStyle"
     tabindex="0"
     role="application"
@@ -801,6 +814,8 @@ watch(() => props.selection, (selection) => {
   height: 100%;
   min-height: 240px;
   overflow: hidden;
+  contain: layout paint style;
+  isolation: isolate;
   background-color: var(--bg-soft);
   background-image:
     linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
@@ -815,8 +830,11 @@ watch(() => props.selection, (selection) => {
 .fd-canvas.is-panning { cursor: grabbing; }
 .fd-canvas.is-wiring { cursor: crosshair; }
 
-.fd-world { position: absolute; left: 0; top: 0; width: 0; height: 0; will-change: transform; }
-.fd-edges { position: absolute; left: 0; top: 0; pointer-events: none; }
+/* Keep static text/edges crisp at any zoom by promoting GPU layer only while panning or zooming. */
+.fd-world { position: absolute; left: 0; top: 0; width: 0; height: 0; }
+.fd-canvas.is-panning .fd-world,
+.fd-canvas.is-zooming .fd-world { will-change: transform; }
+.fd-edges { position: absolute; left: 0; top: 0; pointer-events: none; shape-rendering: geometricPrecision; }
 
 .fd-edge-line { fill: none; stroke: var(--faint); stroke-width: 2; stroke-linecap: round; pointer-events: none; }
 .fd-edge-hit { fill: none; stroke: transparent; stroke-width: 14; pointer-events: stroke; cursor: pointer; }

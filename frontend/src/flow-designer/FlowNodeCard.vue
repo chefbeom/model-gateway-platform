@@ -144,6 +144,9 @@ function onKeydown(event: KeyboardEvent) {
   outline: none;
   user-select: none;
   touch-action: none;
+  text-rendering: geometricPrecision;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   --fd-cat: var(--muted);
 }
 .fd-node[data-category='entry'] { --fd-cat: var(--info); }
@@ -156,17 +159,21 @@ function onKeydown(event: KeyboardEvent) {
   box-sizing: border-box;
   width: 100%;
   overflow: hidden;
+  border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface);
-  box-shadow: inset 0 0 0 1px var(--border);
   cursor: grab;
 }
 .fd-node.is-readonly .fd-node-body { cursor: default; }
-.fd-node:hover .fd-node-body { box-shadow: inset 0 0 0 1px var(--border-strong); }
+.fd-node:hover .fd-node-body { border-color: var(--border-strong); }
 .fd-node.is-selected .fd-node-body {
-  box-shadow: inset 0 0 0 2px var(--accent-border), var(--shadow-soft);
+  border-color: var(--accent-strong);
+  box-shadow: 0 0 0 1px var(--accent-border), var(--shadow-soft);
 }
-.fd-node:focus-visible .fd-node-body { box-shadow: inset 0 0 0 2px var(--accent-strong); }
+.fd-node:focus-visible .fd-node-body {
+  border-color: var(--accent-strong);
+  box-shadow: 0 0 0 1px var(--accent-strong);
+}
 
 .fd-node-header {
   position: relative;
@@ -178,12 +185,12 @@ function onKeydown(event: KeyboardEvent) {
   border-bottom: 1px solid var(--border);
   background: var(--surface-2);
 }
-.fd-node.is-collapsed .fd-node-header { border-bottom: 0; }
+.fd-node.is-collapsed .fd-node-header { border-bottom: 0; max-height: 100%; }
 .fd-node-strip { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--fd-cat); }
 .fd-node-icon { flex: none; width: 18px; text-align: center; font-size: 14px; color: var(--fd-cat); }
 .fd-node-heading { flex: 1; min-width: 0; display: grid; gap: 1px; }
-.fd-node-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; font-weight: 800; line-height: 15px; }
-.fd-node-subtitle { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 9px; line-height: 12px; color: var(--muted); }
+.fd-node-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11.5px; font-weight: 800; line-height: 15px; }
+.fd-node-subtitle { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 9.5px; line-height: 12px; color: var(--muted); }
 .fd-node-marks { flex: none; display: inline-flex; align-items: center; gap: 3px; }
 .fd-change-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 1px var(--accent-strong); }
 .fd-collapse {
@@ -217,7 +224,7 @@ function onKeydown(event: KeyboardEvent) {
   border-radius: 5px;
   background: var(--surface-3);
   color: var(--muted);
-  font-size: 8px;
+  font-size: 8.5px;
   font-weight: 800;
   line-height: 1;
   white-space: nowrap;
@@ -228,7 +235,7 @@ function onKeydown(event: KeyboardEvent) {
 
 .fd-ports { position: relative; }
 .fd-row { position: relative; box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; padding: 0 14px; }
-.fd-port-label { font-size: 9px; font-weight: 700; color: var(--text-soft); white-space: nowrap; }
+.fd-port-label { font-size: 10px; font-weight: 700; color: var(--text-soft); white-space: nowrap; }
 
 .fd-summary {
   box-sizing: border-box;
@@ -237,8 +244,8 @@ function onKeydown(event: KeyboardEvent) {
   display: flex;
   flex-direction: column;
 }
-.fd-badges { height: 16px; flex: none; display: flex; gap: 4px; overflow: hidden; }
-.fd-summary-line { height: 14px; flex: none; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 10px; line-height: 14px; color: var(--text-soft); }
+.fd-badges { height: 16px; margin-bottom: 2px; flex: none; display: flex; gap: 4px; overflow: hidden; }
+.fd-summary-line { height: 15px; flex: none; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 10.5px; line-height: 15px; color: var(--text-soft); }
 .fd-muted { color: var(--muted); }
 
 .fd-port {

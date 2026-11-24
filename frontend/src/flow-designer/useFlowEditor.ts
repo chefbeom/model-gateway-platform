@@ -27,7 +27,7 @@ import type {
 } from './types'
 
 export const NEW_SERVICE_KEY = '__new__'
-export interface CanvasHandle { fit(): void; centerOn(nodeId: string): void; viewportCenterWorld(): Point; visibleWorldRect(): Rect }
+export interface CanvasHandle { fit(): void; centerOn(nodeId: string): void; zoomCenter(factor: number | 'reset'): void; viewportCenterWorld(): Point; visibleWorldRect(): Rect }
 export interface FlowEditorProps { organizationId: string; auth: AdminAuth; platformAdmin: boolean }
 export type PlanPhase = 'review' | 'applying' | 'done'
 
@@ -468,6 +468,9 @@ export function useFlowEditor(props: FlowEditorProps, canvas: Ref<CanvasHandle |
       case 'redo': redo(); break
       case 'fit': canvas.value?.fit(); break
       case 'auto-layout': handleCommand({ type: 'autoLayout' }); break
+      case 'zoom-in': canvas.value?.zoomCenter(1.25); break
+      case 'zoom-out': canvas.value?.zoomCenter(1 / 1.25); break
+      case 'zoom-reset': canvas.value?.zoomCenter('reset'); break
       case 'validate': selection.value = { ...EMPTY_SELECTION }; inspectorOpen.value = true; break
       case 'plan': void openPlan(); break
       case 'revert': revert(); break

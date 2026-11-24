@@ -65,7 +65,7 @@ function onServiceChange(event: Event) {
           :can-undo="canUndo" :can-redo="canRedo" :change-count="changeCount"
           :error-count="errorCount" :warning-count="warningCount"
           :layout-dirty="layoutDirty" :layout-available="layoutAvailable"
-          :busy="busy" :read-only="readOnly" :compact="compact"
+          :busy="busy" :read-only="readOnly" :compact="compact" :zoom="viewport.zoom"
           @action="editor.onToolbarAction"
         />
         <div ref="stageRef" class="fd-stage" :class="{ 'fd-compact': compact }" aria-busy="false">
@@ -110,14 +110,18 @@ function onServiceChange(event: Event) {
 </template>
 
 <style scoped>
-.fd-page { display: grid; gap: 14px; }
+.fd-page { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+.fd-page > .page-hero { flex: none; min-height: 0; align-items: center; gap: 18px; }
+.fd-page > .page-hero .eyebrow { margin-bottom: 4px; }
+.fd-page > .page-hero h1 { margin-bottom: 4px; font-size: clamp(20px, 1.7vw, 26px); }
+.fd-page > .page-hero > div > p:last-child { font-size: 12px; line-height: 1.45; }
 .fd-badge { margin-left: 10px; vertical-align: middle; letter-spacing: .12em; }
 .fd-service-picker { display: grid; gap: 6px; min-width: 260px; max-width: 360px; }
 .fd-service-picker label { color: var(--muted); font-size: 10px; font-weight: 700; }
 .fd-error { display: grid; gap: 8px; justify-items: start; padding: 18px; border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent); border-radius: 14px; background: var(--danger-dim); color: var(--text-soft); }
 .fd-error strong { color: var(--danger); font-size: 13px; }
 .fd-error p { margin: 0; font-size: 11px; color: var(--muted); }
-.fd-stage { position: relative; display: grid; grid-template-columns: 240px minmax(480px, 1fr) 300px; height: clamp(520px, calc(100vh - 300px), 1100px); border: 1px solid var(--border); border-radius: 14px; background: var(--surface); overflow: hidden; }
+.fd-stage { position: relative; flex: 1 1 520px; min-height: 420px; display: grid; grid-template-columns: clamp(232px, 14vw, 310px) minmax(480px, 1fr) clamp(280px, 17vw, 380px); height: clamp(480px, calc(100dvh / var(--console-zoom, 1) - 240px), 1600px); border: 1px solid var(--border); border-radius: 14px; background: var(--surface); overflow: hidden; }
 .fd-stage.fd-compact { grid-template-columns: minmax(0, 1fr); }
 .fd-canvas { min-width: 0; min-height: 0; }
 .fd-aside { min-height: 0; overflow: auto; background: var(--surface); }
@@ -126,7 +130,7 @@ function onServiceChange(event: Event) {
 .fd-compact .fd-aside { position: absolute; top: 0; bottom: 0; z-index: 5; width: min(300px, 92%); box-shadow: var(--shadow); }
 .fd-compact .fd-aside-left { left: 0; }
 .fd-compact .fd-aside-right { right: 0; }
-.fd-statusbar { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 8px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); color: var(--muted); font-size: 10px; font-weight: 600; }
+.fd-statusbar { flex: none; display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 8px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); color: var(--muted); font-size: 10px; font-weight: 600; }
 .fd-bad { color: var(--danger); }
 .fd-warn { color: var(--warning); }
 </style>

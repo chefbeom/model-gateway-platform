@@ -232,7 +232,7 @@ export type FlowCommand =
 export interface CommandResult { graph: FlowGraph; changed: boolean; error: string | null; select: FlowSelection | null }
 export type ConnectCheck = { ok: true; replaces: string[] } | { ok: false; reason: string }
 export type NodeChangeKind = 'added' | 'modified'
-export type FlowToolbarAction = 'undo' | 'redo' | 'fit' | 'auto-layout' | 'validate' | 'plan' | 'revert' | 'reload' | 'save-layout' | 'toggle-palette' | 'toggle-inspector'
+export type FlowToolbarAction = 'undo' | 'redo' | 'fit' | 'auto-layout' | 'zoom-in' | 'zoom-out' | 'zoom-reset' | 'validate' | 'plan' | 'revert' | 'reload' | 'save-layout' | 'toggle-palette' | 'toggle-inspector'
 
 /* ---------------- Validation ---------------- */
 export type IssueSeverity = 'error' | 'warning' | 'info'
