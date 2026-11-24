@@ -11,6 +11,8 @@ import type {
   FlowConfigState,
   GuardrailAction,
   MaskerInfo,
+  OrgDataProtectionInfo,
+  ProjectDlpInfo,
   ProjectInfo,
   ProviderInfo,
   ReasoningEffort,
@@ -34,6 +36,10 @@ export interface RawFlowData {
   targets: unknown[] | null
   scheduling: unknown | null
   dataProtection: unknown | null
+  /** Organization data-protection response (v2). null = unreadable. Only mode/externalAction are ever copied out of it. */
+  orgDataProtection?: unknown | null
+  /** Break-glass platform-token session: projects are invisible to the server filter. */
+  projectsHidden?: boolean
   endpoints: unknown[]
   endpointDeployments: Record<string, unknown[]>
   providers: unknown[]
@@ -144,6 +150,11 @@ function mapService(raw: Rec): ServiceState {
   }
 }
 
+/** temperatureValue only means something for the FIXED policy. */
+function normalizeTemperature(service: ServiceState): ServiceState {
+  return service.temperaturePolicy === 'FIXED' ? service : { ...service, temperatureValue: null }
+}
+
 function mapScheduling(raw: unknown): SchedulingState {
   const d = DEFAULT_SCHEDULING
   const source = isRec(raw) && isRec(raw.settings) ? raw.settings : isRec(raw) ? raw : {}
@@ -169,7 +180,8 @@ function mapTarget(raw: Rec): TargetState | null {
     degraded: bool(raw.degraded, false),
     enabled: bool(raw.enabled, true),
     maxConcurrencyOverride: optNum(raw.maxConcurrencyOverride),
-    followModelChanges: bool(raw.followModelChanges, true)
+    followModelChanges: bool(raw.followModelChanges, true),
+    systemPromptTemplate: normalizePrompt(typeof raw.systemPromptTemplate === 'string' ? raw.systemPromptTemplate : null)
   }
 }
 
@@ -188,6 +200,18 @@ function mapDataProtection(raw: unknown): ServiceDataProtectionInfo | null {
   }
 }
 
+/** Reduces one organization/project DLP row to the two fields the designer needs; nothing else is copied. */
+function mapDlpFields(row: unknown): { mode: string; externalAction: GuardrailAction } | null {
+  if (!isRec(row)) return null
+  return { mode: str(row.mode, 'UNKNOWN'), externalAction: oneOf(row.externalAction, GUARDRAIL, 'ALLOW') }
+}
+
+function projectDlpOf(orgDataProtection: unknown, projectId: string): ProjectDlpInfo | null {
+  if (!isRec(orgDataProtection)) return null
+  const policy = rows(orgDataProtection.policies).find((row) => str(row.scopeType) === 'PROJECT' && str(row.scopeId) === projectId)
+  return policy ? mapDlpFields(policy) : null
+}
+
 export function buildSnapshot(raw: RawFlowData): ServiceFlowSnapshot {
   const serviceRows = rows(raw.services)
   const services: ServiceSummary[] = serviceRows
@@ -200,6 +224,8 @@ export function buildSnapshot(raw: RawFlowData): ServiceFlowSnapshot {
   let promptVersion = 1
   let accessComplete = true
   let dataProtection: ServiceDataProtectionInfo | null = null
+  const projectsHidden = raw.projectsHidden === true
+  if (projectsHidden) accessComplete = false
 
   const projectRows = raw.projects === null ? null : rows(raw.projects)
   const projects: ProjectInfo[] = (projectRows ?? [])
@@ -207,7 +233,10 @@ export function buildSnapshot(raw: RawFlowData): ServiceFlowSnapshot {
       id: str(row.id),
       name: str(row.name, str(row.id)),
       status: str(row.status, 'UNKNOWN'),
-      dataBoundaryPolicy: typeof row.dataBoundaryPolicy === 'string' && (BOUNDARY as string[]).includes(row.dataBoundaryPolicy) ? (row.dataBoundaryPolicy as DataBoundaryPolicy) : null
+      dataBoundaryPolicy: typeof row.dataBoundaryPolicy === 'string' && (BOUNDARY as string[]).includes(row.dataBoundaryPolicy) ? (row.dataBoundaryPolicy as DataBoundaryPolicy) : null,
+      maxDataBoundaryPolicy: typeof row.maxDataBoundaryPolicy === 'string' && (BOUNDARY as string[]).includes(row.maxDataBoundaryPolicy) ? (row.maxDataBoundaryPolicy as DataBoundaryPolicy) : null,
+      externalAiBlocked: bool(row.externalAiBlocked, false),
+      dlp: projectDlpOf(raw.orgDataProtection, str(row.id))
     }))
     .filter((row) => row.id !== '')
     .sort(byString((item: ProjectInfo) => item.name + '\u0000' + item.id))
@@ -244,7 +273,7 @@ export function buildSnapshot(raw: RawFlowData): ServiceFlowSnapshot {
       }
     }
     config = {
-      service: mapService(row),
+      service: normalizeTemperature(mapService(row)),
       scheduling: mapScheduling(raw.scheduling),
       targets,
       accessProjectIds: [...new Set(accessProjectIds)].sort()
@@ -334,6 +363,12 @@ export function buildSnapshot(raw: RawFlowData): ServiceFlowSnapshot {
     .filter((row) => row.deploymentId !== '')
     .sort(byString((item: MaskerInfo) => item.displayName + '\u0000' + item.deploymentId))
 
+  const orgEffective = isRec(raw.orgDataProtection) && isRec(raw.orgDataProtection.effective) ? raw.orgDataProtection.effective : null
+  const orgDataProtection: OrgDataProtectionInfo | null = orgEffective ? { mode: str(orgEffective.mode, 'UNKNOWN'), externalAction: str(orgEffective.externalAction, 'UNKNOWN') } : null
+  // Detect a backend without V54: rows exist but none carries the systemPromptTemplate key (§8.6).
+  const targetRows = serviceId === null ? [] : rows(raw.targets)
+  const targetPrompt = targetRows.length === 0 || targetRows.some((row) => 'systemPromptTemplate' in row)
+
   return {
     organizationId: raw.organizationId,
     serviceId,
@@ -343,6 +378,10 @@ export function buildSnapshot(raw: RawFlowData): ServiceFlowSnapshot {
     catalog: { services, deployments, endpoints, providers, projects, maskers },
     dataProtection,
     loadedAt: raw.loadedAt,
-    unavailable: [...raw.unavailable]
+    unavailable: [...raw.unavailable],
+    orgDataProtection,
+    projectPoliciesComplete: isRec(raw.orgDataProtection),
+    projectsHidden,
+    features: { targetPrompt }
   }
 }

@@ -16,6 +16,7 @@ import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -150,11 +151,18 @@ public class RoutingPolicyController {
             Boolean degraded,
             Boolean enabled,
             @Min(1) Integer maxConcurrencyOverride,
-            Boolean followModelChanges
+            Boolean followModelChanges,
+            @Size(max = 16000) String systemPromptTemplate,
+            Boolean clearSystemPromptTemplate
     ) {
         public UpdateTarget(Integer priority, Integer weight, Boolean degraded, Boolean enabled,
+                            Integer maxConcurrencyOverride, Boolean followModelChanges) {
+            this(priority, weight, degraded, enabled, maxConcurrencyOverride, followModelChanges, null, null);
+        }
+
+        public UpdateTarget(Integer priority, Integer weight, Boolean degraded, Boolean enabled,
                             Integer maxConcurrencyOverride) {
-            this(priority, weight, degraded, enabled, maxConcurrencyOverride, null);
+            this(priority, weight, degraded, enabled, maxConcurrencyOverride, null, null, null);
         }
     }
 
@@ -200,11 +208,12 @@ public class RoutingPolicyController {
 
     public record TargetPolicyView(UUID id, UUID serviceId, UUID deploymentId, int priority, int weight,
                                    boolean degraded, boolean enabled, Integer maxConcurrencyOverride,
-                                   boolean followModelChanges) {
+                                   boolean followModelChanges,
+                                   @JsonInclude(JsonInclude.Include.ALWAYS) String systemPromptTemplate) {
         static TargetPolicyView from(ServiceTarget target) {
             return new TargetPolicyView(target.getId(), target.getServiceId(), target.getDeploymentId(), target.getPriority(),
                     target.getWeight(), target.isDegraded(), target.isEnabled(), target.getMaxConcurrencyOverride(),
-                    target.isFollowModelChanges());
+                    target.isFollowModelChanges(), target.getSystemPromptTemplate());
         }
     }
 

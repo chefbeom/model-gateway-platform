@@ -49,6 +49,9 @@ function portState(port: PortSpec): { compatible: boolean; hot: boolean } {
   return { compatible: props.highlightPortIds.includes(key), hot: props.highlightPortIds.includes(`hot:${key}`) }
 }
 
+// locked: start = 고정, policy = 정책, derived hosts = 자동.
+const lockChip = computed(() => (props.node.type === 'policy' ? '정책' : props.node.type === 'endpoint' || props.node.type === 'provider' ? '자동' : '고정'))
+
 const bodyHeight = computed(() => HEADER_HEIGHT + rows.value * PORT_ROW_HEIGHT + SUMMARY_HEIGHT + NODE_PADDING)
 const ariaLabel = computed(() => `${props.view.typeLabel} ${props.view.title}, ${TONE_LABEL[props.view.tone]}`)
 
@@ -85,7 +88,9 @@ function onKeydown(event: KeyboardEvent) {
         <span class="fd-node-marks">
           <i v-if="change === 'modified'" class="fd-change-dot" title="변경됨" aria-label="변경됨"></i>
           <span v-if="change === 'added'" class="fd-chip fd-chip--accent">신규</span>
-          <span v-if="view.locked" class="fd-chip">고정</span>
+          <span v-if="view.protected" class="fd-chip fd-chip--warning" title="서버 정책으로 보호 중입니다.">보호</span>
+          <span v-if="view.locked" class="fd-chip" :title="view.lockReason ?? undefined">{{ lockChip }}</span>
+          <span v-if="view.promptScope" class="fd-chip fd-chip--accent">{{ view.promptScope === 'common' ? '공통' : '모델별' }}</span>
           <span v-if="counts.error > 0" class="fd-chip fd-chip--danger" :title="`오류 ${counts.error}건`">{{ counts.error }}</span>
           <span v-if="counts.warning > 0" class="fd-chip fd-chip--warning" :title="`경고 ${counts.warning}건`">{{ counts.warning }}</span>
         </span>
@@ -150,8 +155,11 @@ function onKeydown(event: KeyboardEvent) {
   --fd-cat: var(--muted);
 }
 .fd-node[data-category='entry'] { --fd-cat: var(--info); }
-.fd-node[data-category='pipeline'] { --fd-cat: var(--accent-strong); }
+.fd-node[data-category='guard'] { --fd-cat: var(--warning); }
+.fd-node[data-category='prompt'] { --fd-cat: var(--accent-strong); }
+.fd-node[data-category='cache'] { --fd-cat: var(--accent-strong); }
 .fd-node[data-category='routing'] { --fd-cat: var(--warning); }
+.fd-node[data-category='llm'] { --fd-cat: var(--accent); }
 .fd-node[data-category='infra'] { --fd-cat: var(--muted); }
 
 .fd-node-body {

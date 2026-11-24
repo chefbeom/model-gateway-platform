@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { FlowToolbarAction } from './types'
+import type { DesignerMode, FlowToolbarAction } from './types'
 
 const props = withDefaults(defineProps<{
   canUndo: boolean
@@ -13,7 +13,9 @@ const props = withDefaults(defineProps<{
   readOnly: boolean
   compact: boolean
   zoom?: number
-}>(), { zoom: 1 })
+  mode?: DesignerMode
+  canNormalize?: boolean
+}>(), { zoom: 1, mode: 'advanced', canNormalize: false })
 
 const emit = defineEmits<{ action: [FlowToolbarAction] }>()
 
@@ -25,7 +27,7 @@ const editBlocked = () => props.readOnly || props.busy
 </script>
 
 <template>
-  <div class="fd-toolbar" role="toolbar" aria-label="플로우 디자이너 도구 모음">
+  <div class="fd-toolbar" role="toolbar" aria-label="워크플로우 디자이너 도구 모음">
     <button v-if="compact" type="button" class="fd-toggle" aria-label="팔레트 열기/닫기" title="팔레트 열기/닫기" @click="fire('toggle-palette')">▤ 팔레트</button>
 
     <div class="fd-group">
@@ -35,13 +37,27 @@ const editBlocked = () => props.readOnly || props.busy
 
     <div class="fd-group">
       <button type="button" class="fd-btn" aria-label="화면 맞춤" title="화면 맞춤 (F)" @click="fire('fit')">화면 맞춤</button>
-      <button type="button" class="fd-btn" aria-label="자동 정렬" title="노드를 열 기준으로 자동 정렬합니다." :disabled="editBlocked()" @click="fire('auto-layout')">자동 정렬</button>
+      <button type="button" class="fd-btn" aria-label="자동 정렬" title="노드를 처리 순서대로 자동 정렬합니다." :disabled="editBlocked()" @click="fire('auto-layout')">자동 정렬</button>
+      <button
+        v-if="canNormalize"
+        type="button"
+        class="fd-btn"
+        aria-label="순서 정리"
+        title="간선을 서버 처리 순서에 맞게 정리합니다."
+        :disabled="editBlocked()"
+        @click="fire('normalize-order')"
+      >순서 정리</button>
     </div>
 
     <div class="fd-group" aria-label="확대/축소">
       <button type="button" class="fd-btn fd-btn--icon" aria-label="축소" title="축소 (-)" @click="fire('zoom-out')">−</button>
       <button type="button" class="fd-btn fd-zoom-readout" aria-label="배율 100%로 초기화" title="100%로 보기 (0)" @click="fire('zoom-reset')">{{ Math.round((zoom ?? 1) * 100) }}%</button>
       <button type="button" class="fd-btn fd-btn--icon" aria-label="확대" title="확대 (+)" @click="fire('zoom-in')">＋</button>
+    </div>
+
+    <div class="fd-group fd-mode" role="group" aria-label="표시 모드">
+      <button type="button" class="fd-btn fd-mode-btn" :class="{ 'is-active': mode === 'basic' }" :aria-pressed="mode === 'basic'" title="핵심 노드만 보여 줍니다." @click="fire('mode-basic')">기본</button>
+      <button type="button" class="fd-btn fd-mode-btn" :class="{ 'is-active': mode === 'advanced' }" :aria-pressed="mode === 'advanced'" title="마스킹 워커, 생성 파라미터, 실행 위치 등 고급 항목을 보여 줍니다." @click="fire('mode-advanced')">고급</button>
     </div>
 
     <button
@@ -95,6 +111,11 @@ const editBlocked = () => props.readOnly || props.busy
 .fd-group { display: inline-flex; align-items: center; gap: 4px; padding-right: 12px; border-right: 1px solid var(--border); }
 .fd-group:last-of-type { border-right: 0; }
 .fd-spacer { flex: 1; }
+.fd-mode { gap: 0; }
+.fd-mode-btn { border-radius: 0; }
+.fd-mode-btn:first-child { border-radius: 9px 0 0 9px; }
+.fd-mode-btn:last-child { border-radius: 0 9px 9px 0; margin-left: -1px; }
+.fd-mode-btn.is-active { border-color: var(--accent-border); background: var(--accent-dim); color: var(--accent-strong); }
 .fd-zoom-readout { min-width: 54px; font-variant-numeric: tabular-nums; }
 
 .fd-btn, .fd-toggle {

@@ -79,10 +79,15 @@ public final class AdminDtos {
     public record GrantServiceAccess(@NotNull UUID serviceId) { }
     public record CreateTarget(@NotNull UUID deploymentId, @Min(1) int priority, @Min(1) Integer weight,
                                boolean degraded, @Min(1) Integer maxConcurrencyOverride,
-                               Boolean followModelChanges) {
+                               Boolean followModelChanges, @Size(max = 16000) String systemPromptTemplate) {
+        public CreateTarget(UUID deploymentId, int priority, Integer weight, boolean degraded,
+                            Integer maxConcurrencyOverride, Boolean followModelChanges) {
+            this(deploymentId, priority, weight, degraded, maxConcurrencyOverride, followModelChanges, null);
+        }
+
         public CreateTarget(UUID deploymentId, int priority, Integer weight, boolean degraded,
                             Integer maxConcurrencyOverride) {
-            this(deploymentId, priority, weight, degraded, maxConcurrencyOverride, true);
+            this(deploymentId, priority, weight, degraded, maxConcurrencyOverride, true, null);
         }
     }
     public record CreateApiKey(@NotBlank @Size(max = 120) String name, Instant expiresAt,

@@ -29,7 +29,7 @@ public class ServiceFlowLayoutService {
     static final int MAX_NODES = 500;
     private static final double MAX_COORD = 1_000_000d;
     private static final Pattern NODE_KEY = Pattern.compile(
-            "^(service|guardrail|prompt|cache|router|masker|(project|target|deployment|endpoint|provider):[A-Za-z0-9-]{1,64})$");
+            "^(start|service|guardrail|prompt|params|cache|router|masker|(project|policy|prompt|target|deployment|endpoint|provider):[A-Za-z0-9-]{1,64})$");
     private static final ObjectMapper MAPPER = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 

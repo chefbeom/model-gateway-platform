@@ -3,12 +3,14 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch 
 import FlowNodeCard from './FlowNodeCard.vue'
 import { GRID_SIZE, NODE_TYPES, describeNode } from './catalog'
 import { canConnect, nearestCompatiblePort } from './graphOps'
+import { dependencyClosure, insertableTypesForEdge, promptScopeForSplice } from './workflow'
 import {
   bezierPath,
   clientScale,
   clientToLocal,
   fitViewport,
   graphBounds,
+  nearestEdge,
   nodeRect,
   nodeSize,
   nodesInRect,
@@ -20,6 +22,7 @@ import {
 import { issueCountsByNode } from './validate'
 import type {
   AddableNodeType,
+  DesignerMode,
   FlowCommand,
   FlowEdge,
   FlowGraph,
@@ -34,7 +37,7 @@ import type {
   Viewport,
 } from './types'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   graph: FlowGraph
   snapshot: ServiceFlowSnapshot
   viewport: Viewport
@@ -42,7 +45,8 @@ const props = defineProps<{
   issues: ValidationIssue[]
   nodeChanges: Record<string, NodeChangeKind>
   readOnly: boolean
-}>()
+  mode?: DesignerMode
+}>(), { mode: 'advanced' })
 
 const emit = defineEmits<{
   'update:viewport': [Viewport]
@@ -53,7 +57,10 @@ const emit = defineEmits<{
 }>()
 
 const DND_MIME = 'application/x-aiconnect-flow-node'
-const ADDABLE: AddableNodeType[] = ['project', 'deployment', 'target', 'masker']
+const ADDABLE: AddableNodeType[] = ['project', 'guardrail', 'masker', 'prompt', 'params', 'cache', 'router', 'llm']
+const SPLICE_KINDS: Array<FlowEdge['kind']> = ['access', 'flow', 'route']
+const DROP_RADIUS = 16
+const MENU_WIDTH = 210
 const CLICK_THRESHOLD = 3
 const WHEEL_DEBOUNCE_MS = 140
 
@@ -74,6 +81,14 @@ const wire = shallowRef<WireState | null>(null)
 const vp = computed<Viewport>(() => live.value ?? props.viewport)
 
 /* ------------------------------ derived data ------------------------------ */
+// Basic mode hides infrastructure nodes and host edges from rendering and hit-testing (data stays in the graph).
+const HIDDEN_IN_BASIC = new Set(['endpoint', 'provider'])
+const visibleGraph = computed<FlowGraph>(() => {
+  if (props.mode !== 'basic') return props.graph
+  const nodes = props.graph.nodes.filter((n) => !HIDDEN_IN_BASIC.has(n.type))
+  const edges = props.graph.edges.filter((e) => e.kind !== 'host')
+  return { ...props.graph, nodes, edges }
+})
 const nodeMap = computed(() => new Map(props.graph.nodes.map((n) => [n.id, n])))
 const selectedNodes = computed(() => new Set(props.selection.nodeIds))
 const selectedEdges = computed(() => new Set(props.selection.edgeIds))
@@ -140,10 +155,12 @@ function highlightKey(nodeId: string): string {
   return highlightOf(nodeId).join('|')
 }
 
-interface EdgeView { edge: FlowEdge; d: string; mid: Point; selected: boolean; dim: boolean }
+interface EdgeView { edge: FlowEdge; d: string; mid: Point; selected: boolean; dim: boolean; drop: boolean }
+const hoverEdgeId = ref<string | null>(null)
+const dropEdgeId = ref<string | null>(null)
 const edgeViews = computed<EdgeView[]>(() => {
   const result: EdgeView[] = []
-  for (const edge of props.graph.edges) {
+  for (const edge of visibleGraph.value.edges) {
     const from = nodeMap.value.get(edge.from.nodeId)
     const to = nodeMap.value.get(edge.to.nodeId)
     if (!from || !to) continue
@@ -154,7 +171,8 @@ const edgeViews = computed<EdgeView[]>(() => {
       d: bezierPath(a, b),
       mid: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 },
       selected: selectedEdges.value.has(edge.id),
-      dim: edge.kind === 'binding' && from.type === 'target' && from.props.enabled === false,
+      dim: edge.kind === 'route' && to.type === 'llm' && to.props.enabled === false,
+      drop: dropEdgeId.value === edge.id,
     })
   }
   return result
@@ -179,6 +197,71 @@ const selectedEdgeButton = computed(() => {
   const items = edgeViews.value.filter((e) => e.selected && !e.edge.locked)
   return items.length === 1 ? items[0] : null
 })
+
+// Edge insert "+": hovered or selected splice-able edges; types are computed only for those.
+interface InsertMenu { edgeId: string }
+const menu = ref<InsertMenu | null>(null)
+const insertTypes = computed(() => {
+  const map = new Map<string, AddableNodeType[]>()
+  if (props.readOnly) return map
+  const ids = new Set(props.selection.edgeIds.length === 1 && props.selection.nodeIds.length === 0 ? props.selection.edgeIds : [])
+  if (hoverEdgeId.value) ids.add(hoverEdgeId.value)
+  if (menu.value) ids.add(menu.value.edgeId)
+  for (const id of ids) {
+    const edge = props.graph.edges.find((e) => e.id === id)
+    if (!edge || !SPLICE_KINDS.includes(edge.kind)) continue
+    const types = insertableTypesForEdge(props.graph, id, props.snapshot)
+    if (types.length > 0) map.set(id, types)
+  }
+  return map
+})
+
+function insertOffset(item: EdgeView): number {
+  // Keep "+" beside the delete button of the same selected edge.
+  return selectedEdgeButton.value?.edge.id === item.edge.id ? -14 : 0
+}
+function deleteOffset(item: EdgeView): number {
+  return insertTypes.value.has(item.edge.id) ? 14 : 0
+}
+
+const menuEl = ref<HTMLElement | null>(null)
+const menuView = computed(() => {
+  const m = menu.value
+  if (!m) return null
+  const item = edgeViews.value.find((e) => e.edge.id === m.edgeId)
+  const types = insertTypes.value.get(m.edgeId)
+  if (!item || !types) return null
+  const zoom = vp.value.zoom
+  const x = Math.max(8, Math.min(item.mid.x * zoom + vp.value.x + 12, Math.max(8, size.value.width - MENU_WIDTH - 8)))
+  const y = Math.max(8, Math.min(item.mid.y * zoom + vp.value.y + 12, Math.max(8, size.value.height - 28 - types.length * 34)))
+  const scope = promptScopeForSplice(props.graph, m.edgeId)
+  return {
+    style: { left: `${x}px`, top: `${y}px`, width: `${MENU_WIDTH}px` },
+    items: types.map((type) => ({
+      type,
+      label: type === 'prompt' ? (scope === 'model' ? '모델별 시스템 프롬프트' : '공통 시스템 프롬프트') : NODE_TYPES[type as keyof typeof NODE_TYPES].label,
+      icon: NODE_TYPES[type as keyof typeof NODE_TYPES].icon,
+    })),
+  }
+})
+
+function openMenu(edgeId: string) {
+  if (props.readOnly) return
+  menu.value = { edgeId }
+  void nextTick(() => { menuEl.value?.querySelector<HTMLElement>('button')?.focus({ preventScroll: true }) })
+}
+function closeMenu(refocus = false) {
+  if (!menu.value) return
+  menu.value = null
+  if (refocus) root.value?.focus({ preventScroll: true })
+}
+function chooseInsert(type: AddableNodeType) {
+  const m = menu.value
+  if (!m || props.readOnly) return
+  spliceRequested = true
+  emit('command', { type: 'addNode', nodeType: type, spliceEdgeId: m.edgeId })
+  closeMenu(true)
+}
 
 const isViewportMoving = computed(() => isZooming.value || (interactionMode.value === 'pan' && live.value !== null))
 
@@ -236,7 +319,7 @@ function fit() {
   measure()
   if (!(size.value.width > 0) || !(size.value.height > 0)) { pendingFit = true; return }
   pendingFit = false
-  commitViewport(fitViewport(graphBounds(props.graph), size.value), true)
+  commitViewport(fitViewport(graphBounds(visibleGraph.value), size.value), true)
 }
 
 function centerOn(nodeId: string) {
@@ -309,7 +392,8 @@ function onPointerDown(event: PointerEvent) {
   if (interactionMode.value !== 'idle') return
   const el = targetElement(event)
   if (!el || !root.value) return
-  if (el.closest('[data-edge-delete]')) return
+  if (menu.value && !el.closest('[data-insert-menu]') && !el.closest('[data-edge-insert]')) closeMenu()
+  if (el.closest('[data-edge-delete]') || el.closest('[data-edge-insert]') || el.closest('[data-insert-menu]')) return
   const isMiddle = event.button === 1
   if (event.button !== 0 && !isMiddle) return
 
@@ -388,7 +472,9 @@ function beginNodePress(event: PointerEvent, nodeId: string) {
   if (!pressWasSelected) {
     setSelection(event.shiftKey ? [...props.selection.nodeIds, nodeId] : [nodeId], event.shiftKey ? [...props.selection.edgeIds] : [])
   }
-  dragIds = pressWasSelected ? [...props.selection.nodeIds] : event.shiftKey ? [...props.selection.nodeIds, nodeId] : [nodeId]
+  const base = pressWasSelected ? [...props.selection.nodeIds] : event.shiftKey ? [...props.selection.nodeIds, nodeId] : [nodeId]
+  // Dependent nodes (masker, model prompt, hosts, policy) follow their owner; Ctrl/Cmd moves the selection alone.
+  dragIds = event.ctrlKey || event.metaKey ? base : dependencyClosure(props.graph, base)
   interactionMode.value = 'node'
   capture(event)
 }
@@ -483,7 +569,7 @@ function onPointerUp(event: PointerEvent) {
     if (m && (m.width >= CLICK_THRESHOLD || m.height >= CLICK_THRESHOLD)) {
       const a = screenToWorld({ x: m.x, y: m.y }, vp.value)
       const b = screenToWorld({ x: m.x + m.width, y: m.y + m.height }, vp.value)
-      const ids = nodesInRect(props.graph, { x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y })
+      const ids = nodesInRect(visibleGraph.value, { x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y })
       setSelection(additive ? [...new Set([...baseSelection.nodeIds, ...ids])] : ids, additive ? baseSelection.edgeIds : [])
     } else if (!additive) {
       setSelection([], [])
@@ -546,6 +632,7 @@ function selectEdge(id: string, shift: boolean) {
 }
 
 function onWheel(event: WheelEvent) {
+  if (menu.value) closeMenu()
   isZooming.value = true
   const factor = Math.exp(-(event.deltaY * (event.deltaMode === 1 ? 16 : 1)) * 0.0015)
   live.value = zoomAt(vp.value, localPoint(event), factor)
@@ -577,6 +664,27 @@ function onKeyDown(event: KeyboardEvent) {
     return
   }
 
+  if (key === 'Escape' && menu.value) {
+    event.preventDefault()
+    closeMenu(true)
+    return
+  }
+
+  if (key.startsWith('Arrow') && !event.altKey && !(el && el.closest('[data-insert-menu]'))) {
+    if (props.readOnly || props.selection.nodeIds.length === 0) return
+    event.preventDefault()
+    const step = event.shiftKey ? 64 : GRID_SIZE
+    const dx = key === 'ArrowLeft' ? -step : key === 'ArrowRight' ? step : 0
+    const dy = key === 'ArrowUp' ? -step : key === 'ArrowDown' ? step : 0
+    const ids = mod ? props.selection.nodeIds : dependencyClosure(props.graph, props.selection.nodeIds)
+    const moves = ids
+      .map((id) => nodeMap.value.get(id))
+      .filter((n): n is FlowNode => !!n)
+      .map((n) => ({ nodeId: n.id, x: n.x + dx, y: n.y + dy }))
+    if (moves.length > 0) emit('command', { type: 'moveNodes', moves })
+    return
+  }
+
   if (mod && key.toLowerCase() === 'z') {
     event.preventDefault()
     if (!props.readOnly) emit('action', event.shiftKey ? 'redo' : 'undo')
@@ -589,7 +697,7 @@ function onKeyDown(event: KeyboardEvent) {
   }
   if (mod && key.toLowerCase() === 'a') {
     event.preventDefault()
-    setSelection(props.graph.nodes.map((n) => n.id), [])
+    setSelection(visibleGraph.value.nodes.map((n) => n.id), [])
     return
   }
   if (mod || event.altKey) return
@@ -599,19 +707,6 @@ function onKeyDown(event: KeyboardEvent) {
     if (props.selection.nodeIds.length === 0 && props.selection.edgeIds.length === 0) return
     event.preventDefault()
     emit('command', { type: 'removeItems', nodeIds: [...props.selection.nodeIds], edgeIds: [...props.selection.edgeIds] })
-    return
-  }
-  if (key.startsWith('Arrow')) {
-    if (props.readOnly || props.selection.nodeIds.length === 0) return
-    event.preventDefault()
-    const step = event.shiftKey ? 64 : GRID_SIZE
-    const dx = key === 'ArrowLeft' ? -step : key === 'ArrowRight' ? step : 0
-    const dy = key === 'ArrowUp' ? -step : key === 'ArrowDown' ? step : 0
-    const moves = props.selection.nodeIds
-      .map((id) => nodeMap.value.get(id))
-      .filter((n): n is FlowNode => !!n)
-      .map((n) => ({ nodeId: n.id, x: n.x + dx, y: n.y + dy }))
-    if (moves.length > 0) emit('command', { type: 'moveNodes', moves })
     return
   }
   if (key === 'f' || key === 'F') { event.preventDefault(); fit(); return }
@@ -669,11 +764,20 @@ function onDragOver(event: DragEvent) {
   if (props.readOnly || !hasPaletteData(event)) return
   event.preventDefault()
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+  const world = screenToWorld(localPoint(event), vp.value)
+  const id = nearestEdge(visibleGraph.value, world, DROP_RADIUS / vp.value.zoom, SPLICE_KINDS)
+  if (id !== dropEdgeId.value) dropEdgeId.value = id
+}
+
+function onDragLeave(event: DragEvent) {
+  if (!root.value || (event.relatedTarget instanceof Node && root.value.contains(event.relatedTarget))) return
+  dropEdgeId.value = null
 }
 
 function onDrop(event: DragEvent) {
   if (props.readOnly || !hasPaletteData(event)) return
   event.preventDefault()
+  dropEdgeId.value = null
   let parsed: unknown
   try { parsed = JSON.parse(event.dataTransfer?.getData(DND_MIME) ?? '') } catch { return }
   if (!parsed || typeof parsed !== 'object') return
@@ -681,11 +785,19 @@ function onDrop(event: DragEvent) {
   if (typeof nodeType !== 'string' || !ADDABLE.includes(nodeType as AddableNodeType)) return
   if (refId !== null && refId !== undefined && (typeof refId !== 'string' || refId.length > 80)) return
   const world = screenToWorld(localPoint(event), vp.value)
+  const type = nodeType as AddableNodeType
+  const edgeId = nearestEdge(visibleGraph.value, world, DROP_RADIUS / vp.value.zoom, SPLICE_KINDS)
+  if (edgeId && insertableTypesForEdge(props.graph, edgeId, props.snapshot).includes(type)) {
+    spliceRequested = true
+    emit('command', { type: 'addNode', nodeType: type, refId: typeof refId === 'string' ? refId : null, spliceEdgeId: edgeId })
+    return
+  }
   emit('command', {
     type: 'addNode',
-    nodeType: nodeType as AddableNodeType,
+    nodeType: type,
     refId: typeof refId === 'string' ? refId : null,
     position: { x: snapToGrid(world.x), y: snapToGrid(world.y) },
+    autoWire: !event.altKey,
   })
 }
 
@@ -721,11 +833,34 @@ watch(() => [props.viewport.x, props.viewport.y, props.viewport.zoom], () => {
   if (interactionMode.value !== 'pan' && wheelTimer === null) live.value = null
 })
 
-watch(() => [props.graph.nodes.length, props.graph.edges.length] as const, ([nodes, edges], [prevNodes, prevEdges]) => {
-  if (nodes > prevNodes) announce(`노드를 ${nodes - prevNodes}개 추가했습니다.`)
-  else if (nodes < prevNodes) announce(`노드를 ${prevNodes - nodes}개 제거했습니다.`)
-  else if (edges > prevEdges) announce('연결을 추가했습니다.')
-  else if (edges < prevEdges) announce('연결을 제거했습니다.')
+let knownNodeIds = new Set(props.graph.nodes.map((n) => n.id))
+let spliceRequested = false
+
+function describeAddition(added: FlowNode[]): string {
+  const router = added.some((n) => n.type === 'router')
+  if (router && added.length > 1) return 'LLM이 두 개가 되어 라우터를 자동으로 추가했습니다.'
+  if (spliceRequested && added.length === 1) return '노드를 간선 사이에 넣었습니다.'
+  if (added.length === 1) {
+    const node = added[0]
+    if (node.type === 'guardrail') return '가드레일을 처리 순서에 맞는 위치에 넣었습니다.'
+    if (['prompt', 'params', 'cache', 'router'].includes(node.type)) return `${NODE_TYPES[node.type].label} 노드를 처리 순서에 맞는 위치에 넣었습니다.`
+  }
+  return `노드를 ${added.length}개 추가했습니다.`
+}
+
+watch(() => [props.graph.nodes, props.graph.edges.length] as const, ([nodes, edges], [prevNodes, prevEdges]) => {
+  const ids = new Set(nodes.map((n) => n.id))
+  const added = nodes.filter((n) => !knownNodeIds.has(n.id))
+  const removed = prevNodes.filter((n) => !ids.has(n.id)).length
+  knownNodeIds = ids
+  const spliced = spliceRequested
+  if (added.length > 0) {
+    announce(describeAddition(added))
+    spliceRequested = false
+  } else if (removed > 0) announce(`노드를 ${removed}개 제거했습니다.`)
+  else if (edges > prevEdges) announce('간선을 추가했습니다.')
+  else if (edges < prevEdges) announce('간선을 제거했습니다.')
+  if (spliced && added.length === 0) spliceRequested = false
 })
 
 watch(() => props.selection, (selection) => {
@@ -746,8 +881,8 @@ watch(() => props.selection, (selection) => {
     :style="gridStyle"
     tabindex="0"
     role="application"
-    aria-label="서비스 플로우 캔버스"
-    aria-roledescription="노드 캔버스"
+    aria-label="워크플로우 캔버스"
+    aria-roledescription="워크플로우 캔버스"
     @pointerdown="onPointerDown"
     @pointermove="onPointerMove"
     @pointerup="onPointerUp"
@@ -758,14 +893,37 @@ watch(() => props.selection, (selection) => {
     @keyup="onKeyUp"
     @focusout="onFocusOut"
     @dragover="onDragOver"
+    @dragleave="onDragLeave"
     @drop="onDrop"
     @dblclick="onDblClick"
   >
     <div class="fd-world" :style="worldStyle">
       <svg class="fd-edges" width="1" height="1" style="overflow: visible" aria-hidden="true">
-        <g v-for="item in edgeViews" :key="item.edge.id" class="fd-edge" :class="[`fd-edge--${item.edge.kind}`, { 'is-selected': item.selected, 'is-dim': item.dim }]">
+        <g
+          v-for="item in edgeViews"
+          :key="item.edge.id"
+          class="fd-edge"
+          :class="[`fd-edge--${item.edge.kind}`, { 'is-selected': item.selected, 'is-dim': item.dim, 'is-drop': item.drop }]"
+          @pointerenter="hoverEdgeId = item.edge.id"
+          @pointerleave="hoverEdgeId === item.edge.id && (hoverEdgeId = null)"
+        >
           <path class="fd-edge-hit" :d="item.d" :data-edge-id="item.edge.id" />
           <path class="fd-edge-line" :d="item.d" />
+          <g
+            v-if="insertTypes.has(item.edge.id)"
+            class="fd-edge-insert"
+            data-edge-insert="true"
+            role="button"
+            :tabindex="item.selected ? 0 : -1"
+            aria-haspopup="menu"
+            aria-label="이 간선에 노드 넣기"
+            :transform="`translate(${item.mid.x + insertOffset(item)}, ${item.mid.y})`"
+            @click.stop="openMenu(item.edge.id)"
+            @keydown.enter.stop.prevent="openMenu(item.edge.id)"
+          >
+            <circle r="10" />
+            <text text-anchor="middle" dominant-baseline="central">＋</text>
+          </g>
         </g>
         <path v-if="wirePath" class="fd-wire" :class="{ 'is-snapped': !!wire?.target }" :d="wirePath" />
         <g
@@ -774,8 +932,8 @@ watch(() => props.selection, (selection) => {
           data-edge-delete="true"
           role="button"
           tabindex="0"
-          aria-label="선택한 연결 삭제"
-          :transform="`translate(${selectedEdgeButton.mid.x}, ${selectedEdgeButton.mid.y})`"
+          aria-label="선택한 간선 삭제"
+          :transform="`translate(${selectedEdgeButton.mid.x + deleteOffset(selectedEdgeButton)}, ${selectedEdgeButton.mid.y})`"
           @click.stop="removeEdge(selectedEdgeButton.edge.id)"
           @keydown.enter.stop.prevent="removeEdge(selectedEdgeButton.edge.id)"
         >
@@ -785,7 +943,7 @@ watch(() => props.selection, (selection) => {
       </svg>
 
       <FlowNodeCard
-        v-for="node in graph.nodes"
+        v-for="node in visibleGraph.nodes"
         :key="node.id"
         v-memo="[node, views.get(node.id), selectedNodes.has(node.id), nodeChanges[node.id] ?? null, counts[node.id], offsetKey(node), highlightKey(node.id), readOnly]"
         :style="cardStyle(node)"
@@ -800,6 +958,21 @@ watch(() => props.selection, (selection) => {
         @toggle-collapse="onToggleCollapse"
         @activate="onActivate"
       />
+    </div>
+
+    <div
+      v-if="menuView"
+      ref="menuEl"
+      class="fd-insert-menu"
+      data-insert-menu="true"
+      role="menu"
+      aria-label="간선에 넣을 노드"
+      :style="menuView.style"
+    >
+      <button v-for="item in menuView.items" :key="item.type" type="button" class="fd-insert-item" role="menuitem" @click="chooseInsert(item.type)">
+        <span class="fd-insert-icon" aria-hidden="true">{{ item.icon }}</span>
+        <span>{{ item.label }}</span>
+      </button>
     </div>
 
     <div v-if="marquee" class="fd-marquee" :style="marqueeStyle"></div>
@@ -838,12 +1011,14 @@ watch(() => props.selection, (selection) => {
 
 .fd-edge-line { fill: none; stroke: var(--faint); stroke-width: 2; stroke-linecap: round; pointer-events: none; }
 .fd-edge-hit { fill: none; stroke: transparent; stroke-width: 14; pointer-events: stroke; cursor: pointer; }
+.fd-edge--entry .fd-edge-line { stroke: var(--info); stroke-width: 1.5; }
+.fd-edge--policy .fd-edge-line { stroke: var(--warning); stroke-dasharray: 6 5; }
 .fd-edge--access .fd-edge-line { stroke: var(--info); stroke-dasharray: 6 5; }
-.fd-edge--pipeline .fd-edge-line { stroke: var(--accent-strong); stroke-width: 2; }
+.fd-edge--flow .fd-edge-line { stroke: var(--accent-strong); stroke-width: 2; }
+.fd-edge--route .fd-edge-line { stroke: var(--warning); stroke-width: 2; }
 .fd-edge--masker .fd-edge-line { stroke: var(--warning); stroke-dasharray: 6 5; }
-.fd-edge--route .fd-edge-line { stroke: var(--warning); }
-.fd-edge--binding .fd-edge-line { stroke: var(--text-soft); }
 .fd-edge--host .fd-edge-line { stroke: var(--faint); stroke-dasharray: 3 5; }
+.fd-edge.is-drop .fd-edge-line { stroke: var(--accent-strong); stroke-width: 4; stroke-dasharray: none; }
 .fd-edge.is-dim { opacity: .4; }
 .fd-edge:hover .fd-edge-line { stroke-width: 3; }
 .fd-edge.is-selected .fd-edge-line { stroke-width: 3; }
@@ -851,6 +1026,42 @@ watch(() => props.selection, (selection) => {
 
 .fd-wire { fill: none; stroke: var(--accent-strong); stroke-width: 2; stroke-dasharray: 5 4; pointer-events: none; }
 .fd-wire.is-snapped { stroke-dasharray: none; stroke-width: 3; }
+
+.fd-edge-insert { pointer-events: all; cursor: pointer; outline: none; }
+.fd-edge-insert circle { fill: var(--surface); stroke: var(--accent-strong); stroke-width: 2; }
+.fd-edge-insert text { fill: var(--accent-strong); font-size: 13px; font-weight: 800; pointer-events: none; }
+.fd-edge-insert:hover circle, .fd-edge-insert:focus-visible circle { fill: var(--accent-dim); }
+
+.fd-insert-menu {
+  position: absolute;
+  z-index: 5;
+  box-sizing: border-box;
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+  cursor: default;
+}
+.fd-insert-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+.fd-insert-item:hover, .fd-insert-item:focus-visible { background: var(--accent-dim); outline: none; }
+.fd-insert-icon { width: 16px; text-align: center; color: var(--accent-strong); }
 
 .fd-edge-delete { pointer-events: all; cursor: pointer; outline: none; }
 .fd-edge-delete circle { fill: var(--surface); stroke: var(--danger); stroke-width: 2; }

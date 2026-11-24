@@ -8,11 +8,14 @@ import { hasDraft, installDraftAutoClear, stashDraft, takeDraft } from './draftS
 import { executePlan } from './execute'
 import { createAdminTransport, currentUserId, loadFlowLayout, loadFlowSnapshot, loadServiceList, saveFlowLayout } from './flowApi'
 import { FlowLoadError } from './flowSnapshot'
+import { nodeSpec } from './catalog'
 import { applyCommand } from './graphOps'
 import { createHistory, recordHistory, redoHistory, undoHistory, type HistoryState } from './history'
-import { extractLayout, suggestNodePosition } from './layout'
+import { extractLayout, layoutGeneration, suggestNodePosition } from './layout'
 import { validateGraph } from './validate'
+import { isEmptyWorkflow } from './workflow'
 import type {
+  DesignerMode,
   FlowCommand,
   FlowGraph,
   FlowPlan,
@@ -36,6 +39,10 @@ const COMPACT_STAGE_WIDTH = 1180
 const NARROW_STAGE_WIDTH = 640
 const EMPTY_SELECTION: FlowSelection = { nodeIds: [], edgeIds: [] }
 let autoClearInstalled = false
+// Remembered in module memory only (never browser storage): a reload starts in basic mode again.
+let lastMode: DesignerMode = 'basic'
+const LEGACY_LAYOUT_MESSAGE = '이전 버전 배치를 새 워크플로우 배치로 정리했습니다. [배치 저장]을 누르면 저장됩니다.'
+const TARGET_PROMPT_UNSUPPORTED_MESSAGE = '서버가 모델별 시스템 프롬프트를 저장하지 않았습니다(백엔드 업데이트 필요).'
 const STALE_PLAN_MESSAGE = '검토 이후 서버 구성이 바뀌어 변경 목록을 다시 계산했습니다. 다시 확인하세요.'
 
 function layoutFingerprint(graph: FlowGraph): string {
@@ -92,6 +99,9 @@ export function useFlowEditor(props: FlowEditorProps, canvas: Ref<CanvasHandle |
   const paletteOpen = ref(false)
   const inspectorOpen = ref(false)
 
+  const mode = ref<DesignerMode>(lastMode)
+  const quickStartDismissed = ref(false)
+
   let loadTicket = 0
 
   /* ---------- derived ---------- */
@@ -111,10 +121,12 @@ export function useFlowEditor(props: FlowEditorProps, canvas: Ref<CanvasHandle |
   const readOnly = computed(() => narrow.value || loadState.value !== 'ready' || planBusy.value || planOpen.value)
   const canUndo = computed(() => history.value.past.length > 0)
   const canRedo = computed(() => history.value.future.length > 0)
+  const canNormalize = computed(() => issues.value.some(issue => issue.code === 'WF_ORDER_NONCANONICAL'))
+  const showQuickStart = computed(() => graph.value !== null && isEmptyWorkflow(graph.value) && !quickStartDismissed.value && !readOnly.value)
   const serviceLabel = computed(() => {
     const snapshot = base.value
     if (!snapshot) return ''
-    if (snapshot.serviceId === null) return '새 서비스 초안'
+    if (snapshot.serviceId === null) return '새 워크플로우 초안'
     const service = snapshot.catalog.services.find(item => item.id === snapshot.serviceId)
     return service ? `${service.displayName || service.serviceKey} (${service.serviceKey})` : snapshot.serviceId
   })
@@ -160,6 +172,7 @@ export function useFlowEditor(props: FlowEditorProps, canvas: Ref<CanvasHandle |
     loadError.value = ''
     message.value = ''
     restoredAt.value = null
+    quickStartDismissed.value = false
     planOpen.value = false
     try {
       const draftExists = hasDraft(userId, organizationId, serviceId)
@@ -167,7 +180,9 @@ export function useFlowEditor(props: FlowEditorProps, canvas: Ref<CanvasHandle |
       const snapshotPromise = draftExists ? Promise.resolve(null) : loadFlowSnapshot(organizationId, serviceId, auth)
       const [snapshot, layoutResult] = await Promise.all([snapshotPromise, layoutPromise])
       if (ticket !== loadTicket) return
-      const draft = draftExists ? takeDraft(userId, organizationId, serviceId) : null
+      let draft = draftExists ? takeDraft(userId, organizationId, serviceId) : null
+      // A stash from the v1 graph model cannot be used by v2: drop it and read the server instead.
+      if (draft && (draft.graph as { schemaVersion?: number }).schemaVersion !== 2) draft = null
       layoutAvailable.value = layoutResult.available && serviceId !== null
       if (draft) {
         base.value = draft.base
@@ -187,14 +202,17 @@ export function useFlowEditor(props: FlowEditorProps, canvas: Ref<CanvasHandle |
       const initial = decompile(loaded, layoutResult.layout)
       base.value = loaded
       graph.value = initial
-      viewport.value = layoutResult.layout ? { ...layoutResult.layout.viewport } : { ...DEFAULT_VIEWPORT }
-      savedFingerprint.value = layoutFingerprint(initial)
+      // A v1-shaped saved layout is not drawn: decompile used the automatic layout, so offer to save it (§7.8).
+      const legacyLayout = layoutResult.layout !== null && layoutGeneration(layoutResult.layout) === 1
+      viewport.value = layoutResult.layout && !legacyLayout ? { ...layoutResult.layout.viewport } : { ...DEFAULT_VIEWPORT }
+      savedFingerprint.value = legacyLayout ? '' : layoutFingerprint(initial)
       serviceOptions.value = loaded.catalog.services
       resetEditing()
       loadState.value = 'ready'
       syncHash(serviceId)
-      if (!layoutResult.layout) fitSoon()
-      if (loaded.unavailable.length) message.value = '일부 자원 정보를 불러오지 못했습니다. 해당 항목은 확인이 필요합니다.'
+      if (!layoutResult.layout || legacyLayout) fitSoon()
+      if (legacyLayout) message.value = LEGACY_LAYOUT_MESSAGE
+      else if (loaded.unavailable.length) message.value = '일부 자원 정보를 불러오지 못했습니다. 해당 항목은 확인이 필요합니다.'
     } catch (error) {
       if (ticket !== loadTicket) return
       base.value = null
@@ -213,6 +231,7 @@ export function useFlowEditor(props: FlowEditorProps, canvas: Ref<CanvasHandle |
     planOpen.value = false
     message.value = ''
     restoredAt.value = null
+    quickStartDismissed.value = false
     serviceOptions.value = []
     if (!props.organizationId) { loadState.value = 'idle'; return }
     loadState.value = 'loading'
@@ -248,16 +267,32 @@ export function useFlowEditor(props: FlowEditorProps, canvas: Ref<CanvasHandle |
   }
 
   /* ---------- editing ---------- */
+  /** Command results carry no message: auto-wiring notices come from comparing node sets before/after (§10.5). */
+  function commandNotice(command: FlowCommand, before: FlowGraph, after: FlowGraph): string {
+    const had = new Set(before.nodes.map(node => node.id))
+    const added = after.nodes.filter(node => !had.has(node.id))
+    const routerAdded = added.some(node => node.type === 'router')
+    if (command.type === 'addNode' && command.nodeType !== 'router' && routerAdded) return 'LLM이 두 개가 되어 라우터를 자동으로 추가했습니다.'
+    if (command.type === 'connect' && routerAdded) return 'LLM이 두 개가 되어 라우터를 자동으로 추가했습니다.'
+    if (command.type === 'addNode' && command.spliceEdgeId && added.length > 0) return '노드를 간선 사이에 넣었습니다.'
+    if (command.type === 'addNode' && command.autoWire !== false && added.length > 0) {
+      const type = command.nodeType
+      if (type === 'guardrail' || type === 'prompt' || type === 'cache' || type === 'params') return `${nodeSpec(type).label} 노드를 처리 순서에 맞는 위치에 넣었습니다.`
+    }
+    return ''
+  }
+
   function handleCommand(input: FlowCommand) {
     const snapshot = base.value
     const current = graph.value
     if (!snapshot || !current || readOnly.value) return
     let command = input
-    if (command.type === 'addNode' && !command.position && canvas.value) {
+    // Wired additions (auto-wire or splice) are placed by the model; only unwired ones get a suggested position.
+    if (command.type === 'addNode' && !command.position && !command.spliceEdgeId && command.autoWire === false && canvas.value) {
       command = { ...command, position: suggestNodePosition(current, command.nodeType, canvas.value.viewportCenterWorld(), canvas.value.visibleWorldRect()) }
     }
     const result = applyCommand(current, command, snapshot)
-    message.value = result.error ?? ''
+    message.value = result.error ?? (result.changed ? commandNotice(command, current, result.graph) : '')
     if (result.changed) {
       history.value = recordHistory(history.value, current)
       setGraph(result.graph)
@@ -290,6 +325,7 @@ export function useFlowEditor(props: FlowEditorProps, canvas: Ref<CanvasHandle |
     inspectorOpen.value = true
     paletteOpen.value = false
   }
+  function dismissQuickStart() { quickStartDismissed.value = true }
   function updateSelection(next: FlowSelection) { selection.value = next }
   function updateViewport(next: Viewport) { viewport.value = next }
 
@@ -297,7 +333,7 @@ export function useFlowEditor(props: FlowEditorProps, canvas: Ref<CanvasHandle |
     const snapshot = base.value
     const current = graph.value
     if (!snapshot || !current || readOnly.value) return
-    if (typeof window !== 'undefined' && !window.confirm('캔버스의 모든 변경을 버리고 마지막으로 불러온 서버 상태로 되돌릴까요?')) return
+    if (typeof window !== 'undefined' && !window.confirm('워크플로우의 모든 변경을 버리고 마지막으로 불러온 서버 상태로 되돌릴까요?')) return
     history.value = recordHistory(history.value, current)
     setGraph(decompile(snapshot, extractLayout(current, viewport.value)))
     message.value = '변경을 되돌렸습니다.'
@@ -395,6 +431,21 @@ export function useFlowEditor(props: FlowEditorProps, canvas: Ref<CanvasHandle |
     await openPlan()
   }
 
+  /** Section 8.6: a succeeded create/patch that sent a model prompt, yet the re-read Target has none => backend predates V54. */
+  function targetPromptDropped(applied: FlowPlan, report: { results: OperationResult[]; createdTargetIds: Record<string, string> }, synced: ServiceFlowSnapshot): boolean {
+    const succeeded = new Set(report.results.filter(item => item.status === 'succeeded').map(item => item.opId))
+    for (const op of applied.operations) {
+      if (!succeeded.has(op.opId)) continue
+      let targetId: string | null = null
+      if (op.kind === 'createTarget' && op.body.systemPromptTemplate) targetId = report.createdTargetIds[op.key] ?? null
+      else if (op.kind === 'patchTarget' && op.body.systemPromptTemplate) targetId = op.target.kind === 'existing' ? op.target.id : (report.createdTargetIds[op.target.key] ?? null)
+      if (!targetId) continue
+      const row = synced.config.targets.find(target => target.id === targetId)
+      if (row && (row.systemPromptTemplate ?? null) === null) return true
+    }
+    return false
+  }
+
   async function applyPlan() {
     const snapshot = base.value
     const current = graph.value
@@ -426,8 +477,9 @@ export function useFlowEditor(props: FlowEditorProps, canvas: Ref<CanvasHandle |
         const synced = await loadFlowSnapshot(snapshot.organizationId, report.serviceId ?? snapshot.serviceId, props.auth)
         const merged = rebase({ graph: current, base: snapshot, remote: synced, createdTargetIds: report.createdTargetIds, deletedTargetKeys: report.deletedTargetKeys })
         const wasNew = snapshot.serviceId === null
+        const promptDropped = targetPromptDropped(fresh, report, synced)
         setGraph(merged.graph)
-        base.value = synced
+        base.value = promptDropped ? { ...synced, features: { targetPrompt: false } } : synced
         serviceOptions.value = synced.catalog.services
         history.value = createHistory<FlowGraph>()
         selection.value = { ...EMPTY_SELECTION }
@@ -438,6 +490,7 @@ export function useFlowEditor(props: FlowEditorProps, canvas: Ref<CanvasHandle |
         }
         if (report.completed) takeDraft(currentUserId(), snapshot.organizationId, snapshot.serviceId)
         message.value = merged.conflicts.length ? `적용 후 서버 값과 다른 ${merged.conflicts.length}개 항목이 있어 서버 값으로 맞췄습니다.` : ''
+        if (promptDropped) message.value = message.value ? `${message.value} ${TARGET_PROMPT_UNSUPPORTED_MESSAGE}` : TARGET_PROMPT_UNSUPPORTED_MESSAGE
         if (anySucceeded && synced.serviceId) {
           let available = layoutAvailable.value
           if (!available && wasNew) available = (await loadFlowLayout(synced.serviceId, props.auth)).available
@@ -471,6 +524,9 @@ export function useFlowEditor(props: FlowEditorProps, canvas: Ref<CanvasHandle |
       case 'zoom-in': canvas.value?.zoomCenter(1.25); break
       case 'zoom-out': canvas.value?.zoomCenter(1 / 1.25); break
       case 'zoom-reset': canvas.value?.zoomCenter('reset'); break
+      case 'mode-basic': mode.value = 'basic'; lastMode = 'basic'; break
+      case 'mode-advanced': mode.value = 'advanced'; lastMode = 'advanced'; break
+      case 'normalize-order': handleCommand({ type: 'normalizeOrder' }); break
       case 'validate': selection.value = { ...EMPTY_SELECTION }; inspectorOpen.value = true; break
       case 'plan': void openPlan(); break
       case 'revert': revert(); break
@@ -528,9 +584,9 @@ export function useFlowEditor(props: FlowEditorProps, canvas: Ref<CanvasHandle |
   return {
     loadState, loadError, message, base, graph, viewport, selection, serviceOptions, selectedKey, restoredAt, hasNewDraft,
     layoutAvailable, layoutDirty, planOpen, planPhase, plan, planResults, planBusy,
-    narrow, compact, paletteOpen, inspectorOpen,
+    narrow, compact, paletteOpen, inspectorOpen, mode, canNormalize, showQuickStart,
     issues, nodeChanges, changeCount, errorCount, warningCount, busy, readOnly, canUndo, canRedo, serviceLabel,
-    selectService, openInspector, retry, init, handleCommand, undo, redo, focusNode, updateSelection, updateViewport,
+    selectService, dismissQuickStart, openInspector, retry, init, handleCommand, undo, redo, focusNode, updateSelection, updateViewport,
     onToolbarAction, openPlan, closePlan, mergeRemote, applyPlan, reload
   }
 }

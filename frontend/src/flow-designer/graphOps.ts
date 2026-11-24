@@ -1,17 +1,36 @@
 import {
   CONNECTION_RULES,
   DEFAULT_CONFIG,
+  GUARDRAIL_PRESETS,
   NODE_TYPES,
   SINGLETON_IDS,
-  deploymentNodeId,
+  branchPromptNodeId,
+  defaultNodeProps,
   edgeId,
   hostNodeIdFor,
+  isProtectedGuardrail,
+  llmNodeId,
+  nodePropsFromConfig,
+  policyNodeId,
   portSpec,
   projectNodeId,
-  singletonPropsFromConfig,
+  projectSignals,
+  targetKeyOf,
 } from './catalog'
-import { autoLayout, placeNewNode, portAnchor, COLUMN_WIDTH } from './layout'
+import {
+  FLOW_NODE_TYPES,
+  analyzeWorkflow,
+  dependencyClosure,
+  dependentsOf,
+  insertableTypesForEdge,
+  isBranchPrompt,
+  isEmptyWorkflow,
+  promptScopeForSplice,
+  rankOf,
+} from './workflow'
+import { COLUMN_WIDTH, autoLayout, placeNewNode, placeSpliced, portAnchor } from './layout'
 import type {
+  AddableNodeType,
   CommandResult,
   ConnectCheck,
   DeploymentInfo,
@@ -29,13 +48,20 @@ import type {
   ServiceFlowSnapshot,
 } from './types'
 
-const MSG_NOT_FOUND = '연결할 노드를 찾을 수 없습니다.'
+const MSG_NOT_FOUND = '간선을 이을 노드를 찾을 수 없습니다.'
 const MSG_SAME_NODE = '같은 노드끼리 연결할 수 없습니다.'
 const MSG_DIRECTION = '출력 포트에서 입력 포트로만 연결할 수 있습니다.'
-const MSG_DUPLICATE_BINDING = '이 Deployment에는 이미 Target이 있습니다(서비스당 Deployment 1개).'
+const MSG_START_ONLY_PROJECT = '시작 노드는 프로젝트에만 연결합니다.'
+const MSG_PROJECT_AUTO = '자동으로 관리되는 간선입니다. 시작 노드에서 프로젝트로 간선을 그리면 접근이 허용됩니다.'
+const MSG_BRANCH_PROMPT_OUT = '모델별 시스템 프롬프트는 자기 LLM에만 연결됩니다.'
 const MSG_NO_RULE = '이 포트 조합은 연결할 수 없습니다.'
-const MSG_AUTO = '자동으로 관리되는 연결입니다.'
-const MSG_EXISTS = '이미 연결되어 있습니다.'
+const MSG_AUTO = '자동으로 관리되는 간선입니다.'
+const MSG_AFTER_ROUTER = '라우터 뒤에는 LLM 또는 모델별 시스템 프롬프트만 연결할 수 있습니다.'
+const MSG_EXISTS = '이미 간선이 있습니다.'
+const MSG_CYCLE = '순환 간선은 만들 수 없습니다.'
+const MSG_PROMPT_COMMON_EXISTS = '공통 시스템 프롬프트가 이미 있습니다. 특정 LLM에만 쓰려면 그 LLM 앞 간선의 ＋를 누르세요.'
+const MSG_TARGET_PROMPT_UNSUPPORTED = '서버가 모델별 시스템 프롬프트를 지원하지 않습니다.'
+const MSG_CANNOT_SPLICE = '이 간선에는 이 노드를 넣을 수 없습니다.'
 
 function cmp(a: string, b: string): number { return a < b ? -1 : a > b ? 1 : 0 }
 
@@ -48,7 +74,7 @@ function cloneEdge(edge: FlowEdge): FlowEdge {
 
 export function sortGraph(graph: FlowGraph): FlowGraph {
   const nodes = graph.nodes.map(cloneNode)
-  nodes.sort((a, b) => NODE_TYPES[a.type].column - NODE_TYPES[b.type].column || cmp(a.id, b.id))
+  nodes.sort((a, b) => rankOf(a) - rankOf(b) || cmp(a.id, b.id))
   const edges = graph.edges.map(cloneEdge)
   edges.sort((a, b) => cmp(a.id, b.id))
   return { ...graph, nodes, edges }
@@ -62,35 +88,96 @@ export function edgesOf(graph: FlowGraph, nodeId: string): FlowEdge[] {
   return graph.edges.filter((e) => e.from.nodeId === nodeId || e.to.nodeId === nodeId)
 }
 
-export function makeNode(type: NodeType, id: string, refId: string | null, props: Record<string, FlowPropValue> = {}): FlowNode {
-  return { id, type, refId, x: NODE_TYPES[type].column * COLUMN_WIDTH, y: 0, collapsed: false, props: { ...props } }
+export function makeNode(type: NodeType, id: string, refId: string | null, props: Record<string, FlowPropValue> = {}, targetId: string | null = null): FlowNode {
+  return { id, type, refId, targetId, x: 0, y: 0, collapsed: false, props: { ...props } }
 }
 
 export function makeEdge(kind: EdgeKind, from: PortRef, to: PortRef, locked: boolean): FlowEdge {
   return { id: edgeId(from, to), kind, from: { ...from }, to: { ...to }, locked }
 }
 
-const PIPELINE_EDGES: Array<[PortRef, PortRef]> = [
-  [{ nodeId: 'service', portId: 'request' }, { nodeId: 'guardrail', portId: 'request' }],
-  [{ nodeId: 'guardrail', portId: 'request' }, { nodeId: 'prompt', portId: 'request' }],
-  [{ nodeId: 'prompt', portId: 'request' }, { nodeId: 'cache', portId: 'request' }],
-  [{ nodeId: 'cache', portId: 'request' }, { nodeId: 'router', portId: 'request' }],
-]
-
 export function createSkeletonGraph(serviceId: string | null): FlowGraph {
-  const props = singletonPropsFromConfig(DEFAULT_CONFIG)
-  const types = ['service', 'guardrail', 'prompt', 'cache', 'router'] as const
-  const nodes = types.map((t) => makeNode(t, SINGLETON_IDS[t], null, props[t]))
-  const edges = PIPELINE_EDGES.map(([from, to]) => makeEdge('pipeline', from, to, true))
-  return sortGraph({ schemaVersion: 1, serviceId, nodes, edges, nextSeq: 1 })
+  return { schemaVersion: 2, serviceId, nodes: [makeNode('start', 'start', null, nodePropsFromConfig(DEFAULT_CONFIG).start)], edges: [] }
+}
+
+/* ------------------------------------------------------------------ */
+/* Working copy                                                        */
+/* ------------------------------------------------------------------ */
+
+interface Working {
+  base: FlowGraph
+  nodes: Map<string, FlowNode>
+  edges: Map<string, FlowEdge>
+}
+function begin(graph: FlowGraph): Working {
+  return { base: graph, nodes: new Map(graph.nodes.map((n) => [n.id, cloneNode(n)])), edges: new Map(graph.edges.map((e) => [e.id, cloneEdge(e)])) }
+}
+function toGraph(w: Working): FlowGraph {
+  return { ...w.base, nodes: [...w.nodes.values()], edges: [...w.edges.values()] }
+}
+function copyPositions(w: Working, g: FlowGraph): void {
+  for (const n of g.nodes) {
+    const hit = w.nodes.get(n.id)
+    if (hit) { hit.x = n.x; hit.y = n.y }
+  }
+}
+function link(w: Working, kind: EdgeKind, fromId: string, fromPort: string, toId: string, toPort: string, locked = false): FlowEdge {
+  const edge = makeEdge(kind, { nodeId: fromId, portId: fromPort }, { nodeId: toId, portId: toPort }, locked)
+  w.edges.set(edge.id, edge)
+  return edge
+}
+/** Links two flow nodes with the kind implied by the source (router -> route, everything else -> flow). */
+function linkFlow(w: Working, fromId: string, toId: string): FlowEdge {
+  const from = w.nodes.get(fromId)
+  const kind: EdgeKind = from && from.type === 'router' ? 'route' : 'flow'
+  return link(w, kind, fromId, 'out', toId, 'in', false)
+}
+function unlink(w: Working, id: string): void { w.edges.delete(id) }
+function isFlowEdge(w: Working, e: FlowEdge): boolean {
+  if (e.kind !== 'flow' && e.kind !== 'route') return false
+  const a = w.nodes.get(e.from.nodeId)
+  const b = w.nodes.get(e.to.nodeId)
+  return !!a && !!b && FLOW_NODE_TYPES.has(a.type) && FLOW_NODE_TYPES.has(b.type)
+}
+function flowOuts(w: Working, id: string): FlowEdge[] {
+  return [...w.edges.values()].filter((e) => e.from.nodeId === id && isFlowEdge(w, e)).sort((a, b) => cmp(a.id, b.id))
+}
+function flowIns(w: Working, id: string): FlowEdge[] {
+  return [...w.edges.values()].filter((e) => e.to.nodeId === id && isFlowEdge(w, e)).sort((a, b) => cmp(a.id, b.id))
+}
+function removeNodeAndEdges(w: Working, id: string): void {
+  w.nodes.delete(id)
+  for (const e of [...w.edges.values()]) if (e.from.nodeId === id || e.to.nodeId === id) w.edges.delete(e.id)
+}
+function placeW(w: Working, id: string, snapshot: ServiceFlowSnapshot): void {
+  copyPositions(w, placeNewNode(toGraph(w), id, snapshot))
+}
+
+function deploymentOf(snapshot: ServiceFlowSnapshot, id: string | null): DeploymentInfo | undefined {
+  return id ? snapshot.catalog.deployments.find((d) => d.id === id) : undefined
+}
+function externalDeployment(snapshot: ServiceFlowSnapshot, deploymentId: string | null): boolean {
+  return deploymentOf(snapshot, deploymentId)?.external === true
+}
+function deploymentIdOf(node: FlowNode): string {
+  return node.refId ?? (node.id.startsWith('deployment:') ? node.id.slice('deployment:'.length) : node.id)
 }
 
 /* ------------------------------------------------------------------ */
 /* Connection checks                                                   */
 /* ------------------------------------------------------------------ */
 
-function hasBinding(graph: FlowGraph, deploymentNode: string): boolean {
-  return graph.edges.some((e) => e.kind === 'binding' && e.to.nodeId === deploymentNode)
+function hasFlowPath(graph: FlowGraph, fromId: string, toId: string): boolean {
+  const seen = new Set<string>([fromId])
+  const stack = [fromId]
+  while (stack.length > 0) {
+    const cur = stack.pop() as string
+    if (cur === toId) return true
+    for (const e of graph.edges) {
+      if ((e.kind === 'flow' || e.kind === 'route') && e.from.nodeId === cur && !seen.has(e.to.nodeId)) { seen.add(e.to.nodeId); stack.push(e.to.nodeId) }
+    }
+  }
+  return false
 }
 
 export function canConnect(graph: FlowGraph, from: PortRef, to: PortRef, _snapshot: ServiceFlowSnapshot): ConnectCheck {
@@ -101,24 +188,32 @@ export function canConnect(graph: FlowGraph, from: PortRef, to: PortRef, _snapsh
   const fromPort = portSpec(fromNode.type, from.portId, 'out')
   const toPort = portSpec(toNode.type, to.portId, 'in')
   if (!fromPort || !toPort) return { ok: false, reason: MSG_DIRECTION }
-
-  // Convenience rule: router.targets -> deployment.binding inserts a new target node.
-  if (fromNode.type === 'router' && from.portId === 'targets' && toNode.type === 'deployment' && to.portId === 'binding') {
-    return hasBinding(graph, toNode.id) ? { ok: false, reason: MSG_DUPLICATE_BINDING } : { ok: true, replaces: [] }
-  }
-
+  if (fromNode.type === 'start' && !(toNode.type === 'project' && to.portId === 'in')) return { ok: false, reason: MSG_START_ONLY_PROJECT }
+  if (fromNode.type === 'project' || fromNode.type === 'policy') return { ok: false, reason: MSG_PROJECT_AUTO }
+  if (isBranchPrompt(fromNode)) return { ok: false, reason: MSG_BRANCH_PROMPT_OUT }
+  // Checked before the rule lookup so that "router -> anything but a branch" explains itself.
+  if (fromNode.type === 'router' && toNode.type !== 'llm' && !isBranchPrompt(toNode)) return { ok: false, reason: MSG_AFTER_ROUTER }
   const rule = CONNECTION_RULES.find((r) => r.fromType === fromNode.type && r.fromPort === from.portId && r.toType === toNode.type && r.toPort === to.portId)
   if (!rule) return { ok: false, reason: MSG_NO_RULE }
   if (!rule.userEditable) return { ok: false, reason: MSG_AUTO }
   const id = edgeId(from, to)
   if (graph.edges.some((e) => e.id === id)) return { ok: false, reason: MSG_EXISTS }
+  if ((rule.kind === 'flow' || rule.kind === 'route') && hasFlowPath(graph, to.nodeId, from.nodeId)) return { ok: false, reason: MSG_CYCLE }
 
   const replaces: string[] = []
   if (!fromPort.multiple) {
-    for (const e of graph.edges) if (e.from.nodeId === from.nodeId && e.from.portId === from.portId) replaces.push(e.id)
+    for (const e of graph.edges) {
+      if (e.from.nodeId === from.nodeId && e.from.portId === from.portId && e.kind !== 'access') replaces.push(e.id)
+    }
   }
-  if (!toPort.multiple) {
-    for (const e of graph.edges) if (e.to.nodeId === to.nodeId && e.to.portId === to.portId && !replaces.includes(e.id)) replaces.push(e.id)
+  if (toPort.type === 'flow' && toPort.id === 'in') {
+    for (const e of graph.edges) {
+      if (e.to.nodeId === to.nodeId && e.to.portId === to.portId && (e.kind === 'flow' || e.kind === 'route') && !replaces.includes(e.id)) replaces.push(e.id)
+    }
+  } else if (!toPort.multiple) {
+    for (const e of graph.edges) {
+      if (e.to.nodeId === to.nodeId && e.to.portId === to.portId && e.kind !== 'access' && !replaces.includes(e.id)) replaces.push(e.id)
+    }
   }
   return { ok: true, replaces }
 }
@@ -144,169 +239,269 @@ export function nearestCompatiblePort(graph: FlowGraph, from: PortRef, point: Po
 }
 
 /* ------------------------------------------------------------------ */
-/* Host nodes                                                          */
+/* Derived nodes: hosts and inherited policies                         */
 /* ------------------------------------------------------------------ */
 
-function hostEdge(depId: string, hostId: string): FlowEdge {
-  return makeEdge('host', { nodeId: depId, portId: 'host' }, { nodeId: hostId, portId: 'host' }, true)
-}
-
 export function syncHostNodes(graph: FlowGraph, snapshot: ServiceFlowSnapshot): FlowGraph {
+  const w = begin(graph)
   const deployments = new Map<string, DeploymentInfo>(snapshot.catalog.deployments.map((d) => [d.id, d]))
-  const nodes = new Map(graph.nodes.map((n) => [n.id, cloneNode(n)]))
-  const edges = new Map(graph.edges.map((e) => [e.id, cloneEdge(e)]))
   const created: string[] = []
 
-  for (const node of [...nodes.values()]) {
-    if (node.type !== 'deployment') continue
+  for (const node of [...w.nodes.values()]) {
+    if (node.type !== 'llm') continue
     const info = node.refId ? deployments.get(node.refId) : undefined
     const hostId = info ? hostNodeIdFor(info) : null
-    // Drop host edges that no longer match the catalog.
-    for (const e of [...edges.values()]) {
-      if (e.kind === 'host' && e.from.nodeId === node.id && e.to.nodeId !== hostId) edges.delete(e.id)
+    for (const e of [...w.edges.values()]) {
+      if (e.kind === 'host' && e.from.nodeId === node.id && e.to.nodeId !== hostId) w.edges.delete(e.id)
     }
     if (!hostId) continue
-    if (!nodes.has(hostId)) {
+    if (!w.nodes.has(hostId)) {
       const isProvider = hostId.startsWith('provider:')
-      nodes.set(hostId, makeNode(isProvider ? 'provider' : 'endpoint', hostId, hostId.slice(hostId.indexOf(':') + 1)))
+      w.nodes.set(hostId, makeNode(isProvider ? 'provider' : 'endpoint', hostId, hostId.slice(hostId.indexOf(':') + 1)))
       created.push(hostId)
     }
-    const edge = hostEdge(node.id, hostId)
-    if (!edges.has(edge.id)) edges.set(edge.id, edge)
+    link(w, 'host', node.id, 'host', hostId, 'in', true)
   }
 
-  // Remove host nodes without any connected deployment.
-  for (const node of [...nodes.values()]) {
+  for (const node of [...w.nodes.values()]) {
     if (node.type !== 'endpoint' && node.type !== 'provider') continue
-    const used = [...edges.values()].some((e) => e.kind === 'host' && e.to.nodeId === node.id)
+    const used = [...w.edges.values()].some((e) => e.kind === 'host' && e.to.nodeId === node.id)
     if (!used) {
-      nodes.delete(node.id)
+      removeNodeAndEdges(w, node.id)
       const idx = created.indexOf(node.id)
       if (idx >= 0) created.splice(idx, 1)
     }
   }
-
-  return placeCreated(graph, nodes, edges, created)
+  for (const id of created) placeW(w, id, snapshot)
+  return sortGraph(toGraph(w))
 }
 
-/** Builds a sorted graph from working maps, placing nodes listed in `created` (in order) via placeNewNode. */
-export function placeCreated(graph: FlowGraph, nodes: Map<string, FlowNode>, edges: Map<string, FlowEdge>, created: string[]): FlowGraph {
-  const fresh = new Set(created)
-  let working: FlowGraph = { ...graph, nodes: [...nodes.values()].filter((n) => !fresh.has(n.id)), edges: [...edges.values()] }
-  for (const id of created) {
-    const node = nodes.get(id)
-    if (!node) continue
-    working = { ...working, nodes: [...working.nodes, node] }
-    working = placeNewNode(working, id)
+/** §6.11: host nodes, inherited policy nodes and the automatic `access` edges. */
+export function syncDerived(graph: FlowGraph, snapshot: ServiceFlowSnapshot): FlowGraph {
+  const hosted = syncHostNodes(graph, snapshot)
+  const w = begin(hosted)
+  const head = analyzeWorkflow(hosted, snapshot).head
+  const created: string[] = []
+
+  for (const node of [...w.nodes.values()]) {
+    if (node.type === 'policy' && !w.nodes.has(projectNodeId(node.refId ?? ''))) removeNodeAndEdges(w, node.id)
   }
-  return sortGraph(working)
+  for (const project of [...w.nodes.values()].filter((n) => n.type === 'project')) {
+    if (!project.refId) continue
+    const policyId = policyNodeId(project.refId)
+    for (const e of [...w.edges.values()]) {
+      if ((e.from.nodeId === project.id || e.from.nodeId === policyId) && (e.kind === 'access' || e.kind === 'policy')) w.edges.delete(e.id)
+    }
+    const granted = w.edges.has(edgeId({ nodeId: 'start', portId: 'out' }, { nodeId: project.id, portId: 'in' }))
+    if (!granted) {
+      removeNodeAndEdges(w, policyId)
+      continue
+    }
+    const info = snapshot.catalog.projects.find((p) => p.id === project.refId)
+    if (projectSignals(info).length > 0) {
+      if (!w.nodes.has(policyId)) {
+        w.nodes.set(policyId, makeNode('policy', policyId, project.refId))
+        created.push(policyId)
+      }
+      link(w, 'policy', project.id, 'out', policyId, 'in', true)
+      if (head) link(w, 'access', policyId, 'out', head, 'in', true)
+    } else {
+      removeNodeAndEdges(w, policyId)
+      if (head) link(w, 'access', project.id, 'out', head, 'in', true)
+    }
+  }
+  for (const e of [...w.edges.values()]) {
+    if (e.kind === 'access' && e.to.nodeId !== head) w.edges.delete(e.id)
+  }
+  for (const id of created) placeW(w, id, snapshot)
+  return sortGraph(toGraph(w))
 }
 
 export function renameTargetNodes(graph: FlowGraph, createdTargetIds: Record<string, string>): FlowGraph {
-  const existing = new Set(graph.nodes.map((n) => n.id))
-  const renames = new Map<string, string>()
-  for (const [oldId, realId] of Object.entries(createdTargetIds)) {
-    const newId = `target:${realId}`
-    if (oldId === newId || !existing.has(oldId) || existing.has(newId)) continue
-    renames.set(oldId, newId)
-  }
-  if (renames.size === 0) return sortGraph(graph)
-  const mapId = (id: string) => renames.get(id) ?? id
   const nodes = graph.nodes.map((n) => {
-    const next = renames.get(n.id)
-    return next ? { ...cloneNode(n), id: next, refId: next.slice('target:'.length) } : cloneNode(n)
+    if (n.type !== 'llm') return cloneNode(n)
+    const real = createdTargetIds[targetKeyOf(n)]
+    return real ? { ...cloneNode(n), targetId: real } : cloneNode(n)
   })
-  const edges = graph.edges.map((e) => {
-    const from = { ...e.from, nodeId: mapId(e.from.nodeId) }
-    const to = { ...e.to, nodeId: mapId(e.to.nodeId) }
-    return { ...e, from, to, id: edgeId(from, to) }
-  })
-  return sortGraph({ ...graph, nodes, edges })
+  return sortGraph({ ...graph, nodes })
 }
 
-/** Turn persisted Target nodes whose server row is gone into brand-new pending Targets (same position, props and edges). */
+/** Turns LLM nodes whose server row is gone into brand-new pending LLMs (same position, props and edges). */
 export function detachTargetNodes(graph: FlowGraph, keys: string[]): FlowGraph {
-  const present = new Set(graph.nodes.map((n) => n.id))
-  const targets = new Set(graph.nodes.filter((n) => n.type === 'target' && n.refId !== null && keys.includes(n.id)).map((n) => n.id))
-  if (targets.size === 0) return graph
-  const renames = new Map<string, string>()
-  let seq = graph.nextSeq
-  for (const id of [...targets].sort(cmp)) {
-    while (present.has(`target:new-${seq}`)) seq += 1
-    renames.set(id, `target:new-${seq}`)
-    present.add(`target:new-${seq}`)
-    seq += 1
+  const set = new Set(keys)
+  const nodes = graph.nodes.map((n) => (n.type === 'llm' && n.targetId !== null && set.has(targetKeyOf(n)) ? { ...cloneNode(n), targetId: null } : cloneNode(n)))
+  return sortGraph({ ...graph, nodes })
+}
+
+/* ------------------------------------------------------------------ */
+/* Structural editing primitives (§6.5-6.7)                            */
+/* ------------------------------------------------------------------ */
+
+function insertTrunk(w: Working, node: FlowNode, snapshot: ServiceFlowSnapshot): void {
+  const analysis = analyzeWorkflow(toGraph(w), snapshot)
+  const rank = rankOf(node)
+  const idx = analysis.trunk.findIndex((id) => rankOf(w.nodes.get(id) as FlowNode) > rank)
+  w.nodes.set(node.id, node)
+  if (idx >= 0) {
+    const before = analysis.trunk[idx]
+    const pred = idx > 0 ? analysis.trunk[idx - 1] : null
+    if (pred) {
+      for (const e of flowOuts(w, pred)) if (e.to.nodeId === before) unlink(w, e.id)
+      linkFlow(w, pred, node.id)
+    }
+    linkFlow(w, node.id, before)
+    copyPositions(w, placeSpliced(toGraph(w), node.id, pred, before))
+    return
   }
-  const mapId = (id: string) => renames.get(id) ?? id
-  const nodes = graph.nodes.map((n) => {
-    const next = renames.get(n.id)
-    return next ? { ...cloneNode(n), id: next, refId: null } : cloneNode(n)
-  })
-  const edges = graph.edges.map((e) => {
-    const from = { ...e.from, nodeId: mapId(e.from.nodeId) }
-    const to = { ...e.to, nodeId: mapId(e.to.nodeId) }
-    return { ...e, from, to, id: edgeId(from, to) }
-  })
-  return sortGraph({ ...graph, nodes, edges, nextSeq: seq })
+  const tail = analysis.tail
+  if (tail) {
+    const outs = flowOuts(w, tail)
+    for (const e of outs) unlink(w, e.id)
+    linkFlow(w, tail, node.id)
+    for (const e of outs) linkFlow(w, node.id, e.to.nodeId)
+    copyPositions(w, placeSpliced(toGraph(w), node.id, tail, outs[0]?.to.nodeId ?? null))
+    return
+  }
+  if (analysis.head) linkFlow(w, node.id, analysis.head)
+  copyPositions(w, placeSpliced(toGraph(w), node.id, null, analysis.head))
+}
+
+/** Puts a router after `afterId` (or at the head), moving the outgoing flow edges of `afterId` (or `targets`) below it. */
+function insertRouterAt(w: Working, node: FlowNode, afterId: string | null, targets: string[]): void {
+  w.nodes.set(node.id, node)
+  if (afterId) {
+    for (const e of flowOuts(w, afterId)) if (targets.includes(e.to.nodeId)) unlink(w, e.id)
+    linkFlow(w, afterId, node.id)
+  }
+  for (const t of targets) linkFlow(w, node.id, t)
+  copyPositions(w, placeSpliced(toGraph(w), node.id, afterId, targets[0] ?? null))
+}
+
+function insertRouterAuto(w: Working, node: FlowNode, snapshot: ServiceFlowSnapshot): void {
+  const analysis = analyzeWorkflow(toGraph(w), snapshot)
+  if (analysis.tail) {
+    insertRouterAt(w, node, analysis.tail, flowOuts(w, analysis.tail).map((e) => e.to.nodeId))
+  } else {
+    insertRouterAt(w, node, null, analysis.head ? [analysis.head] : [])
+  }
+}
+
+/** Puts a model-specific prompt directly in front of its LLM, taking over the LLM's incoming flow edges. */
+function insertBranchPrompt(w: Working, prompt: FlowNode, llmId: string, snapshot: ServiceFlowSnapshot): void {
+  void snapshot
+  w.nodes.set(prompt.id, prompt)
+  const ins = flowIns(w, llmId)
+  for (const e of ins) {
+    unlink(w, e.id)
+    linkFlow(w, e.from.nodeId, prompt.id)
+  }
+  link(w, 'route', prompt.id, 'out', llmId, 'in', true)
+  const source = ins[0] ? w.nodes.get(ins[0].from.nodeId) : undefined
+  const llm = w.nodes.get(llmId)
+  if (source && source.type === 'router' && llm) {
+    // Branch prompts share one lane in front of the LLM lane: push every LLM (and its hosts) right when needed.
+    const promptX = source.x + COLUMN_WIDTH
+    const llms = [...w.nodes.values()].filter((n) => n.type === 'llm')
+    const dx = promptX + COLUMN_WIDTH - Math.min(...llms.map((n) => n.x))
+    if (dx > 0) {
+      const moved = new Set(dependencyClosure(toGraph(w), llms.map((n) => n.id)))
+      moved.delete(prompt.id)
+      for (const id of moved) { const n = w.nodes.get(id); if (n) n.x += dx }
+    }
+    prompt.x = promptX
+    prompt.y = llm.y
+    return
+  }
+  copyPositions(w, placeSpliced(toGraph(w), prompt.id, source ? source.id : null, llmId))
+}
+
+function newRouterNode(graph: FlowGraph, snapshot: ServiceFlowSnapshot): FlowNode {
+  return makeNode('router', SINGLETON_IDS.router, null, defaultNodeProps('router', graph, snapshot, null))
+}
+
+function addLlm(w: Working, node: FlowNode, snapshot: ServiceFlowSnapshot, autoWire: boolean): void {
+  const graph = toGraph(w)
+  w.nodes.set(node.id, node)
+  if (!autoWire) { placeW(w, node.id, snapshot); return }
+  const analysis = analyzeWorkflow(graph, snapshot)
+  const llmCount = graph.nodes.filter((n) => n.type === 'llm').length
+  if (analysis.router) {
+    placeW(w, node.id, snapshot)
+    linkFlow(w, analysis.router, node.id)
+  } else if (llmCount === 0) {
+    if (analysis.tail) linkFlow(w, analysis.tail, node.id)
+    placeW(w, node.id, snapshot)
+  } else {
+    w.nodes.delete(node.id)
+    insertRouterAuto(w, newRouterNode(graph, snapshot), snapshot)
+    w.nodes.set(node.id, node)
+    placeW(w, node.id, snapshot)
+    linkFlow(w, SINGLETON_IDS.router, node.id)
+  }
+}
+
+/** §5.5-style creation of one node with canonical wiring; used by commands and by graph synchronisation. */
+export function addFlowNode(
+  graph: FlowGraph,
+  spec: { type: NodeType; id: string; refId?: string | null; props?: Record<string, FlowPropValue>; targetId?: string | null },
+  snapshot: ServiceFlowSnapshot,
+): FlowGraph {
+  if (graph.nodes.some((n) => n.id === spec.id)) return graph
+  const w = begin(graph)
+  const node = makeNode(spec.type, spec.id, spec.refId ?? null, spec.props ?? {}, spec.targetId ?? null)
+  if (spec.type === 'llm') addLlm(w, node, snapshot, true)
+  else if (spec.type === 'router') insertRouterAuto(w, node, snapshot)
+  else if (spec.type === 'prompt' && spec.id !== 'prompt') {
+    const llmId = llmNodeId(spec.id.slice('prompt:'.length))
+    if (w.nodes.has(llmId)) insertBranchPrompt(w, node, llmId, snapshot)
+    else { w.nodes.set(node.id, node); placeW(w, node.id, snapshot) }
+  } else if (spec.type === 'masker') {
+    w.nodes.set(node.id, node)
+    if (w.nodes.has(SINGLETON_IDS.guardrail)) link(w, 'masker', node.id, 'masker', SINGLETON_IDS.guardrail, 'masker', false)
+    placeW(w, node.id, snapshot)
+  } else if (spec.type === 'project') {
+    w.nodes.set(node.id, node)
+    placeW(w, node.id, snapshot)
+  } else insertTrunk(w, node, snapshot)
+  return toGraph(w)
+}
+
+/**
+ * Removes nodes and heals the request path: a removed flow node with exactly one incoming flow edge hands its
+ * outgoing flow edges to that predecessor. Dependents are not expanded here (see `removeItems`).
+ */
+export function removeFlowNodes(graph: FlowGraph, nodeIds: string[], snapshot: ServiceFlowSnapshot): FlowGraph {
+  const w = begin(graph)
+  removeWithHealing(w, [...nodeIds].sort(cmp), snapshot)
+  return toGraph(w)
+}
+
+function removeWithHealing(w: Working, ids: string[], snapshot: ServiceFlowSnapshot): void {
+  for (const id of ids) {
+    const node = w.nodes.get(id)
+    if (!node) continue
+    const ins = flowIns(w, id)
+    const outs = flowOuts(w, id)
+    removeNodeAndEdges(w, id)
+    if (ins.length !== 1 || outs.length === 0) continue
+    const p = ins[0].from.nodeId
+    for (const out of outs) {
+      const s = out.to.nodeId
+      if (!w.nodes.has(p) || !w.nodes.has(s)) continue
+      const check = canConnect(toGraph(w), { nodeId: p, portId: 'out' }, { nodeId: s, portId: 'in' }, snapshot)
+      if (!check.ok) continue
+      for (const rid of check.replaces) unlink(w, rid)
+      linkFlow(w, p, s)
+    }
+  }
 }
 
 /* ------------------------------------------------------------------ */
 /* Commands                                                            */
 /* ------------------------------------------------------------------ */
 
-const ok = (graph: FlowGraph, changed: boolean, select: FlowSelection | null = null): CommandResult => ({ graph: sortGraph(graph), changed, error: null, select })
-const fail = (graph: FlowGraph, error: string): CommandResult => ({ graph, changed: false, error, select: null })
 const selectNode = (id: string): FlowSelection => ({ nodeIds: [id], edgeIds: [] })
-
-function numberProp(value: FlowPropValue | undefined): number {
-  return typeof value === 'number' ? value : Number(value)
-}
-
-function externalDeployment(snapshot: ServiceFlowSnapshot, deploymentId: string): boolean {
-  return snapshot.catalog.deployments.find((d) => d.id === deploymentId)?.external === true
-}
-
-function newTargetProps(graph: FlowGraph, deploymentId: string | null, snapshot: ServiceFlowSnapshot): Record<string, FlowPropValue> {
-  let max = 0
-  for (const n of graph.nodes) {
-    if (n.type !== 'target') continue
-    const p = numberProp(n.props.priority)
-    if (Number.isFinite(p)) max = Math.max(max, p)
-  }
-  return {
-    priority: max + 1,
-    weight: 100,
-    enabled: true,
-    degraded: false,
-    maxConcurrencyOverride: null,
-    followModelChanges: deploymentId ? !externalDeployment(snapshot, deploymentId) : true,
-  }
-}
-
-interface Working {
-  graph: FlowGraph
-  nodes: Map<string, FlowNode>
-  edges: Map<string, FlowEdge>
-  created: string[]
-}
-function begin(graph: FlowGraph): Working {
-  return { graph, nodes: new Map(graph.nodes.map((n) => [n.id, cloneNode(n)])), edges: new Map(graph.edges.map((e) => [e.id, cloneEdge(e)])), created: [] }
-}
-function ensureNode(w: Working, type: NodeType, id: string, refId: string | null, props: Record<string, FlowPropValue> = {}): FlowNode {
-  const hit = w.nodes.get(id)
-  if (hit) return hit
-  const node = makeNode(type, id, refId, props)
-  w.nodes.set(id, node)
-  w.created.push(id)
-  return node
-}
-function finish(w: Working, snapshot: ServiceFlowSnapshot, nextSeq = w.graph.nextSeq, sync = true): FlowGraph {
-  const placed = placeCreated({ ...w.graph, nextSeq }, w.nodes, w.edges, w.created)
-  return sync ? syncHostNodes(placed, snapshot) : placed
-}
-function removeEdgesWhere(w: Working, predicate: (e: FlowEdge) => boolean): void {
-  for (const e of [...w.edges.values()]) if (predicate(e)) w.edges.delete(e.id)
-}
+const emptySelection = (): FlowSelection => ({ nodeIds: [], edgeIds: [] })
 
 function coerce(field: FieldSpec, value: FlowPropValue): FlowPropValue {
   switch (field.kind) {
@@ -328,7 +523,14 @@ function propsEqual(a: FlowPropValue | undefined, b: FlowPropValue | undefined):
   return a === b
 }
 
+const entryEdgeId = (projectNode: string): string => edgeId({ nodeId: 'start', portId: 'out' }, { nodeId: projectNode, portId: 'in' })
+
 export function applyCommand(graph: FlowGraph, command: FlowCommand, snapshot: ServiceFlowSnapshot): CommandResult {
+  const ok = (g: FlowGraph, changed: boolean, select: FlowSelection | null = null): CommandResult => ({
+    graph: sortGraph(syncDerived(g, snapshot)), changed, error: null, select,
+  })
+  const fail = (error: string): CommandResult => ({ graph, changed: false, error, select: null })
+
   switch (command.type) {
     case 'moveNodes': {
       const moves = new Map(command.moves.map((m) => [m.nodeId, m]))
@@ -343,123 +545,93 @@ export function applyCommand(graph: FlowGraph, command: FlowCommand, snapshot: S
       return ok({ ...graph, nodes }, changed)
     }
 
-    case 'addNode': {
-      const refId = command.refId ?? null
-      if (command.nodeType === 'project') {
-        if (!refId || !snapshot.catalog.projects.some((p) => p.id === refId)) return fail(graph, '알 수 없는 프로젝트입니다.')
-        const id = projectNodeId(refId)
-        if (findNode(graph, id)) return ok(graph, false, selectNode(id))
-        const w = begin(graph)
-        const node = ensureNode(w, 'project', id, refId)
-        if (command.position) { node.x = command.position.x; node.y = command.position.y; w.created.pop() }
-        return ok(finish(w, snapshot, undefined, false), true, selectNode(id))
-      }
-      if (command.nodeType === 'deployment') {
-        if (!refId || !snapshot.catalog.deployments.some((d) => d.id === refId)) return fail(graph, '알 수 없는 Deployment입니다.')
-        const id = deploymentNodeId(refId)
-        if (findNode(graph, id)) return ok(graph, false, selectNode(id))
-        const w = begin(graph)
-        const node = ensureNode(w, 'deployment', id, refId)
-        if (command.position) { node.x = command.position.x; node.y = command.position.y; w.created.pop() }
-        return ok(finish(w, snapshot), true, selectNode(id))
-      }
-      if (command.nodeType === 'target') {
-        if (refId) {
-          if (!snapshot.catalog.deployments.some((d) => d.id === refId)) return fail(graph, '알 수 없는 Deployment입니다.')
-          if (hasBinding(graph, deploymentNodeId(refId))) return fail(graph, MSG_DUPLICATE_BINDING)
-        }
-        const w = begin(graph)
-        const id = `target:new-${graph.nextSeq}`
-        const node = ensureNode(w, 'target', id, null, newTargetProps(graph, refId, snapshot))
-        if (command.position) { node.x = command.position.x; node.y = command.position.y; w.created.pop() }
-        const route = makeEdge('route', { nodeId: 'router', portId: 'targets' }, { nodeId: id, portId: 'route' }, true)
-        w.edges.set(route.id, route)
-        if (refId) {
-          const depId = deploymentNodeId(refId)
-          ensureNode(w, 'deployment', depId, refId)
-          const binding = makeEdge('binding', { nodeId: id, portId: 'binding' }, { nodeId: depId, portId: 'binding' }, false)
-          w.edges.set(binding.id, binding)
-        }
-        return ok(finish(w, snapshot, graph.nextSeq + 1), true, selectNode(id))
-      }
-      // masker
-      if (findNode(graph, SINGLETON_IDS.masker)) return fail(graph, '마스킹 워커는 하나만 둘 수 있습니다.')
-      const w = begin(graph)
-      const node = ensureNode(w, 'masker', SINGLETON_IDS.masker, null, { deploymentId: refId })
-      if (command.position) { node.x = command.position.x; node.y = command.position.y; w.created.pop() }
-      const occupied = [...w.edges.values()].some((e) => e.to.nodeId === 'guardrail' && e.to.portId === 'masker')
-      if (!occupied) {
-        const e = makeEdge('masker', { nodeId: 'masker', portId: 'masker' }, { nodeId: 'guardrail', portId: 'masker' }, false)
-        w.edges.set(e.id, e)
-      }
-      return ok(finish(w, snapshot, undefined, false), true, selectNode('masker'))
-    }
+    case 'addNode':
+      return addNodeCommand(graph, command, snapshot, ok, fail)
 
     case 'removeItems': {
       const w = begin(graph)
       let error: string | null = null
       let changed = false
-      const removedNodes = new Set<string>()
+      const requested: string[] = []
+      const analysis = analyzeWorkflow(graph, snapshot)
       for (const id of command.nodeIds) {
         const node = w.nodes.get(id)
         if (!node) continue
-        if (node.type === 'deployment') continue // evaluated after targets are removed
-        if (!NODE_TYPES[node.type].deletable) { error ??= '고정 노드는 삭제할 수 없습니다.'; continue }
-        removedNodes.add(id)
+        if (node.type === 'start') { error ??= '시작 노드는 삭제할 수 없습니다.'; continue }
+        if (NODE_TYPES[node.type].derived) { error ??= '자동으로 표시되는 노드라 삭제할 수 없습니다.'; continue }
+        if (node.type === 'guardrail' && isProtectedGuardrail(snapshot) && command.force !== true) {
+          error ??= '외부 노출 방지 정책이 적용된 가드레일입니다. 인스펙터의 [보호 해제 후 삭제]를 사용하세요.'
+          continue
+        }
+        requested.push(id)
+      }
+      const expanded = new Set(dependencyClosure(graph, requested))
+      for (const id of [...expanded]) {
+        const node = w.nodes.get(id)
+        if (node && (node.type === 'endpoint' || node.type === 'provider' || node.type === 'policy') && !requested.includes(id)) expanded.delete(id)
+      }
+      if (expanded.has('router')) {
+        const remaining = analysis.branches.filter((b) => !expanded.has(b.llmNodeId)).length
+        if (remaining >= 2) {
+          error ??= '여러 LLM이 연결된 라우터는 삭제할 수 없습니다. LLM을 하나만 남기세요.'
+          expanded.delete('router')
+        }
       }
       const removedEdges = new Set<string>()
       for (const id of command.edgeIds) {
         const edge = w.edges.get(id)
         if (!edge) continue
-        if (edge.locked) { error ??= MSG_AUTO; continue }
+        const autoKind = edge.kind === 'access' || edge.kind === 'policy' || edge.kind === 'host'
+        if (edge.kind !== 'entry' && (edge.locked || autoKind)) { error ??= MSG_AUTO; continue }
         removedEdges.add(id)
       }
-      for (const id of command.nodeIds) {
-        const node = w.nodes.get(id)
-        if (!node || node.type !== 'deployment') continue
-        const stillBound = [...w.edges.values()].some((e) => e.kind === 'binding' && e.to.nodeId === id && !removedEdges.has(e.id) && !removedNodes.has(e.from.nodeId))
-        if (stillBound) { error ??= 'Target이 연결된 Deployment는 제거할 수 없습니다.'; continue }
-        removedNodes.add(id)
+      if (expanded.size > 0) {
+        removeWithHealing(w, [...expanded].sort(cmp), snapshot)
+        changed = true
       }
-      for (const e of [...w.edges.values()]) {
-        if (removedEdges.has(e.id) || removedNodes.has(e.from.nodeId) || removedNodes.has(e.to.nodeId)) { w.edges.delete(e.id); changed = true }
+      for (const id of removedEdges) {
+        if (w.edges.delete(id)) changed = true
       }
-      for (const id of removedNodes) { w.nodes.delete(id); changed = true }
-      if (!changed) return error ? fail(graph, error) : ok(graph, false, { nodeIds: [], edgeIds: [] })
-      const result = ok(finish(w, snapshot), true, { nodeIds: [], edgeIds: [] })
+      if (!changed) return error ? fail(error) : ok(graph, false, emptySelection())
+      const result = ok(toGraph(w), true, emptySelection())
       return { ...result, error }
     }
 
     case 'connect': {
       const check = canConnect(graph, command.from, command.to, snapshot)
-      if (!check.ok) return fail(graph, check.reason)
+      if (!check.ok) return fail(check.reason)
       const fromNode = findNode(graph, command.from.nodeId) as FlowNode
       const toNode = findNode(graph, command.to.nodeId) as FlowNode
       const w = begin(graph)
-      if (fromNode.type === 'router' && toNode.type === 'deployment') {
-        const id = `target:new-${graph.nextSeq}`
-        const deploymentId = toNode.refId ?? ''
-        ensureNode(w, 'target', id, null, newTargetProps(graph, deploymentId, snapshot))
-        const route = makeEdge('route', { nodeId: 'router', portId: 'targets' }, { nodeId: id, portId: 'route' }, true)
-        const binding = makeEdge('binding', { nodeId: id, portId: 'binding' }, { nodeId: toNode.id, portId: 'binding' }, false)
-        w.edges.set(route.id, route)
-        w.edges.set(binding.id, binding)
-        return ok(finish(w, snapshot, graph.nextSeq + 1), true, selectNode(id))
+      if (fromNode.type === 'start') {
+        link(w, 'entry', fromNode.id, command.from.portId, toNode.id, command.to.portId, false)
+        return ok(toGraph(w), true)
+      }
+      const isStage = fromNode.type === 'guardrail' || fromNode.type === 'prompt' || fromNode.type === 'params' || fromNode.type === 'cache'
+      if (isStage && toNode.type === 'llm' && !findNode(graph, SINGLETON_IDS.router)) {
+        const outs = flowOuts(w, fromNode.id).filter((e) => e.to.nodeId !== toNode.id)
+        const hasBranchTarget = outs.some((e) => {
+          const t = w.nodes.get(e.to.nodeId)
+          return !!t && (t.type === 'llm' || isBranchPrompt(t))
+        })
+        if (hasBranchTarget) {
+          for (const e of flowIns(w, toNode.id)) unlink(w, e.id)
+          insertRouterAt(w, newRouterNode(graph, snapshot), fromNode.id, outs.map((e) => e.to.nodeId))
+          linkFlow(w, SINGLETON_IDS.router, toNode.id)
+          return ok(toGraph(w), true)
+        }
       }
       const rule = CONNECTION_RULES.find((r) => r.fromType === fromNode.type && r.fromPort === command.from.portId && r.toType === toNode.type && r.toPort === command.to.portId)
-      for (const id of check.replaces) w.edges.delete(id)
-      const edge = makeEdge(rule ? rule.kind : 'access', command.from, command.to, rule ? !rule.userEditable : false)
-      w.edges.set(edge.id, edge)
-      if (edge.kind === 'binding') {
-        const target = w.nodes.get(fromNode.id)
-        if (target && toNode.refId && externalDeployment(snapshot, toNode.refId)) target.props.followModelChanges = false
-      }
-      return ok(finish(w, snapshot), true, null)
+      for (const id of check.replaces) unlink(w, id)
+      link(w, rule ? rule.kind : 'flow', command.from.nodeId, command.from.portId, command.to.nodeId, command.to.portId, rule ? !rule.userEditable : false)
+      const llm = w.nodes.get(toNode.id)
+      if (llm && llm.type === 'llm' && llm.targetId === null && externalDeployment(snapshot, llm.refId)) llm.props.followModelChanges = false
+      return ok(toGraph(w), true)
     }
 
     case 'updateProps': {
       const node = findNode(graph, command.nodeId)
-      if (!node) return fail(graph, '알 수 없는 노드입니다.')
+      if (!node) return fail('알 수 없는 노드입니다.')
       const fields = NODE_TYPES[node.type].fields.filter((f) => !f.key.startsWith('$'))
       const props = { ...node.props }
       let changed = false
@@ -474,32 +646,78 @@ export function applyCommand(graph: FlowGraph, command: FlowCommand, snapshot: S
       return ok({ ...graph, nodes: graph.nodes.map((n) => (n.id === node.id ? { ...n, props } : n)) }, true)
     }
 
-    case 'bindTarget': {
-      const target = findNode(graph, command.targetNodeId)
-      if (!target || target.type !== 'target') return fail(graph, '알 수 없는 노드입니다.')
-      if (!snapshot.catalog.deployments.some((d) => d.id === command.deploymentId)) return fail(graph, '알 수 없는 Deployment입니다.')
-      const depId = deploymentNodeId(command.deploymentId)
-      const w = begin(graph)
-      ensureNode(w, 'deployment', depId, command.deploymentId)
-      removeEdgesWhere(w, (e) => e.kind === 'binding' && e.from.nodeId === target.id)
-      const binding = makeEdge('binding', { nodeId: target.id, portId: 'binding' }, { nodeId: depId, portId: 'binding' }, false)
-      w.edges.set(binding.id, binding)
-      const t = w.nodes.get(target.id)
-      if (t && externalDeployment(snapshot, command.deploymentId)) t.props.followModelChanges = false
-      return ok(finish(w, snapshot), true, null)
+    case 'replaceModel': {
+      const old = findNode(graph, command.nodeId)
+      if (!old || old.type !== 'llm') return fail('알 수 없는 노드입니다.')
+      if (!deploymentOf(snapshot, command.deploymentId)) return fail('알 수 없는 모델입니다.')
+      const newId = llmNodeId(command.deploymentId)
+      if (findNode(graph, newId)) return fail('이미 워크플로우에 있는 모델입니다.')
+      const oldDeployment = deploymentIdOf(old)
+      const renames = new Map<string, string>([[old.id, newId]])
+      const oldPrompt = branchPromptNodeId(oldDeployment)
+      const newPrompt = branchPromptNodeId(command.deploymentId)
+      if (findNode(graph, oldPrompt)) renames.set(oldPrompt, newPrompt)
+      const nodes = graph.nodes.map((n) => {
+        const next = renames.get(n.id)
+        if (!next) return cloneNode(n)
+        if (n.id === old.id) {
+          const props = { ...n.props }
+          if (externalDeployment(snapshot, command.deploymentId)) props.followModelChanges = false
+          return { ...n, id: next, refId: command.deploymentId, targetId: null, props }
+        }
+        return { ...cloneNode(n), id: next }
+      })
+      const edges: FlowEdge[] = []
+      for (const e of graph.edges) {
+        if (e.kind === 'host' && e.from.nodeId === old.id) continue
+        const from = { ...e.from, nodeId: renames.get(e.from.nodeId) ?? e.from.nodeId }
+        const to = { ...e.to, nodeId: renames.get(e.to.nodeId) ?? e.to.nodeId }
+        edges.push({ ...e, from, to, id: edgeId(from, to) })
+      }
+      return ok({ ...graph, nodes, edges }, true, selectNode(newId))
     }
 
     case 'setAccess': {
       const project = findNode(graph, command.projectNodeId)
-      if (!project || project.type !== 'project') return fail(graph, '알 수 없는 노드입니다.')
+      if (!project || project.type !== 'project') return fail('알 수 없는 노드입니다.')
       const w = begin(graph)
-      const edge = makeEdge('access', { nodeId: project.id, portId: 'access' }, { nodeId: 'service', portId: 'access' }, false)
-      const present = w.edges.has(edge.id)
+      const id = entryEdgeId(project.id)
+      const present = w.edges.has(id)
       if (command.granted === present) return ok(graph, false)
-      if (command.granted) w.edges.set(edge.id, edge)
-      else w.edges.delete(edge.id)
-      return ok(finish(w, snapshot, undefined, false), true)
+      if (command.granted) link(w, 'entry', 'start', 'out', project.id, 'in', false)
+      else w.edges.delete(id)
+      return ok(toGraph(w), true)
     }
+
+    case 'normalizeOrder': {
+      const analysis = analyzeWorkflow(graph, snapshot)
+      const trunk = analysis.trunk.filter((id) => id !== analysis.router)
+      const nodeOf = (id: string) => findNode(graph, id) as FlowNode
+      const sorted = [...trunk].sort((a, b) => rankOf(nodeOf(a)) - rankOf(nodeOf(b)) || trunk.indexOf(a) - trunk.indexOf(b))
+      if (trunk.every((id, i) => id === sorted[i])) return ok(graph, false)
+      const w = begin(graph)
+      const finalTargets = analysis.router
+        ? [analysis.router]
+        : flowOuts(w, trunk[trunk.length - 1]).map((e) => e.to.nodeId).filter((id) => !trunk.includes(id))
+      for (const id of trunk) for (const e of flowOuts(w, id)) unlink(w, e.id)
+      for (let i = 0; i < sorted.length - 1; i += 1) linkFlow(w, sorted[i], sorted[i + 1])
+      for (const t of finalTargets) linkFlow(w, sorted[sorted.length - 1], t)
+      const xs = trunk.map((id) => nodeOf(id).x).sort((a, b) => a - b)
+      sorted.forEach((id, i) => {
+        const node = w.nodes.get(id) as FlowNode
+        const dx = xs[i] - node.x
+        if (dx === 0) return
+        node.x = xs[i]
+        for (const dep of dependentsOf(graph, id)) {
+          const d = w.nodes.get(dep)
+          if (d && (d.type === 'masker')) d.x += dx
+        }
+      })
+      return ok(toGraph(w), true)
+    }
+
+    case 'applyTemplate':
+      return applyTemplateCommand(graph, command, snapshot, ok, fail)
 
     case 'toggleCollapse': {
       const ids = new Set(command.nodeIds)
@@ -517,3 +735,205 @@ export function applyCommand(graph: FlowGraph, command: FlowCommand, snapshot: S
   }
 }
 
+type Ok = (g: FlowGraph, changed: boolean, select?: FlowSelection | null) => CommandResult
+type Fail = (error: string) => CommandResult
+
+function singletonLabelMessage(type: NodeType): string {
+  return `${NODE_TYPES[type].label}은(는) 워크플로우에 하나만 둘 수 있습니다.`
+}
+
+function addNodeCommand(
+  graph: FlowGraph,
+  command: Extract<FlowCommand, { type: 'addNode' }>,
+  snapshot: ServiceFlowSnapshot,
+  ok: Ok,
+  fail: Fail,
+): CommandResult {
+  const type: AddableNodeType = command.nodeType
+  const refId = command.refId ?? null
+  const position = command.position ?? null
+  const autoWire = command.autoWire !== false
+  const w = begin(graph)
+  const place = (id: string) => {
+    if (position && Number.isFinite(position.x) && Number.isFinite(position.y)) {
+      const node = w.nodes.get(id) as FlowNode
+      node.x = position.x
+      node.y = position.y
+    }
+  }
+
+  if (command.spliceEdgeId) return spliceCommand(graph, command.spliceEdgeId, type, snapshot, ok, fail, position)
+
+  switch (type) {
+    case 'project': {
+      if (!refId || !snapshot.catalog.projects.some((p) => p.id === refId)) return fail('알 수 없는 프로젝트입니다.')
+      const id = projectNodeId(refId)
+      const hasStart = w.nodes.has('start')
+      if (w.nodes.has(id)) {
+        if (autoWire && hasStart && !w.edges.has(entryEdgeId(id))) {
+          link(w, 'entry', 'start', 'out', id, 'in', false)
+          return ok(toGraph(w), true, selectNode(id))
+        }
+        return ok(graph, false, selectNode(id))
+      }
+      w.nodes.set(id, makeNode('project', id, refId))
+      if (autoWire && hasStart) link(w, 'entry', 'start', 'out', id, 'in', false)
+      placeW(w, id, snapshot)
+      place(id)
+      return ok(toGraph(w), true, selectNode(id))
+    }
+
+    case 'llm': {
+      if (!refId || !deploymentOf(snapshot, refId)) return fail('알 수 없는 모델입니다.')
+      const id = llmNodeId(refId)
+      if (w.nodes.has(id)) return ok(graph, false, selectNode(id))
+      addLlm(w, makeNode('llm', id, refId, defaultNodeProps('llm', graph, snapshot, refId), null), snapshot, autoWire)
+      place(id)
+      return ok(toGraph(w), true, selectNode(id))
+    }
+
+    case 'masker': {
+      if (w.nodes.has(SINGLETON_IDS.masker)) return fail('마스킹 워커는 하나만 둘 수 있습니다.')
+      if (!w.nodes.has(SINGLETON_IDS.guardrail)) return fail('마스킹 워커는 가드레일에 연결됩니다. 가드레일을 먼저 추가하세요.')
+      w.nodes.set('masker', makeNode('masker', 'masker', null, defaultNodeProps('masker', graph, snapshot, refId)))
+      link(w, 'masker', 'masker', 'masker', SINGLETON_IDS.guardrail, 'masker', false)
+      placeW(w, 'masker', snapshot)
+      place('masker')
+      return ok(toGraph(w), true, selectNode('masker'))
+    }
+
+    case 'router': {
+      if (w.nodes.has(SINGLETON_IDS.router)) return fail(singletonLabelMessage('router'))
+      const node = newRouterNode(graph, snapshot)
+      if (autoWire) insertRouterAuto(w, node, snapshot)
+      else { w.nodes.set(node.id, node); placeW(w, node.id, snapshot) }
+      place(node.id)
+      return ok(toGraph(w), true, selectNode(node.id))
+    }
+
+    case 'guardrail':
+    case 'prompt':
+    case 'params':
+    case 'cache': {
+      const id = SINGLETON_IDS[type]
+      if (w.nodes.has(id)) return fail(type === 'prompt' ? MSG_PROMPT_COMMON_EXISTS : singletonLabelMessage(type as 'guardrail' | 'cache' | 'params' | 'router'))
+      const node = makeNode(type, id, null, defaultNodeProps(type, graph, snapshot, null))
+      if (autoWire) insertTrunk(w, node, snapshot)
+      else { w.nodes.set(id, node); placeW(w, id, snapshot) }
+      place(id)
+      return ok(toGraph(w), true, selectNode(id))
+    }
+  }
+  return fail(MSG_CANNOT_SPLICE)
+}
+
+function spliceCommand(
+  graph: FlowGraph,
+  edgeIdValue: string,
+  type: AddableNodeType,
+  snapshot: ServiceFlowSnapshot,
+  ok: Ok,
+  fail: Fail,
+  position: Point | null,
+): CommandResult {
+  const edge = graph.edges.find((e) => e.id === edgeIdValue)
+  if (!edge) return fail('대상 간선을 찾을 수 없습니다.')
+  const to = findNode(graph, edge.to.nodeId) as FlowNode
+  const trunkTypes: AddableNodeType[] = ['guardrail', 'prompt', 'cache', 'params', 'router']
+  if (!trunkTypes.includes(type)) return fail(MSG_CANNOT_SPLICE)
+  const scope = promptScopeForSplice(graph, edge.id)
+  const modelPrompt = type === 'prompt' && scope === 'model'
+  if (!insertableTypesForEdge(graph, edge.id, snapshot).includes(type)) {
+    if (modelPrompt) {
+      if (snapshot.features?.targetPrompt === false) return fail(MSG_TARGET_PROMPT_UNSUPPORTED)
+      return fail(MSG_CANNOT_SPLICE)
+    }
+    const id = SINGLETON_IDS[type as 'guardrail' | 'prompt' | 'cache' | 'params' | 'router']
+    if (findNode(graph, id)) return fail(type === 'prompt' ? MSG_PROMPT_COMMON_EXISTS : singletonLabelMessage(type as 'guardrail' | 'cache' | 'params' | 'router'))
+    return fail(MSG_CANNOT_SPLICE)
+  }
+
+  const w = begin(graph)
+  let nodeId: string
+  if (modelPrompt) {
+    const llmId = to.id
+    nodeId = branchPromptNodeId(deploymentIdOf(to))
+    const prompt = makeNode('prompt', nodeId, null, defaultNodeProps('prompt', graph, snapshot, null))
+    insertBranchPrompt(w, prompt, llmId, snapshot)
+  } else {
+    nodeId = SINGLETON_IDS[type as 'guardrail' | 'prompt' | 'cache' | 'params' | 'router']
+    const node = type === 'router' ? newRouterNode(graph, snapshot) : makeNode(type as NodeType, nodeId, null, defaultNodeProps(type, graph, snapshot, null))
+    w.nodes.set(nodeId, node)
+    if (edge.kind === 'flow') {
+      unlink(w, edge.id)
+      linkFlow(w, edge.from.nodeId, nodeId)
+      linkFlow(w, nodeId, to.id)
+      copyPositions(w, placeSpliced(toGraph(w), nodeId, edge.from.nodeId, to.id))
+    } else {
+      // access edge: the new node becomes the head of the request path.
+      linkFlow(w, nodeId, to.id)
+      copyPositions(w, placeSpliced(toGraph(w), nodeId, null, to.id))
+    }
+  }
+  if (position && Number.isFinite(position.x) && Number.isFinite(position.y)) {
+    const node = w.nodes.get(nodeId) as FlowNode
+    node.x = position.x
+    node.y = position.y
+  }
+  return ok(toGraph(w), true, selectNode(nodeId))
+}
+
+function applyTemplateCommand(
+  graph: FlowGraph,
+  command: Extract<FlowCommand, { type: 'applyTemplate' }>,
+  snapshot: ServiceFlowSnapshot,
+  ok: Ok,
+  fail: Fail,
+): CommandResult {
+  if (!isEmptyWorkflow(graph)) return fail('빈 워크플로우에서만 템플릿을 적용할 수 있습니다.')
+  const unique = (ids: string[]) => [...new Set(ids)]
+  const deploymentIds = unique(command.deploymentIds)
+  const projectIds = unique(command.projectIds)
+  const isExternal = (id: string) => externalDeployment(snapshot, id)
+  const known = (id: string) => !!deploymentOf(snapshot, id)
+  let order: string[] = deploymentIds
+  let preset: (typeof GUARDRAIL_PRESETS)[number] | null = null
+
+  if (command.template === 'basic') {
+    if (deploymentIds.length === 0) return fail('LLM을 하나 이상 고르세요.')
+  } else if (command.template === 'local-first') {
+    const unknown = deploymentIds.find((id) => !known(id))
+    if (unknown) return fail('알 수 없는 모델입니다.')
+    const locals = deploymentIds.filter((id) => !isExternal(id))
+    const externals = deploymentIds.filter((id) => isExternal(id))
+    if (locals.length === 0 || externals.length === 0) return fail('로컬 LLM과 외부 LLM을 하나 이상씩 고르세요.')
+    order = [...locals, ...externals]
+    preset = GUARDRAIL_PRESETS.find((p) => p.id === 'mask-restore') ?? null
+  } else {
+    if (deploymentIds.some((id) => known(id) && isExternal(id))) return fail('사내 전용 템플릿에는 로컬 LLM만 쓸 수 있습니다.')
+    if (deploymentIds.length === 0) return fail('로컬 LLM을 하나 이상 고르세요.')
+    preset = GUARDRAIL_PRESETS.find((p) => p.id === 'internal-only') ?? null
+  }
+
+  let g = graph
+  const run = (cmd: FlowCommand): string | null => {
+    const result = applyCommand(g, cmd, snapshot)
+    if (result.error) return result.error
+    g = result.graph
+    return null
+  }
+  for (const projectId of projectIds) {
+    const error = run({ type: 'addNode', nodeType: 'project', refId: projectId })
+    if (error) return fail(error)
+  }
+  if (preset) {
+    let error = run({ type: 'addNode', nodeType: 'guardrail' })
+    if (!error) error = run({ type: 'updateProps', nodeId: 'guardrail', patch: { dataBoundaryPolicy: preset.dataBoundaryPolicy, guardrailAction: preset.guardrailAction } })
+    if (error) return fail(error)
+  }
+  for (const deploymentId of order) {
+    const error = run({ type: 'addNode', nodeType: 'llm', refId: deploymentId })
+    if (error) return fail(error)
+  }
+  return ok(autoLayout(g, snapshot), true, selectNode('start'))
+}

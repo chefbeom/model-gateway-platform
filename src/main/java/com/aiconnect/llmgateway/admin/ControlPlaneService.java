@@ -181,9 +181,14 @@ public class ControlPlaneService {
         if (!service.getOrganizationId().equals(targetOrganizationId)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ORGANIZATION_MISMATCH", "A service target must belong to the service organization.");
         }
-        return targets.save(new ServiceTarget(serviceId, deployment.getId(), request.priority(),
+        ServiceTarget created = new ServiceTarget(serviceId, deployment.getId(), request.priority(),
                 request.weight() == null ? 100 : request.weight(), request.degraded(), request.maxConcurrencyOverride(),
-                !deployment.isExternal() && (request.followModelChanges() == null || request.followModelChanges())));
+                !deployment.isExternal() && (request.followModelChanges() == null || request.followModelChanges()));
+        if (created.configureSystemPromptTemplate(request.systemPromptTemplate(), false)) {
+            service.bumpPromptVersion();
+            services.save(service);
+        }
+        return targets.save(created);
     }
 
     @Transactional

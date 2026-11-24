@@ -6,6 +6,7 @@ import FlowCanvas from './FlowCanvas.vue'
 import FlowInspector from './FlowInspector.vue'
 import FlowPalette from './FlowPalette.vue'
 import FlowPlanModal from './FlowPlanModal.vue'
+import FlowQuickStart from './FlowQuickStart.vue'
 import FlowToolbar from './FlowToolbar.vue'
 import { NEW_SERVICE_KEY, useFlowEditor, type CanvasHandle } from './useFlowEditor'
 
@@ -17,7 +18,7 @@ const editor = useFlowEditor(props, canvasRef, stageRef)
 const {
   loadState, loadError, message, base, graph, viewport, selection, serviceOptions, selectedKey, restoredAt, hasNewDraft,
   layoutAvailable, layoutDirty, planOpen, planPhase, plan, planResults, planBusy,
-  narrow, compact, paletteOpen, inspectorOpen,
+  narrow, compact, paletteOpen, inspectorOpen, mode, canNormalize, showQuickStart,
   issues, nodeChanges, changeCount, errorCount, warningCount, busy, readOnly, canUndo, canRedo, serviceLabel
 } = editor
 
@@ -30,22 +31,22 @@ function onServiceChange(event: Event) {
   <section class="page-stack fd-page">
     <div class="page-hero">
       <div>
-        <p class="eyebrow">SERVICE FLOW</p>
-        <h1>서비스 플로우 디자이너 <span class="status-chip standby fd-badge">EXPERIMENTAL</span></h1>
-        <p>기존 화면과 같은 API를 사용합니다. 변경은 '변경 검토 → 적용' 후에만 저장됩니다.</p>
+        <p class="eyebrow">WORKFLOW</p>
+        <h1>워크플로우 디자이너 <span class="status-chip standby fd-badge">EXPERIMENTAL</span></h1>
+        <p>노드를 놓고 간선으로 이어 서비스 워크플로우를 만듭니다. 변경은 '변경 검토 → 적용' 후에만 저장됩니다.</p>
       </div>
       <div v-if="organizationId" class="hero-actions fd-service-picker">
-        <label for="fd-service-select">서비스</label>
+        <label for="fd-service-select">워크플로우</label>
         <select id="fd-service-select" :value="selectedKey" :disabled="busy || planOpen" @change="onServiceChange">
           <option v-for="service in serviceOptions" :key="service.id" :value="service.id">{{ service.displayName || service.serviceKey }} ({{ service.serviceKey }})</option>
-          <option :value="NEW_SERVICE_KEY">＋ 새 서비스 초안{{ hasNewDraft ? ' · 초안 있음' : '' }}</option>
+          <option :value="NEW_SERVICE_KEY">＋ 새 워크플로우 초안{{ hasNewDraft ? ' · 초안 있음' : '' }}</option>
         </select>
       </div>
     </div>
 
     <div v-if="!organizationId" class="workspace-required">
       <span>WORKSPACE REQUIRED</span>
-      <div><strong>워크스페이스를 먼저 선택하세요</strong><p>조직을 선택하면 서비스 파이프라인을 캔버스로 구성할 수 있습니다.</p></div>
+      <div><strong>워크스페이스를 먼저 선택하세요</strong><p>조직을 선택하면 서비스 워크플로우를 구성할 수 있습니다.</p></div>
     </div>
 
     <template v-else>
@@ -55,10 +56,10 @@ function onServiceChange(event: Event) {
 
       <div v-if="loadState === 'error'" class="fd-error" role="alert">
         <strong>{{ loadError }}</strong>
-        <p>서비스 구성을 불러오지 못했습니다. 다른 서비스를 선택하거나 다시 시도하세요.</p>
+        <p>워크플로우를 불러오지 못했습니다. 다른 워크플로우를 선택하거나 다시 시도하세요.</p>
         <button class="secondary-button" type="button" @click="editor.retry()">다시 시도</button>
       </div>
-      <p v-else-if="loadState === 'loading' && !graph" class="inline-alert" role="status">서비스 구성을 불러오고 있습니다…</p>
+      <p v-else-if="loadState === 'loading' && !graph" class="inline-alert" role="status">워크플로우를 불러오고 있습니다…</p>
 
       <template v-if="base && graph">
         <FlowToolbar
@@ -66,28 +67,35 @@ function onServiceChange(event: Event) {
           :error-count="errorCount" :warning-count="warningCount"
           :layout-dirty="layoutDirty" :layout-available="layoutAvailable"
           :busy="busy" :read-only="readOnly" :compact="compact" :zoom="viewport.zoom"
+          :mode="mode" :can-normalize="canNormalize"
           @action="editor.onToolbarAction"
         />
         <div ref="stageRef" class="fd-stage" :class="{ 'fd-compact': compact }" aria-busy="false">
           <FlowPalette
             v-if="!compact || paletteOpen"
             class="fd-aside fd-aside-left"
-            :snapshot="base" :graph="graph" :read-only="readOnly"
+            :snapshot="base" :graph="graph" :read-only="readOnly" :mode="mode"
             @command="editor.handleCommand" @select-node="editor.focusNode"
           />
           <FlowCanvas
             ref="canvasRef"
             class="fd-canvas"
             :graph="graph" :snapshot="base" :viewport="viewport" :selection="selection"
-            :issues="issues" :node-changes="nodeChanges" :read-only="readOnly"
+            :issues="issues" :node-changes="nodeChanges" :read-only="readOnly" :mode="mode"
             @open-inspector="editor.openInspector" @update:viewport="editor.updateViewport" @update:selection="editor.updateSelection"
             @command="editor.handleCommand" @action="(action: 'undo' | 'redo') => (action === 'undo' ? editor.undo() : editor.redo())"
           />
           <FlowInspector
             v-if="!compact || inspectorOpen"
             class="fd-aside fd-aside-right"
-            :graph="graph" :snapshot="base" :selection="selection" :issues="issues" :read-only="readOnly"
+            :graph="graph" :snapshot="base" :selection="selection" :issues="issues" :read-only="readOnly" :mode="mode"
             @command="editor.handleCommand" @update:selection="editor.updateSelection" @focus-node="editor.focusNode"
+          />
+          <FlowQuickStart
+            v-if="showQuickStart"
+            class="fd-quickstart"
+            :snapshot="base" :graph="graph" :read-only="readOnly"
+            @command="editor.handleCommand" @dismiss="editor.dismissQuickStart"
           />
         </div>
         <footer class="fd-statusbar" aria-label="상태바">
@@ -96,6 +104,7 @@ function onServiceChange(event: Event) {
           <span :class="{ 'fd-warn': warningCount > 0 }">경고 {{ warningCount }}</span>
           <span>불러온 시각 {{ formatDateTime(base.loadedAt) }}</span>
           <span>확대 {{ Math.round(viewport.zoom * 100) }}%</span>
+          <span>모드 {{ mode === 'advanced' ? '고급' : '기본' }}</span>
           <span v-if="layoutDirty" class="fd-warn">배치 미저장</span>
         </footer>
       </template>
@@ -124,6 +133,7 @@ function onServiceChange(event: Event) {
 .fd-stage { position: relative; flex: 1 1 520px; min-height: 420px; display: grid; grid-template-columns: clamp(232px, 14vw, 310px) minmax(480px, 1fr) clamp(280px, 17vw, 380px); height: clamp(480px, calc(100dvh / var(--console-zoom, 1) - 240px), 1600px); border: 1px solid var(--border); border-radius: 14px; background: var(--surface); overflow: hidden; }
 .fd-stage.fd-compact { grid-template-columns: minmax(0, 1fr); }
 .fd-canvas { min-width: 0; min-height: 0; }
+.fd-quickstart { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 4; max-width: min(560px, 92%); max-height: calc(100% - 24px); overflow: auto; }
 .fd-aside { min-height: 0; overflow: auto; background: var(--surface); }
 .fd-aside-left { border-right: 1px solid var(--border); }
 .fd-aside-right { border-left: 1px solid var(--border); }

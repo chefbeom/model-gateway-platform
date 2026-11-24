@@ -1,7 +1,7 @@
 // Network layer of the flow designer. The only flow-designer module that imports ../api.
 import { adminFetch, type AdminAuth } from '../api'
 import { LIMITS } from './catalog'
-import { sanitizeLayout } from './layout'
+import { LAYOUT_NODE_ID_PATTERN_V1, sanitizeLayout } from './layout'
 import { buildSnapshot, FlowLoadError, type RawFlowData } from './flowSnapshot'
 import type { FlowLayout, FlowTransport, HttpMethod, ServiceFlowSnapshot } from './types'
 
@@ -72,14 +72,16 @@ export async function loadFlowSnapshot(organizationId: string, serviceId: string
 
   // 2-6) Independent first-level reads (organization scoped paths only).
   const sid = serviceId === null ? null : enc(serviceId)
-  const [targets, scheduling, dataProtection, endpoints, providers, projects, maskers] = await runLimited<unknown>([
+  const [targets, scheduling, dataProtection, endpoints, providers, projects, maskers, orgDataProtection] = await runLimited<unknown>([
     () => (sid ? read<unknown[]>(`/api/admin/services/${sid}/targets`) : Promise.resolve([])),
     () => (sid ? read<unknown>(`/api/admin/services/${sid}/scheduling`) : Promise.resolve(null)),
     () => (sid ? read<unknown>(`/api/admin/services/${sid}/data-protection`) : Promise.resolve(null)),
     () => read<unknown[]>(`/api/admin/organizations/${org}/runtime-endpoints`),
     () => read<unknown[]>(`/api/admin/organizations/${org}/external-providers`),
     () => read<unknown[]>(`/api/admin/organizations/${org}/projects`),
-    () => read<unknown[]>(`/api/admin/organizations/${org}/masker-deployments`)
+    () => read<unknown[]>(`/api/admin/organizations/${org}/masker-deployments`),
+    // Project-scope DLP policies and the organization's effective policy. Non-fatal: failure means "unverified".
+    () => read<unknown>(`/api/admin/organizations/${org}/data-protection`)
   ])
 
   const endpointRows = rowsOf(endpoints)
@@ -120,6 +122,8 @@ export async function loadFlowSnapshot(organizationId: string, serviceId: string
     targets: serviceId === null ? [] : (targets as unknown[] | null),
     scheduling: serviceId === null ? null : scheduling,
     dataProtection,
+    orgDataProtection,
+    projectsHidden: currentUserId() === 'platform-token',
     endpoints: endpointRows,
     endpointDeployments,
     providers: providerRows,
@@ -143,15 +147,22 @@ export async function loadFlowLayout(serviceId: string, auth: AdminAuth): Promis
 }
 
 export async function saveFlowLayout(serviceId: string, layout: FlowLayout, auth: AdminAuth): Promise<{ revision: number }> {
-  // Unsaved new targets have no stable server identity yet and are never persisted.
-  const nodes = Object.fromEntries(Object.entries(layout.nodes).filter(([id]) => !id.startsWith('target:new-')))
-  const body: FlowLayout = { version: 1, viewport: layout.viewport, nodes }
-  const response = await adminFetch<{ revision?: unknown } | undefined>(`/api/admin/services/${enc(serviceId)}/flow-layout`, auth, {
-    method: 'PUT',
-    body: JSON.stringify(body)
-  })
-  const revision = response && typeof response.revision === 'number' ? response.revision : 0
-  return { revision }
+  const path = `/api/admin/services/${enc(serviceId)}/flow-layout`
+  async function put(nodes: FlowLayout['nodes']): Promise<{ revision: number }> {
+    const body: FlowLayout = { version: 1, viewport: layout.viewport, nodes }
+    const response = await adminFetch<{ revision?: unknown } | undefined>(path, auth, { method: 'PUT', body: JSON.stringify(body) })
+    return { revision: response && typeof response.revision === 'number' ? response.revision : 0 }
+  }
+  try {
+    return await put(layout.nodes)
+  } catch (error) {
+    // A backend without the v2 key pattern rejects start/params/policy/prompt keys with 400 FLOW_LAYOUT_INVALID:
+    // retry once with only the v1-compatible keys (§7.8).
+    const failure = error as { status?: number; code?: string }
+    if (failure.status !== 400 || failure.code !== 'FLOW_LAYOUT_INVALID') throw error
+    const legacyNodes = Object.fromEntries(Object.entries(layout.nodes).filter(([id]) => LAYOUT_NODE_ID_PATTERN_V1.test(id)))
+    return put(legacyNodes)
+  }
 }
 
 /** Read-only look at the session identity used to key in-memory drafts. */

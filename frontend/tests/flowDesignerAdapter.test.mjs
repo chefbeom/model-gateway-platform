@@ -478,3 +478,132 @@ test('FlowDesignerPage and style.css provide QHD full-width and zoom-compensated
   assert.match(toolbar, /fire\('zoom-reset'\)/)
   assert.match(toolbar, /fire\('zoom-in'\)/)
 })
+
+/* ---------------- 8. Workflow Designer v2 adapter (WP-C) ---------------- */
+
+const orgDlp = (extra = {}) => ({
+  effective: { mode: 'ENFORCE', externalAction: 'REDACT', customPatternsJson: '[{"secret":"x"}]', detectSecrets: true },
+  policies: [
+    { scopeType: 'PROJECT', scopeId: 'p1', mode: 'ENFORCE', externalAction: 'LOCAL_ONLY', customPatternsJson: '[{"regex":"leak"}]', detectSecrets: true },
+    { scopeType: 'ORGANIZATION', scopeId: 'org1', mode: 'ENFORCE', externalAction: 'BLOCK' },
+    { scopeType: 'PROJECT', scopeId: 'other', mode: 'ENFORCE', externalAction: 'BLOCK' }
+  ],
+  ...extra
+})
+
+test('buildSnapshot maps the Target systemPromptTemplate and detects backend support (section 8.6)', () => {
+  const withKey = buildSnapshot(raw({ targets: [
+    { id: 't1', deploymentId: 'dep-local', priority: 1, weight: 1, systemPromptTemplate: '  Be brief  ' },
+    { id: 't2', deploymentId: 'dep-ext', priority: 2, weight: 1, systemPromptTemplate: null }
+  ] }))
+  assert.equal(withKey.config.targets.find(t => t.id === 't1').systemPromptTemplate, 'Be brief')
+  assert.equal(withKey.config.targets.find(t => t.id === 't2').systemPromptTemplate, null)
+  assert.equal(withKey.features.targetPrompt, true)
+  const legacy = buildSnapshot(raw())
+  assert.equal(legacy.config.targets[0].systemPromptTemplate, null)
+  assert.equal(legacy.features.targetPrompt, false, 'rows without the key => older backend')
+  assert.equal(buildSnapshot(raw({ targets: [] })).features.targetPrompt, true)
+  assert.equal(buildSnapshot(raw({ serviceId: null, targets: [], scheduling: null, dataProtection: null, projectAccess: {} })).features.targetPrompt, true)
+})
+
+test('buildSnapshot reads project policies from the organization data-protection response only', () => {
+  const snapshot = buildSnapshot(raw({
+    orgDataProtection: orgDlp(),
+    projects: [
+      { id: 'p1', name: 'Alpha', status: 'ACTIVE', dataBoundaryPolicy: 'INTERNAL_ONLY', maxDataBoundaryPolicy: 'APPROVED_EXTERNAL_NO_RETENTION', externalAiBlocked: true },
+      { id: 'p2', name: 'Beta', status: 'ACTIVE', maxDataBoundaryPolicy: 'bogus' }
+    ]
+  }))
+  const [p1, p2] = snapshot.catalog.projects
+  assert.equal(p1.externalAiBlocked, true)
+  assert.equal(p1.maxDataBoundaryPolicy, 'APPROVED_EXTERNAL_NO_RETENTION')
+  assert.deepEqual(p1.dlp, { mode: 'ENFORCE', externalAction: 'LOCAL_ONLY' })
+  assert.equal(p2.externalAiBlocked, false)
+  assert.equal(p2.maxDataBoundaryPolicy, null)
+  assert.equal(p2.dlp, null, 'only the project own PROJECT-scope row counts')
+  assert.deepEqual(snapshot.orgDataProtection, { mode: 'ENFORCE', externalAction: 'REDACT' })
+  assert.equal(snapshot.projectPoliciesComplete, true)
+  const text = JSON.stringify(snapshot)
+  assert.doesNotMatch(text, /customPatternsJson|leak|"secret"/, 'organization policy details are never copied')
+  assert.equal(snapshot.dataProtection.detectSecrets, true, 'service-level detail comes only from the service endpoint')
+})
+
+test('buildSnapshot marks policies unverified when the organization read failed and hides projects for break-glass sessions', () => {
+  const failed = buildSnapshot(raw({ orgDataProtection: null }))
+  assert.equal(failed.projectPoliciesComplete, false)
+  assert.equal(failed.orgDataProtection, null)
+  assert.equal(failed.catalog.projects[0].dlp, null)
+  const hidden = buildSnapshot(raw({ projectsHidden: true, projects: [], projectAccess: {} }))
+  assert.equal(hidden.projectsHidden, true)
+  assert.equal(hidden.accessComplete, false)
+  assert.equal(buildSnapshot(raw()).projectsHidden, false)
+  assert.equal(buildSnapshot(raw()).accessComplete, true)
+})
+
+test('temperatureValue is normalized to null unless the policy is FIXED', () => {
+  const data = raw()
+  data.services[0] = { ...data.services[0], temperaturePolicy: 'REQUEST', temperatureValue: 0.7 }
+  assert.equal(buildSnapshot(data).config.service.temperatureValue, null)
+  data.services[0] = { ...data.services[0], temperaturePolicy: 'FIXED', temperatureValue: 0.7 }
+  assert.equal(buildSnapshot(data).config.service.temperatureValue, 0.7)
+})
+
+test('operationRequest passes the Target system prompt on create and clear on patch', () => {
+  const ctx = { serviceId: 'svc1', createdTargetIds: {} }
+  const common = { risk: 'safe', summary: '', changes: [] }
+  const existing = { kind: 'existing', id: 'svc1' }
+  assert.deepEqual(operationRequest({ ...common, opId: 'create-target:target:new-d', kind: 'createTarget', service: existing, key: 'target:new-d',
+    body: { deploymentId: 'd', priority: 1, weight: 1, degraded: false, followModelChanges: true, systemPromptTemplate: 'Be brief' } }, ctx),
+    { method: 'POST', path: '/api/admin/services/svc1/targets', body: { deploymentId: 'd', priority: 1, weight: 1, degraded: false, followModelChanges: true, systemPromptTemplate: 'Be brief' } })
+  assert.deepEqual(operationRequest({ ...common, opId: 'patch-target:t1', kind: 'patchTarget', service: existing, target: { kind: 'existing', id: 't1' }, body: { clearSystemPromptTemplate: true } }, ctx),
+    { method: 'PATCH', path: '/api/admin/services/svc1/targets/t1', body: { clearSystemPromptTemplate: true } })
+})
+
+test('a model-specific prompt round-trips through compile, plan and request', () => {
+  const base = buildSnapshot(raw({ targets: [{ id: 'tB', deploymentId: 'dep-local', priority: 2, weight: 10, systemPromptTemplate: 'Local only' }] }))
+  const graph = decompile(base, null)
+  assert.ok(graph.nodes.some(node => node.id === 'prompt:dep-local'))
+  assert.equal(compile(graph, base).targets[0].systemPromptTemplate, 'Local only')
+  const edited = applyCommand(graph, { type: 'updateProps', nodeId: 'prompt:dep-local', patch: { systemPromptTemplate: 'Changed' } }, base).graph
+  const plan = planChanges({ base, desired: compile(edited, base), remote: base, issues: validateGraph(edited, base) })
+  assert.deepEqual(plan.operations.map(op => op.opId), ['patch-target:tB'])
+  assert.deepEqual(plan.operations[0].body, { systemPromptTemplate: 'Changed' })
+})
+
+test('ConsoleShell nav item uses the workflow terminology and keeps the old search words', () => {
+  const line = shell.split('\n').find(row => row.includes("id: 'flow-designer'"))
+  assert.ok(line)
+  assert.match(line, /label: '워크플로우 디자이너'/)
+  assert.match(line, /description: '[^']*워크플로우[^']*'/)
+  assert.match(line, /keywords: '[^']*\bworkflow\b[^']*'/)
+  assert.match(line, /keywords: '[^']*플로우[^']*'/)
+  assert.match(line, /keywords: '[^']*flow designer[^']*'/, 'old search words stay')
+})
+
+test('page terminology: workflow designer, no service-flow wording, plan modal uses workflow wording', () => {
+  const page = readFileSync(new URL('../src/flow-designer/FlowDesignerPage.vue', import.meta.url), 'utf8')
+  assert.match(page, /워크플로우 디자이너/)
+  assert.doesNotMatch(page, /서비스 플로우 디자이너/)
+  assert.match(page, /새 워크플로우 초안/)
+  const modal = readFileSync(new URL('../src/flow-designer/FlowPlanModal.vue', import.meta.url), 'utf8')
+  assert.match(modal, /워크플로우에 그대로/)
+  assert.match(modal, /외부 노출 방지 정책 완화/)
+})
+
+test('page and editor wire mode, quick start, normalize-order and the v2 compatibility paths', () => {
+  const page = readFileSync(new URL('../src/flow-designer/FlowDesignerPage.vue', import.meta.url), 'utf8')
+  assert.match(page, /<FlowQuickStart[\s\S]*?v-if="showQuickStart"/)
+  assert.match(page, /:can-normalize="canNormalize"/)
+  assert.equal((page.match(/:mode="mode"/g) ?? []).length >= 3, true, 'palette, canvas and inspector receive the mode')
+  assert.match(page, /:mode="mode" :can-normalize="canNormalize"/)
+  const editor = readFileSync(new URL('../src/flow-designer/useFlowEditor.ts', import.meta.url), 'utf8')
+  assert.match(editor, /let lastMode: DesignerMode = 'basic'/)
+  assert.match(editor, /case 'normalize-order': handleCommand\(\{ type: 'normalizeOrder' \}\)/)
+  assert.match(editor, /layoutGeneration\(layoutResult\.layout\) === 1/)
+  assert.match(editor, /schemaVersion\?: number \}\)\.schemaVersion !== 2/)
+  assert.match(editor, /case 'zoom-in': canvas\.value\?\.zoomCenter/)
+  const api = readFileSync(new URL('../src/flow-designer/flowApi.ts', import.meta.url), 'utf8')
+  assert.match(api, /organizations\/\$\{org\}\/data-protection/)
+  assert.match(api, /FLOW_LAYOUT_INVALID/)
+  assert.match(api, /LAYOUT_NODE_ID_PATTERN_V1/)
+})

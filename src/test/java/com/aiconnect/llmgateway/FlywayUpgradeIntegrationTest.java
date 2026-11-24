@@ -65,6 +65,7 @@ class FlywayUpgradeIntegrationTest {
             assertFalse(booleanValue(connection, "SELECT mfa_verified FROM auth_refresh_token WHERE id=?", existingRefreshTokenId));
             assertEquals(1,count(connection,"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='service_request_scheduling'"));
             assertEquals(1,count(connection,"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='service_flow_layout'"));
+            assertEquals(1,count(connection,"SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='service_target' AND column_name='system_prompt_template'"));
             assertEquals(1,count(connection,"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='request_scheduling_trace'"));
             assertEquals(1,count(connection,"SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='runtime_endpoint' AND column_name='max_concurrent_requests' AND is_nullable='NO'"));
             assertEquals(1, count(connection, "SELECT COUNT(*) FROM information_schema.tables "

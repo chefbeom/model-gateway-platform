@@ -122,6 +122,21 @@ class ServiceFlowLayoutIntegrationTest {
     }
 
     @Test
+    void acceptsV2NodeKeysAndRejectsMalformedOnes() throws Exception {
+        Organization org = organizations.save(new Organization("Flow Org V2"));
+        UUID id = newService(org, "flow-v2").getId();
+        String uuid = UUID.randomUUID().toString();
+        Map<String, Object> nodes = new LinkedHashMap<>();
+        for (String key : new String[]{"start", "params", "policy:" + uuid, "prompt:" + uuid, "deployment:" + uuid}) {
+            nodes.put(key, Map.of("x", 1, "y", 2));
+        }
+        mvc.perform(put(url(id)).header("X-Admin-Token", ADMIN).contentType(MediaType.APPLICATION_JSON).content(body(nodes)))
+                .andExpect(status().isOk());
+        putExpectInvalid(id, body(Map.of("prompt:../x", Map.of("x", 1, "y", 1))), "FLOW_LAYOUT_INVALID");
+        putExpectInvalid(id, body(Map.of("policy:", Map.of("x", 1, "y", 1))), "FLOW_LAYOUT_INVALID");
+    }
+
+    @Test
     void dropsUnknownFields() throws Exception {
         Organization org = organizations.save(new Organization("Flow Org 3"));
         UUID id = newService(org, "flow-3").getId();
