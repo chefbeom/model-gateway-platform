@@ -65,9 +65,11 @@ export function installDraftAutoClear(target: EventTargetLike): () => void {
     }
   }
   target.addEventListener('aiconnect:session-expired', onExpired)
+  target.addEventListener('aiconnect:clear-drafts', onExpired)
   target.addEventListener('aiconnect:session', onSession)
   return () => {
     target.removeEventListener('aiconnect:session-expired', onExpired)
+    target.removeEventListener('aiconnect:clear-drafts', onExpired)
     target.removeEventListener('aiconnect:session', onSession)
   }
 }

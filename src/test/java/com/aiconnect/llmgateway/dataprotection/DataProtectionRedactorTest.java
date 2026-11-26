@@ -172,7 +172,7 @@ class DataProtectionRedactorTest {
         when(endpoints.findById(localEndpointId)).thenReturn(Optional.of(localEndpoint));
         RuntimeTrustAttestation internalAtt = mock(RuntimeTrustAttestation.class);
         when(internalAtt.getClassification()).thenReturn(RuntimeTrustAttestation.Classification.INTERNAL);
-        when(internalAtt.validFor("http://127.0.0.1:11434/v1", Instant.now())).thenReturn(true);
+        when(internalAtt.validFor(org.mockito.ArgumentMatchers.eq("http://127.0.0.1:11434/v1"), org.mockito.ArgumentMatchers.any())).thenReturn(true);
         when(trustAttestations.findById(localEndpointId)).thenReturn(Optional.of(internalAtt));
 
         ModelDeployment localDep = mock(ModelDeployment.class);
@@ -249,5 +249,144 @@ class DataProtectionRedactorTest {
         String k3 = cache.cacheKey(service.getOrganizationId(), service, DataProtectionAction.REDACT, request);
         assertThat(k2).isNotEqualTo(k1);
         assertThat(k3).isNotEqualTo(k1);
+    }
+
+    @Test
+    void redactsPiiInsideNonBinaryMediaFieldsWhilePreservingStrictBase64Payloads() throws Exception {
+        DataProtectionRedactor redactor = new DataProtectionRedactor(objectMapper);
+        ObjectNode request = (ObjectNode) objectMapper.readTree(
+                "{\"messages\":[{\"role\":\"user\",\"content\":\"hi\",\"attachment\":\"홍길동 010-1234-5678\",\"image_url\":{\"url\":\"data:image/png;base64,AAAA\"}}],\"data\":\"secret sk-proj-abcdefghijklmnopqrstuvwx\"}");
+
+        DataProtectionRedactor.RedactionVault vault = redactor.redactRequest(request, balancedPolicy, null, false);
+
+        assertThat(request.path("messages").get(0).path("attachment").asText()).doesNotContain("홍길동", "010-1234-5678");
+        assertThat(request.path("data").asText()).doesNotContain("sk-proj-abcdefghijklmnopqrstuvwx");
+        assertThat(request.path("messages").get(0).path("image_url").path("url").asText()).isEqualTo("data:image/png;base64,AAAA");
+        assertThat(vault.entries()).isNotEmpty();
+    }
+
+    @Test
+    void maskerLlmProtectsRoleFieldPreventSurrogateOverwriteAndRespectsExternalFlag() throws Exception {
+        ModelDeploymentRepository deployments = mock(ModelDeploymentRepository.class);
+        RuntimeEndpointRepository endpoints = mock(RuntimeEndpointRepository.class);
+        ExternalProviderRepository providers = mock(ExternalProviderRepository.class);
+        InferenceNodeRepository nodes = mock(InferenceNodeRepository.class);
+        RuntimeTrustAttestationRepository trustAttestations = mock(RuntimeTrustAttestationRepository.class);
+        InferenceRuntimeClient runtimeClient = mock(InferenceRuntimeClient.class);
+        OpenAiRuntimeClient openAiClient = mock(OpenAiRuntimeClient.class);
+
+        UUID orgId = UUID.randomUUID();
+        UUID nodeId = UUID.randomUUID();
+        UUID endpointId = UUID.randomUUID();
+        UUID depId = UUID.randomUUID();
+
+        InferenceNode node = mock(InferenceNode.class);
+        when(node.getOrganizationId()).thenReturn(orgId);
+        when(nodes.findById(nodeId)).thenReturn(Optional.of(node));
+        RuntimeEndpoint ep = mock(RuntimeEndpoint.class);
+        when(ep.getId()).thenReturn(endpointId);
+        when(ep.getNodeId()).thenReturn(nodeId);
+        when(ep.isEnabled()).thenReturn(true);
+        when(ep.getBaseUrl()).thenReturn("http://127.0.0.1:11434/v1");
+        when(endpoints.findById(endpointId)).thenReturn(Optional.of(ep));
+        RuntimeTrustAttestation att = mock(RuntimeTrustAttestation.class);
+        when(att.getClassification()).thenReturn(RuntimeTrustAttestation.Classification.INTERNAL);
+        when(att.validFor(org.mockito.ArgumentMatchers.eq("http://127.0.0.1:11434/v1"), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(true);
+        when(trustAttestations.findById(endpointId)).thenReturn(Optional.of(att));
+        ModelDeployment dep = mock(ModelDeployment.class);
+        when(dep.isEnabled()).thenReturn(true);
+        when(dep.isArchived()).thenReturn(false);
+        when(dep.isExternal()).thenReturn(false);
+        when(dep.getRuntimeEndpointId()).thenReturn(endpointId);
+        when(dep.getProviderModelId()).thenReturn("local-masker");
+        when(dep.getDisplayName()).thenReturn("Local Masker");
+        when(deployments.findById(depId)).thenReturn(Optional.of(dep));
+
+        ObjectNode maskerBody = (ObjectNode) objectMapper.readTree(
+                "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"replacements\\\":[{\\\"original\\\":\\\"user\\\",\\\"surrogate\\\":\\\"system\\\"},{\\\"original\\\":\\\"테헤란로\\\",\\\"surrogate\\\":\\\"010-0000-0000\\\"}]}\"}}]}");
+        when(runtimeClient.chatCompletion(org.mockito.ArgumentMatchers.eq(ep), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new com.aiconnect.llmgateway.runtime.RuntimeResult(200, maskerBody));
+
+        DataProtectionRedactor redactor = new DataProtectionRedactor(
+                objectMapper, deployments, endpoints, providers, nodes, trustAttestations, runtimeClient, openAiClient);
+        LlmService service = new LlmService(orgId, "svc-key", "Svc", FailoverPolicy.COMPATIBLE,
+                RetryPolicy.SAFE, false, "[]", BigDecimal.ZERO, BigDecimal.ZERO);
+        service.configureGuardrailMasker(depId, false, true);
+
+        ObjectNode request = (ObjectNode) objectMapper.readTree(
+                "{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"010-1234-5678 user 테헤란로\"}]}]}");
+        DataProtectionRedactor.RedactionVault vault = redactor.redactRequest(request, balancedPolicy, service, true, false);
+
+        assertThat(request.path("messages").get(0).path("role").asText()).isEqualTo("user");
+        assertThat(vault.restoreText("010-0000-0000")).isEqualTo("010-1234-5678");
+        assertThat(request.path("messages").get(0).path("content").get(0).path("text").asText())
+                .doesNotContain("테헤란로");
+
+        // Revoked INTERNAL runtime attestation must be rejected
+        when(att.validFor(org.mockito.ArgumentMatchers.eq("http://127.0.0.1:11434/v1"), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(false);
+        assertThatThrownBy(() -> redactor.assertTrustedMaskerDeployment(orgId, depId))
+                .isInstanceOf(ApiException.class)
+                .extracting("code").isEqualTo("UNTRUSTED_MASKER_DEPLOYMENT");
+    }
+
+    @Test
+    void streamingRestorerIsolatesMultiChoiceBuffersAndRejectsOversizedLines() throws Exception {
+        DataProtectionRedactor redactor = new DataProtectionRedactor(objectMapper);
+        ObjectNode request = (ObjectNode) objectMapper.readTree(
+                "{\"messages\":[{\"role\":\"user\",\"content\":\"홍길동 965034-3231111\"}]}");
+        DataProtectionRedactor.RedactionVault vault = redactor.redactRequest(request, balancedPolicy, null, false);
+
+        String ssePayload = ""
+                + "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"김\"}},{\"index\":1,\"delta\":{\"content\":\"초이스1 김\"}}]}\n\n"
+                + "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"가명 0\"},\"finish_reason\":\"stop\"},{\"index\":1,\"delta\":{\"content\":\"가명 1\"},\"finish_reason\":\"stop\"}]}\n\n"
+                + "data: [DONE]\n\n";
+
+        try (SseRedactionRestoringInputStream stream = new SseRedactionRestoringInputStream(
+                new ByteArrayInputStream(ssePayload.getBytes(StandardCharsets.UTF_8)), objectMapper, vault)) {
+            String out = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+            StringBuilder c0 = new StringBuilder();
+            StringBuilder c1 = new StringBuilder();
+            for (String line : out.split("\n")) {
+                if (!line.startsWith("data:") || line.contains("[DONE]")) continue;
+                JsonNode chunk = objectMapper.readTree(line.substring(5).trim());
+                for (JsonNode ch : chunk.path("choices")) {
+                    if (ch.path("index").asInt() == 0) c0.append(ch.path("delta").path("content").asText(""));
+                    if (ch.path("index").asInt() == 1) c1.append(ch.path("delta").path("content").asText(""));
+                }
+            }
+            assertThat(c0.toString()).isEqualTo("홍길동 0");
+            assertThat(c1.toString()).isEqualTo("초이스1 홍길동 1");
+        }
+
+        byte[] endless = "data: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".getBytes(StandardCharsets.UTF_8);
+        try (SseRedactionRestoringInputStream bounded = new SseRedactionRestoringInputStream(
+                new ByteArrayInputStream(endless), objectMapper, vault, 16)) {
+            assertThatThrownBy(bounded::readAllBytes).isInstanceOf(java.io.IOException.class);
+        }
+    }
+
+    @Test
+    void responseCacheIsolatesProjectsBoundariesDeploymentsAndTargetPrompts() throws Exception {
+        ResponseCacheService cache = new ResponseCacheService(objectMapper);
+        UUID orgId = UUID.randomUUID();
+        UUID projectA = UUID.randomUUID();
+        UUID projectB = UUID.randomUUID();
+        UUID dep1 = UUID.randomUUID();
+        UUID dep2 = UUID.randomUUID();
+        LlmService service = new LlmService(orgId, "svc-key", "Svc", FailoverPolicy.COMPATIBLE,
+                RetryPolicy.SAFE, false, "[]", BigDecimal.ZERO, BigDecimal.ZERO);
+        ReflectionTestUtils.setField(service, "id", UUID.randomUUID());
+        DataProtectionDecision decision = new DataProtectionDecision(
+                balancedPolicy, new DataProtectionScanResult(java.util.EnumSet.noneOf(DataClassification.class), java.util.Map.of()),
+                DataProtectionAction.ALLOW, true, true, List.of());
+        ObjectNode req = (ObjectNode) objectMapper.readTree("{\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}");
+
+        String keyA = cache.cacheKey(orgId, projectA, service, decision, dep1, "target-A", req);
+        String keyB = cache.cacheKey(orgId, projectB, service, decision, dep1, "target-A", req);
+        String keyDep2 = cache.cacheKey(orgId, projectA, service, decision, dep2, "target-A", req);
+        String keyPromptB = cache.cacheKey(orgId, projectA, service, decision, dep1, "target-B", req);
+        assertThat(java.util.Set.of(keyA, keyB, keyDep2, keyPromptB)).hasSize(4);
     }
 }

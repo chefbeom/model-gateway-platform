@@ -42,7 +42,7 @@ public class StreamingChatFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !"POST".equals(request.getMethod()) || !"/v1/chat/completions".equals(request.getRequestURI());
+        return !"POST".equals(request.getMethod()) || !"/v1/chat/completions".equals(RequestPathResolver.resolve(request));
     }
 
     @Override

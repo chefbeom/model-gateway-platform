@@ -116,10 +116,12 @@ public class OpenAiCompatibleRuntimeAdapter implements RuntimeProviderAdapter {
         String inventoryField = body.path("data").isArray() ? "data" : "models";
         if (!body.path(inventoryField).isArray()) return inventory;
         com.fasterxml.jackson.databind.node.ArrayNode data = (com.fasterxml.jackson.databind.node.ArrayNode) body.path(inventoryField);
-        for (int index = 0; index < data.size(); index++) {
+        int probed = 0;
+        for (int index = 0; index < data.size() && probed < 32; index++) {
             JsonNode model = data.path(index);
             String id = model.path("id").asText("").trim();
             if (id.isBlank() || !isRuntimeLoaded(model)) continue;
+            probed++;
             JsonNode props = getOptionalModelProps(endpoint, id);
             if (props != null && props.isObject()) ((com.fasterxml.jackson.databind.node.ObjectNode) data.path(index)).set("props", props);
         }

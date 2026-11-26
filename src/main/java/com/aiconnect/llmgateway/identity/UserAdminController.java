@@ -137,7 +137,11 @@ public class UserAdminController {
 
     @DeleteMapping("/organizations/{organizationId}/users/{userId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void removeOrganizationUser(@PathVariable UUID organizationId, @PathVariable UUID userId) {
+    public void removeOrganizationUser(HttpServletRequest httpRequest, @PathVariable UUID organizationId, @PathVariable UUID userId) {
+        if (!isPlatformAdmin(httpRequest) && access.isPlatformAdminUser(userId)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "PLATFORM_ADMIN_PROTECTED",
+                    "Only a platform administrator can remove a system administrator.");
+        }
         access.removeOrganizationUser(organizationId, userId);
     }
 

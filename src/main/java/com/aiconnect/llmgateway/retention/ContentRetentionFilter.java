@@ -1,5 +1,6 @@
 package com.aiconnect.llmgateway.retention;
 
+import com.aiconnect.llmgateway.web.RequestPathResolver;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.FilterChain;
@@ -36,7 +37,7 @@ public class ContentRetentionFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !"POST".equals(request.getMethod()) || !"/v1/chat/completions".equals(request.getRequestURI());
+        return !"POST".equals(request.getMethod()) || !"/v1/chat/completions".equals(RequestPathResolver.resolve(request));
     }
 
     @Override

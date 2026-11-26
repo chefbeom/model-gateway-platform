@@ -42,12 +42,12 @@ public class ProviderCapReservationService {
             ProjectExternalAccessReservationRepository reservations,
             ModelDeploymentRepository deployments,
             LlmRequestRepository requests,
-            @Value("${aiconnect.quota.reservation-lease-seconds:600}") long leaseSeconds) {
+            @Value("${aiconnect.quota.reservation-lease-seconds:1800}") long leaseSeconds) {
         this.access = access;
         this.reservations = reservations;
         this.deployments = deployments;
         this.requests = requests;
-        this.leaseSeconds = leaseSeconds > 0 ? leaseSeconds : 600;
+        this.leaseSeconds = leaseSeconds > 0 ? leaseSeconds : 1800;
     }
 
     @Transactional
@@ -73,14 +73,19 @@ public class ProviderCapReservationService {
                     "The monthly provider cost limit has no configured currency.");
         }
 
-        JsonNode output = proxiedRequest == null ? null
-                : proxiedRequest.hasNonNull("max_completion_tokens")
-                        ? proxiedRequest.get("max_completion_tokens")
-                        : proxiedRequest.get("max_tokens");
-        if (output == null || !output.isIntegralNumber() || !output.canConvertToInt() || output.asInt() <= 0) {
+        JsonNode completionNode = proxiedRequest == null ? null : proxiedRequest.get("max_completion_tokens");
+        JsonNode legacyNode = proxiedRequest == null ? null : proxiedRequest.get("max_tokens");
+        boolean hasCompletion = isPositiveInt(completionNode);
+        boolean hasLegacy = isPositiveInt(legacyNode);
+        if ((!hasCompletion && !hasLegacy)
+                || (completionNode != null && !completionNode.isNull() && !hasCompletion)
+                || (legacyNode != null && !legacyNode.isNull() && !hasLegacy)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "QUOTA_OUTPUT_LIMIT_REQUIRED",
                     "An explicit positive output token limit is required when a provider monthly cost limit is configured.");
         }
+        int effectiveOutputLimit = Math.max(
+                hasCompletion ? completionNode.asInt() : 0,
+                hasLegacy ? legacyNode.asInt() : 0);
         JsonNode n = proxiedRequest.get("n");
         if (n != null && (!n.isIntegralNumber() || !n.canConvertToInt() || n.asInt() <= 0)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "QUOTA_CHOICE_COUNT_INVALID",
@@ -105,7 +110,7 @@ public class ProviderCapReservationService {
         }
 
         int inputTokens = TokenUsageEstimator.estimateInputTokens(proxiedRequest);
-        long totalOutput = (long) output.asInt() * (n == null ? 1 : n.asInt());
+        long totalOutput = (long) effectiveOutputLimit * (n == null ? 1 : n.asInt());
         BigDecimal worstCase = pricing.inputPricePerMillion().multiply(BigDecimal.valueOf(inputTokens))
                 .add(pricing.outputPricePerMillion().multiply(BigDecimal.valueOf(totalOutput)))
                 .movePointLeft(6);
@@ -146,6 +151,10 @@ public class ProviderCapReservationService {
                 projectId, provider.getId(), reservationKey, requestId,
                 reserveAmount, capCurrency, monthStart, now.plusSeconds(leaseSeconds)));
         return new ProviderReservation(reservationKey, projectId, provider.getId(), monthEnd);
+    }
+
+    private static boolean isPositiveInt(JsonNode node) {
+        return node != null && node.isIntegralNumber() && node.canConvertToInt() && node.asInt() > 0;
     }
 
     @Transactional

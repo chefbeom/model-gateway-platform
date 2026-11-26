@@ -1,9 +1,11 @@
 package com.aiconnect.llmgateway.gateway;
 
 import com.aiconnect.llmgateway.dataprotection.DataProtectionAction;
+import com.aiconnect.llmgateway.dataprotection.DataProtectionDecision;
 import com.aiconnect.llmgateway.domain.LlmService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.stereotype.Service;
 
@@ -39,6 +41,34 @@ public class ResponseCacheService {
                     + "|" + (action == null ? DataProtectionAction.ALLOW.name() : action.name())
                     + "|" + canonical;
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(raw.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        } catch (Exception exception) {
+            return null;
+        }
+    }
+
+    /**
+     * Scopes cached responses strictly by project, effective data boundary, resolved deployment,
+     * target prompt template, and canonical outbound request so projects cannot share entries across
+     * distinct entitlements, boundaries, or targets.
+     */
+    public String cacheKey(UUID organizationId, UUID projectId, LlmService service, DataProtectionDecision protection,
+                           UUID deploymentId, String targetPromptTemplate, ObjectNode outboundRequest) {
+        try {
+            ArrayNode parts = canonicalMapper.createArrayNode();
+            parts.add(organizationId == null ? "" : organizationId.toString());
+            parts.add(projectId == null ? "" : projectId.toString());
+            parts.add(service.getId() == null ? "" : service.getId().toString());
+            parts.add(service.getPromptVersion());
+            parts.add(protection == null || protection.action() == null
+                    ? DataProtectionAction.ALLOW.name() : protection.action().name());
+            parts.add(protection == null || protection.effectiveBoundary() == null
+                    ? "" : protection.effectiveBoundary().name());
+            parts.add(deploymentId == null ? "" : deploymentId.toString());
+            parts.add(targetPromptTemplate == null ? "" : targetPromptTemplate);
+            parts.add(outboundRequest == null ? canonicalMapper.createObjectNode() : outboundRequest);
+            String canonical = canonicalMapper.writeValueAsString(parts);
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(canonical.getBytes(StandardCharsets.UTF_8));
             return HexFormat.of().formatHex(digest);
         } catch (Exception exception) {
             return null;

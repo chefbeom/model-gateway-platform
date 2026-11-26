@@ -378,6 +378,22 @@ public class AccountInvitationService {
         projectMemberships.delete(membership);
         projectMemberships.flush();
 
+        if (betaServices != null && betaOperators != null) {
+            boolean stillProjectManagerInOrg = projectMemberships.findByIdUserId(targetUser.getId()).stream()
+                    .filter(pm -> pm.getRole() == ProjectMembership.Role.MANAGER)
+                    .anyMatch(pm -> projects.findById(pm.getId().getProjectId())
+                            .map(p -> project.getOrganizationId().equals(p.getOrganizationId()))
+                            .orElse(false));
+            if (!stillProjectManagerInOrg) {
+                for (BetaService betaSvc : betaServices.findByOrganizationId(project.getOrganizationId())) {
+                    BetaOperator.Key opKey = new BetaOperator.Key(betaSvc.getId(), targetUser.getId());
+                    if (betaOperators.existsById(opKey)) {
+                        betaOperators.deleteById(opKey);
+                    }
+                }
+            }
+        }
+
         int revokedApiKeys = 0;
         if (apiKeys != null) {
             List<ApiKey> activeKeys = apiKeys.findByProjectIdAndIssuedByUserIdAndStatus(

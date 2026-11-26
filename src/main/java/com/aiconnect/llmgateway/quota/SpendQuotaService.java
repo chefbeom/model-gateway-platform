@@ -59,8 +59,8 @@ public class SpendQuotaService {
     private RoutingService routing;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private DataProtectionPolicyService dataProtection;
-    @Value("${aiconnect.quota.reservation-lease-seconds:600}")
-    private long leaseSeconds = 600;
+    @Value("${aiconnect.quota.reservation-lease-seconds:1800}")
+    private long leaseSeconds = 1800;
 
     public SpendQuotaService(ApiKeyService apiKeys, SpendQuotaRepository quotas, SpendCostQuery costs,
                              ProjectRepository projects, TeamRepository teams, ApiKeyRepository keyRepository,
@@ -123,7 +123,7 @@ public class SpendQuotaService {
 
         requireCurrencyCoverage(locked, requestedByCurrency);
 
-        long effectiveLease = leaseSeconds > 0 ? leaseSeconds : 600;
+        long effectiveLease = leaseSeconds > 0 ? leaseSeconds : 1800;
         Instant expiresAt = now.plusSeconds(effectiveLease);
         List<SpendQuotaReservation> created = new ArrayList<>();
         for (SpendQuota quota : locked) {
@@ -264,8 +264,9 @@ public class SpendQuotaService {
         if (service == null) return estimates;
 
         int inputTokens = estimateInputTokens(body);
-        int maxOutput = body == null ? 0 : Math.max(0, body.has("max_completion_tokens")
-                ? body.path("max_completion_tokens").asInt(0) : body.path("max_tokens").asInt(0));
+        int maxCompletion = body == null ? 0 : Math.max(0, body.path("max_completion_tokens").asInt(0));
+        int maxLegacy = body == null ? 0 : Math.max(0, body.path("max_tokens").asInt(0));
+        int maxOutput = Math.max(maxCompletion, maxLegacy);
         if (maxOutput == 0) maxOutput = DEFAULT_OUTPUT_RESERVATION_TOKENS;
         int choices = body == null ? 1 : Math.max(1, body.path("n").asInt(1));
         long totalOutput = (long) maxOutput * choices;
@@ -329,8 +330,13 @@ public class SpendQuotaService {
                 service.applyOpenAiRequestPolicy(effective);
                 deployment.applyOpenAiDefaults(effective);
             }
-            JsonNode output = effective.has("max_completion_tokens") ? effective.get("max_completion_tokens") : effective.get("max_tokens");
-            if (output == null || !output.isIntegralNumber() || !output.canConvertToInt() || output.asInt() <= 0) {
+            JsonNode completionNode = effective.get("max_completion_tokens");
+            JsonNode legacyNode = effective.get("max_tokens");
+            boolean hasCompletion = isPositiveIntNode(completionNode);
+            boolean hasLegacy = isPositiveIntNode(legacyNode);
+            if ((!hasCompletion && !hasLegacy)
+                    || (completionNode != null && !completionNode.isNull() && !hasCompletion)
+                    || (legacyNode != null && !legacyNode.isNull() && !hasLegacy)) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "QUOTA_OUTPUT_LIMIT_REQUIRED", "An explicit output token limit is required when a spend quota applies to an external target.");
             }
             JsonNode n = effective.get("n");
@@ -370,9 +376,23 @@ public class SpendQuotaService {
      * max_tokens. The completed request is reconciled with the persisted usage record.
      */
     private int estimateInputTokens(JsonNode body) {
-        JsonNode messages = body == null ? null : body.get("messages");
-        if (messages == null || !messages.isArray()) return 0;
-        return Math.max(0, (messages.toString().length() + 3) / 4);
+        if (body == null) return 0;
+        int tokens = 0;
+        JsonNode messages = body.get("messages");
+        if (messages != null && messages.isArray()) {
+            tokens += Math.max(0, (messages.toString().length() + 3) / 4);
+        }
+        for (String extraField : List.of("tools", "input", "response_format")) {
+            JsonNode extra = body.get(extraField);
+            if (extra != null && !extra.isNull()) {
+                tokens += Math.max(0, (extra.toString().length() + 3) / 4);
+            }
+        }
+        return tokens;
+    }
+
+    private static boolean isPositiveIntNode(JsonNode node) {
+        return node != null && node.isIntegralNumber() && node.canConvertToInt() && node.asInt() > 0;
     }
 
     public record Reservation(UUID key) { }

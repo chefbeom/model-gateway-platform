@@ -88,13 +88,17 @@ public class DataProtectionScanner {
             if (policy.detectFinancial() && CARD_NUMBER.matcher(bounded).find()) add(DataClassification.FINANCIAL, classifications, counts);
             if (policy.detectConfidential() && CONFIDENTIAL.matcher(bounded).find()) add(DataClassification.CONFIDENTIAL, classifications, counts);
             if (policy.detectMedia() && isMedia(fieldName, bounded)) add(DataClassification.UNKNOWN_MEDIA, classifications, counts);
+            int[] remainingCustomSteps = new int[]{MAX_CUSTOM_REGEX_STEPS};
+            boolean confidentialRecorded = classifications.contains(DataClassification.CONFIDENTIAL);
             for (String custom : policy.customPatterns()) {
                 if (custom == null || custom.isBlank()) continue;
                 try {
                     Pattern compiled = compileCached(custom);
-                    if (compiled.matcher(new BoundedCharSequence(bounded, MAX_CUSTOM_REGEX_STEPS)).find()) {
-                        add(DataClassification.CONFIDENTIAL, classifications, counts);
-                        break;
+                    if (compiled.matcher(new BoundedCharSequence(bounded, remainingCustomSteps)).find()) {
+                        if (!confidentialRecorded) {
+                            add(DataClassification.CONFIDENTIAL, classifications, counts);
+                            confidentialRecorded = true;
+                        }
                     }
                 } catch (StepBudgetExceededException stepLimit) {
                     add(DataClassification.SCAN_INCOMPLETE, classifications, counts);

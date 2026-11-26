@@ -24,10 +24,22 @@ public class ExternalProviderAdministrationController {
     public List<ExternalProviderAdministrationService.ProviderView> list(@PathVariable UUID organizationId) { return service.list(organizationId); }
 
     @PostMapping("/external-providers")
-    public ExternalProviderAdministrationService.ProviderView create(@Valid @RequestBody CreateProvider request) { return service.create(request.organizationId(), request.displayName(), request.baseUrl(), request.apiKey(), request.zeroRetentionVerified(), request.zeroRetentionEvidence()); }
+    public ExternalProviderAdministrationService.ProviderView create(@Valid @RequestBody CreateProvider request, HttpServletRequest httpRequest) {
+        if (Boolean.TRUE.equals(request.zeroRetentionVerified()) && !isPlatformAdmin(httpRequest)) {
+            throw new com.aiconnect.llmgateway.web.ApiException(HttpStatus.FORBIDDEN, "PLATFORM_ADMIN_REQUIRED",
+                    "Only the Platform administrator can verify external zero-retention status.");
+        }
+        return service.create(request.organizationId(), request.displayName(), request.baseUrl(), request.apiKey(), request.zeroRetentionVerified(), request.zeroRetentionEvidence());
+    }
 
     @PatchMapping("/external-providers/{providerId}")
-    public ExternalProviderAdministrationService.ProviderView update(@PathVariable UUID providerId, @Valid @RequestBody UpdateProvider request) { return service.update(providerId, request.displayName(), request.baseUrl(), request.apiKey(), request.enabled(), request.zeroRetentionVerified(), request.zeroRetentionEvidence()); }
+    public ExternalProviderAdministrationService.ProviderView update(@PathVariable UUID providerId, @Valid @RequestBody UpdateProvider request, HttpServletRequest httpRequest) {
+        if ((request.zeroRetentionVerified() != null || request.zeroRetentionEvidence() != null) && !isPlatformAdmin(httpRequest)) {
+            throw new com.aiconnect.llmgateway.web.ApiException(HttpStatus.FORBIDDEN, "PLATFORM_ADMIN_REQUIRED",
+                    "Only the Platform administrator can modify external zero-retention status.");
+        }
+        return service.update(providerId, request.displayName(), request.baseUrl(), request.apiKey(), request.enabled(), request.zeroRetentionVerified(), request.zeroRetentionEvidence());
+    }
 
     @GetMapping("/external-providers/{providerId}/deletion-preview")
     public ExternalProviderAdministrationService.ProviderDeletePreview deletionPreview(@PathVariable UUID providerId) { return service.deletionPreview(providerId); }

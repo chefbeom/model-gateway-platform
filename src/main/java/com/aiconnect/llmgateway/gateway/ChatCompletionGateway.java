@@ -164,27 +164,10 @@ public class ChatCompletionGateway {
         String serviceKey = service.getServiceKey(), requestId = audit.getRequestId();
         RoutingDecision decision = plan.decision();
         List<ResolvedTarget> candidates = plan.candidates();
-        ObjectNode preparedRequest = request.deepCopy();
-        service.applySystemPromptTemplate(preparedRequest);
-        String cacheKey = service.isResponseCacheEnabled() && responseCache != null
-                ? responseCache.cacheKey(service.getOrganizationId(), service, protection.action(), preparedRequest)
-                : null;
-        if (cacheKey != null && !candidates.isEmpty()) {
-            var cached = responseCache.get(cacheKey);
-            if (cached.isPresent()) {
-                ResolvedTarget firstTarget = candidates.get(0);
-                audit.succeed(firstTarget.deployment().getId(), 0, 0, elapsed(audit.getStartedAt()),
-                        200, 0, firstTarget.providerType(), "RESPONSE_CACHE_HIT",
-                        BigDecimal.ZERO, BigDecimal.ZERO, service.getCurrency());
-                requests.save(audit);
-                if (spendQuota != null) {
-                    spendQuota.releaseIfStillActive(spendReservation);
-                }
-                ObjectNode cachedBody = cached.get();
-                cachedBody.put("model", serviceKey);
-                return new GatewayResult(200, cachedBody, requestId);
-            }
-        }
+        boolean cacheEligible = service.isResponseCacheEnabled()
+                && responseCache != null
+                && !protection.redactionRequired()
+                && (protection.scan() == null || !protection.scan().hasSensitiveData());
         int failures = 0;
         int attemptedCount = 0;
         boolean sawCapacity = false;
@@ -223,23 +206,40 @@ public class ChatCompletionGateway {
                     continue;
                 }
                 String targetPrompt = candidate.target() == null ? null : candidate.target().getSystemPromptTemplate();
-                ObjectNode proxiedRequest;
-                if (targetPrompt == null || targetPrompt.isBlank()) {
-                    proxiedRequest = preparedRequest.deepCopy();
-                } else {
-                    proxiedRequest = request.deepCopy();
-                    service.applySystemPromptTemplate(proxiedRequest, targetPrompt);
+                ObjectNode proxiedRequest = request.deepCopy();
+                DataProtectionRedactor.RedactionVault redactionVault = null;
+                boolean allowExternalMasker = protection.externalApiAllowed() && !betaAccess.isBetaProject(audit.getProjectId());
+                if (protection.redactionRequired() && redactor != null
+                        && (candidate.external() || candidate.externalDataBoundary())) {
+                    redactionVault = redactor.redactRequest(proxiedRequest, protection.policy(), service, true, allowExternalMasker);
                 }
+                service.applySystemPromptTemplate(proxiedRequest, targetPrompt);
                 proxiedRequest.put("model", candidate.deployment().getProviderModelId());
                 service.applyTemperaturePolicy(proxiedRequest);
-                DataProtectionRedactor.RedactionVault redactionVault = null;
-                if (protection.redactionRequired() && redactor != null
-                        && (candidate.external() || candidate.externalDataBoundary() || service.getMaskerDeploymentId() != null)) {
-                    redactionVault = redactor.redactRequest(proxiedRequest, protection.policy(), service, true);
-                }
                 if (candidate.external()) {
                     service.applyOpenAiRequestPolicy(proxiedRequest);
                     candidate.deployment().applyOpenAiDefaults(proxiedRequest);
+                }
+                String attemptCacheKey = cacheEligible
+                        ? responseCache.cacheKey(service.getOrganizationId(), audit.getProjectId(), service, protection,
+                                candidate.deployment().getId(), targetPrompt, proxiedRequest)
+                        : null;
+                if (attemptCacheKey != null) {
+                    var cached = responseCache.get(attemptCacheKey);
+                    if (cached.isPresent()) {
+                        audit.succeed(candidate.deployment().getId(), 0, 0, elapsed(audit.getStartedAt()),
+                                200, failures, candidate.providerType(), "RESPONSE_CACHE_HIT",
+                                BigDecimal.ZERO, BigDecimal.ZERO, service.getCurrency());
+                        requests.save(audit);
+                        if (spendQuota != null) {
+                            spendQuota.releaseIfStillActive(spendReservation);
+                        }
+                        ObjectNode cachedBody = cached.get();
+                        cachedBody.put("model", serviceKey);
+                        return new GatewayResult(200, cachedBody, requestId);
+                    }
+                }
+                if (candidate.external()) {
                     audit.recordExecutionOptions(proxiedRequest);
                     if (providerCap != null) {
                         try {
@@ -305,8 +305,8 @@ public class ChatCompletionGateway {
                         redactionVault.restoreResponseNode(response);
                     }
                     response.put("model", serviceKey);
-                    if (cacheKey != null && responseCache != null) {
-                        responseCache.put(cacheKey, response, service.getResponseCacheTtlSeconds());
+                    if (attemptCacheKey != null && responseCache != null) {
+                        responseCache.put(attemptCacheKey, response, service.getResponseCacheTtlSeconds());
                     }
                     return new GatewayResult(runtimeResult.statusCode(), response, requestId);
                 }
@@ -344,7 +344,11 @@ public class ChatCompletionGateway {
                         settleOrHoldDone = true;
                         providerCap.holdUnsettled(provRes, "AMBIGUOUS_UPSTREAM_FAILURE");
                     }
-                    if (spendQuota != null) {
+                    boolean chargeable = candidate.external()
+                            || (candidate.externalDataBoundary() && candidate.endpoint() != null
+                                    && candidate.endpoint().getInputPricePerMillion() != null
+                                    && candidate.endpoint().getOutputPricePerMillion() != null);
+                    if (spendQuota != null && chargeable) {
                         spendQuota.holdUnsettled(spendReservation, "AMBIGUOUS_UPSTREAM_FAILURE");
                     }
                 }

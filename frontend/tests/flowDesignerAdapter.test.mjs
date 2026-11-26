@@ -607,3 +607,15 @@ test('page and editor wire mode, quick start, normalize-order and the v2 compati
   assert.match(api, /FLOW_LAYOUT_INVALID/)
   assert.match(api, /LAYOUT_NODE_ID_PATTERN_V1/)
 })
+
+test('Root and useFlowEditor isolate drafts across logout, session expiry, and platform-token switch', () => {
+  const root = readFileSync(new URL('../src/Root.vue', import.meta.url), 'utf8')
+  const store = readFileSync(new URL('../src/flow-designer/draftStore.ts', import.meta.url), 'utf8')
+  const editor = readFileSync(new URL('../src/flow-designer/useFlowEditor.ts', import.meta.url), 'utf8')
+  assert.match(store, /aiconnect:clear-drafts/)
+  assert.match(root, /aiconnect:clear-drafts/)
+  assert.match(root, /function acceptPlatformToken\([\s\S]*?clearStashedDrafts\(\)/)
+  assert.match(root, /function clearSession\(\)[\s\S]*?clearStashedDrafts\(\)/)
+  assert.match(editor, /let loadedUserId = currentUserId\(\)/)
+  assert.match(editor, /activeUser === 'anonymous' \|\| activeUser !== loadedUserId/)
+})
