@@ -38,6 +38,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 
 /**
  * Performs reversible format-preserving pseudonymization on outbound LLM requests
@@ -72,7 +73,9 @@ public class DataProtectionRedactor {
     );
     private static final Pattern STRICT_BASE64_MEDIA_DATA = Pattern.compile(
             "(?i)^data:(?:(?:image|audio|video)/[a-z0-9.+-]+|application/(?:pdf|octet-stream));base64,[A-Za-z0-9+/=\\s]+$");
+    /** Fixed allowance per custom pattern, plus a linear allowance per input character (see customRegexStepBudget). */
     private static final int MAX_CUSTOM_REGEX_STEPS = 100_000;
+    private static final int CUSTOM_REGEX_STEPS_PER_CHAR = 32;
     private static final List<String> KOREAN_NAME_SURROGATES = List.of("김가명", "이가명", "박가명");
 
     private final ObjectMapper objectMapper;
@@ -289,16 +292,26 @@ public class DataProtectionRedactor {
             }, vault);
             for (String custom : policy.customPatterns()) {
                 if (custom == null || custom.isBlank()) continue;
+                Pattern compiled;
                 try {
-                    Pattern compiled = Pattern.compile(custom);
+                    compiled = Pattern.compile(custom);
+                } catch (PatternSyntaxException malformed) {
+                    // Patterns are validated when saved; a legacy malformed pattern cannot match anything.
+                    continue;
+                }
+                try {
                     current = replacePatternBounded(current, compiled, match -> {
                         if (vault.containsSurrogate(match)) return match;
                         String existing = vault.surrogateFor(match);
                         if (existing != null) return existing;
                         int n = counters.confidential.incrementAndGet();
                         return vault.register("CONFIDENTIAL", match, "[REDACTED_CONFIDENTIAL_" + n + "]", "REGEX");
-                    }, vault, MAX_CUSTOM_REGEX_STEPS + current.length());
-                } catch (RuntimeException ignored) { }
+                    }, vault, customRegexStepBudget(current.length()));
+                } catch (StepBudgetExceededException stepLimit) {
+                    // Fail closed: never forward text that a configured pattern could not finish masking.
+                    throw new ApiException(HttpStatus.FORBIDDEN, "DATA_PROTECTION_INCOMPLETE",
+                            "A custom data-protection pattern could not finish masking this request, so it was not sent externally. Simplify the pattern or shorten the request.");
+                }
             }
         }
         return current;
@@ -312,15 +325,25 @@ public class DataProtectionRedactor {
                                          RedactionVault vault, int maxSteps) {
         CharSequence seq = maxSteps == Integer.MAX_VALUE ? input : new BoundedCharSequence(input, maxSteps);
         Matcher matcher = pattern.matcher(seq);
-        StringBuilder sb = new StringBuilder();
+        // Copy unmatched text from the plain input by offset so only the regex engine itself spends the step budget.
+        StringBuilder sb = new StringBuilder(input.length());
+        int copied = 0;
         while (matcher.find()) {
-            String matched = matcher.group();
-            if (matched == null || matched.isEmpty()) continue;
+            int start = matcher.start(), end = matcher.end();
+            if (end <= start) continue;
+            String matched = input.substring(start, end);
             String replacement = vault.isSurrogateValue(matched) ? matched : mapper.apply(matched);
-            matcher.appendReplacement(sb, Matcher.quoteReplacement(replacement));
+            sb.append(input, copied, start).append(replacement);
+            copied = end;
         }
-        matcher.appendTail(sb);
+        sb.append(input, copied, input.length());
         return sb.toString();
+    }
+
+    /** Linear in the input length so well-behaved patterns always finish; catastrophic backtracking still trips it. */
+    static int customRegexStepBudget(int inputLength) {
+        long budget = (long) MAX_CUSTOM_REGEX_STEPS + (long) inputLength * CUSTOM_REGEX_STEPS_PER_CHAR;
+        return (int) Math.min(Integer.MAX_VALUE - 1L, budget);
     }
 
     private void applyTrustedMaskerLlm(ObjectNode request, LlmService service, RedactionVault vault, boolean allowExternalMasker) {

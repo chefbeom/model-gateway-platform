@@ -389,4 +389,56 @@ class DataProtectionRedactorTest {
         String keyPromptB = cache.cacheKey(orgId, projectA, service, decision, dep1, "target-B", req);
         assertThat(java.util.Set.of(keyA, keyB, keyDep2, keyPromptB)).hasSize(4);
     }
+
+    private static EffectiveDataProtectionPolicy customPatternPolicy(List<String> patterns) {
+        return new EffectiveDataProtectionPolicy(DataProtectionMode.ENFORCE, DataProtectionLevel.BALANCED,
+                DataProtectionAction.REDACT_RESTORE, true, false, false, false, true, false, patterns, List.of("SERVICE"));
+    }
+
+    private ObjectNode userMessage(String content) {
+        ObjectNode request = objectMapper.createObjectNode();
+        request.putArray("messages").addObject().put("role", "user").put("content", content);
+        return request;
+    }
+
+    private static String filler(String prefix, int length) {
+        StringBuilder sb = new StringBuilder(prefix);
+        while (sb.length() < length) sb.append("lorem ipsum dolor sit amet ");
+        return sb.toString();
+    }
+
+    @Test
+    void customPatternsStillMaskLongPromptsInsteadOfSilentlySkipping() throws Exception {
+        DataProtectionRedactor redactor = new DataProtectionRedactor(objectMapper);
+        for (String pattern : List.of("\\bPROJECT-[A-Z]{4}\\b", "(?i)\\b(project-[a-z]{4}|falcon|codename)\\b")) {
+            for (int length : new int[]{5_000, 45_000, 120_000}) {
+                ObjectNode request = userMessage(filler("secret PROJECT-ABCD here. ", length) + " tail PROJECT-WXYZ");
+                redactor.redactRequest(request, customPatternPolicy(List.of(pattern)), null, false);
+                String content = request.path("messages").get(0).path("content").asText();
+                assertThat(content).as("pattern %s, length %d", pattern, length)
+                        .doesNotContain("PROJECT-ABCD").doesNotContain("PROJECT-WXYZ").contains("[REDACTED_CONFIDENTIAL_");
+            }
+        }
+    }
+
+    @Test
+    void catastrophicCustomPatternFailsClosedInRedactorAndScanner() {
+        EffectiveDataProtectionPolicy policy = customPatternPolicy(List.of("(.*a){12}b"));
+        ObjectNode request = userMessage("a".repeat(30));
+        assertThatThrownBy(() -> new DataProtectionRedactor(objectMapper).redactRequest(request, policy, null, false))
+                .isInstanceOf(ApiException.class)
+                .satisfies(error -> {
+                    assertThat(((ApiException) error).getCode()).isEqualTo("DATA_PROTECTION_INCOMPLETE");
+                    assertThat(((ApiException) error).getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                });
+        assertThat(new DataProtectionScanner(objectMapper).scan(userMessage("a".repeat(30)), policy).classifications())
+                .contains(DataClassification.SCAN_INCOMPLETE);
+    }
+
+    @Test
+    void scannerGivesEachCustomPatternItsOwnLinearBudget() {
+        EffectiveDataProtectionPolicy policy = customPatternPolicy(List.of("ZZQ1-\\d+", "ZZQ2-\\d+", "ZZQ3-\\d+"));
+        assertThat(new DataProtectionScanner(objectMapper).scan(userMessage(filler("", 60_000)), policy).classifications())
+                .doesNotContain(DataClassification.SCAN_INCOMPLETE);
+    }
 }

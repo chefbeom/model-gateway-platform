@@ -158,6 +158,27 @@ public class ChatCompletionGateway {
                 freshCredentials.project().getId(), freshPolicy.routingConstraint());
     }
 
+    /** Target prompt, model id and request policies applied to the outbound copy (after any redaction). */
+    private static void prepareOutbound(ObjectNode proxiedRequest, LlmService service, ResolvedTarget candidate, String targetPrompt) {
+        service.applySystemPromptTemplate(proxiedRequest, targetPrompt);
+        proxiedRequest.put("model", candidate.deployment().getProviderModelId());
+        service.applyTemperaturePolicy(proxiedRequest);
+        if (candidate.external()) {
+            service.applyOpenAiRequestPolicy(proxiedRequest);
+            candidate.deployment().applyOpenAiDefaults(proxiedRequest);
+        }
+    }
+
+    /** Cache-eligible requests are never redacted, so the outbound copy can be rebuilt before any lease is taken. */
+    private String cacheKeyFor(ObjectNode request, LlmService service, LlmRequest audit,
+                               DataProtectionDecision protection, ResolvedTarget candidate) {
+        String targetPrompt = candidate.target() == null ? null : candidate.target().getSystemPromptTemplate();
+        ObjectNode outbound = request.deepCopy();
+        prepareOutbound(outbound, service, candidate, targetPrompt);
+        return responseCache.cacheKey(service.getOrganizationId(), audit.getProjectId(), service, protection,
+                candidate.deployment().getId(), targetPrompt, outbound);
+    }
+
     private GatewayResult completePrepared(ObjectNode request, LlmService service, LlmRequest audit,
                                            DataProtectionDecision protection, DispatchPlan plan,
                                            SpendQuotaService.Reservation spendReservation) {
@@ -179,6 +200,23 @@ public class ChatCompletionGateway {
             try {
                 betaAccess.checkProject(audit.getProjectId(), audit.getServiceId());
                 if (candidate.externalDataBoundary() && betaAccess.isBetaProject(audit.getProjectId())) continue;
+                if (cacheEligible) {
+                    // Cache hits need no capacity lease and leave no attempt row behind.
+                    String probeKey = cacheKeyFor(request, service, audit, protection, candidate);
+                    var cached = responseCache.get(probeKey);
+                    if (cached.isPresent()) {
+                        audit.succeed(candidate.deployment().getId(), 0, 0, elapsed(audit.getStartedAt()),
+                                200, failures, candidate.providerType(), "RESPONSE_CACHE_HIT",
+                                BigDecimal.ZERO, BigDecimal.ZERO, service.getCurrency());
+                        requests.save(audit);
+                        if (spendQuota != null) {
+                            spendQuota.releaseIfStillActive(spendReservation);
+                        }
+                        ObjectNode cachedBody = cached.get();
+                        cachedBody.put("model", serviceKey);
+                        return new GatewayResult(200, cachedBody, requestId);
+                    }
+                }
                 lease = plan.acquire(candidate);
             } catch (ApiException revalidationFailure) {
                 audit.fail(revalidationFailure.getCode(), revalidationFailure.getStatus().value(), elapsed(audit.getStartedAt()), failures);
@@ -213,32 +251,11 @@ public class ChatCompletionGateway {
                         && (candidate.external() || candidate.externalDataBoundary())) {
                     redactionVault = redactor.redactRequest(proxiedRequest, protection.policy(), service, true, allowExternalMasker);
                 }
-                service.applySystemPromptTemplate(proxiedRequest, targetPrompt);
-                proxiedRequest.put("model", candidate.deployment().getProviderModelId());
-                service.applyTemperaturePolicy(proxiedRequest);
-                if (candidate.external()) {
-                    service.applyOpenAiRequestPolicy(proxiedRequest);
-                    candidate.deployment().applyOpenAiDefaults(proxiedRequest);
-                }
+                prepareOutbound(proxiedRequest, service, candidate, targetPrompt);
                 String attemptCacheKey = cacheEligible
                         ? responseCache.cacheKey(service.getOrganizationId(), audit.getProjectId(), service, protection,
                                 candidate.deployment().getId(), targetPrompt, proxiedRequest)
                         : null;
-                if (attemptCacheKey != null) {
-                    var cached = responseCache.get(attemptCacheKey);
-                    if (cached.isPresent()) {
-                        audit.succeed(candidate.deployment().getId(), 0, 0, elapsed(audit.getStartedAt()),
-                                200, failures, candidate.providerType(), "RESPONSE_CACHE_HIT",
-                                BigDecimal.ZERO, BigDecimal.ZERO, service.getCurrency());
-                        requests.save(audit);
-                        if (spendQuota != null) {
-                            spendQuota.releaseIfStillActive(spendReservation);
-                        }
-                        ObjectNode cachedBody = cached.get();
-                        cachedBody.put("model", serviceKey);
-                        return new GatewayResult(200, cachedBody, requestId);
-                    }
-                }
                 if (candidate.external()) {
                     audit.recordExecutionOptions(proxiedRequest);
                     if (providerCap != null) {
