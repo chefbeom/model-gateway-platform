@@ -346,7 +346,7 @@ const shell = readFileSync(new URL('../src/ConsoleShell.vue', import.meta.url), 
 const consoleNav = readFileSync(new URL('../src/consoleNavigation.ts', import.meta.url), 'utf8')
 
 test('ConsoleShell wires the flow designer page for organization and platform admins only', () => {
-  assert.match(shell, /defineAsyncComponent\(\(\) => import\('\.\/flow-designer\/FlowDesignerPage\.vue'\)\)/)
+  assert.match(shell, /lazyPage\(\(\) => import\('\.\/flow-designer\/FlowDesignerPage\.vue'\)\)/)
   assert.match(shell, /type PageKey = [^\n]*'flow-designer'/)
   assert.match(shell, /function knownPage\(value: string\): value is PageKey \{\s*return \[[^\]]*'flow-designer'/)
   assert.match(shell, /<FlowDesignerPage v-else-if="isOrgOrPlatformAdmin && page === 'flow-designer'"/)
