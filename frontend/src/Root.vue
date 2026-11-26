@@ -4,7 +4,7 @@ import ConsoleShell from './ConsoleShell.vue'
 import InviteRegistrationView from './InviteRegistrationView.vue'
 import LoginView from './LoginView.vue'
 import TotpOnboardingView from './TotpOnboardingView.vue'
-import { clearReplacedAccessTokens, logout, normalizeSession, refreshAuthentication, type MfaState, type Session, type User } from './api'
+import { CONNECTION_UNSTABLE_EVENT, clearReplacedAccessTokens, logout, normalizeSession, refreshAuthentication, type MfaState, type Session, type User } from './api'
 
 function clearStashedDrafts() {
   if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
@@ -146,6 +146,12 @@ function acceptPlatformToken(token: string) {
 }
 
 const sessionNotice = ref('')
+// Transport failures keep the session: show a non-blocking notice and let the 30s heartbeat recover.
+const connectionNotice = ref('')
+const CONNECTION_NOTICE = '서버 연결이 불안정합니다. 로그인은 유지되며 잠시 후 자동으로 다시 확인합니다.'
+function markConnectionUnstable() {
+  connectionNotice.value = CONNECTION_NOTICE
+}
 let jwtRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
 let sessionCheckInFlight: Promise<boolean> | null = null
@@ -170,6 +176,7 @@ function sessionExpiredNotice(reason?: string): string {
 }
 
 function clearSession() {
+  connectionNotice.value = ''
   clearStashedDrafts()
   clearJwtRefreshTimer()
   clearReplacedAccessTokens()
@@ -264,6 +271,10 @@ function onSessionExpiredEvent(event?: Event) {
   const reason = event && typeof event === 'object' && 'detail' in event
     ? (event as CustomEvent<{ reason?: string }>).detail?.reason
     : undefined
+  if (reason === 'server_unavailable') {
+    markConnectionUnstable()
+    return
+  }
   expireSession(reason)
 }
 
@@ -360,11 +371,11 @@ function verifyActiveSession(forceRefresh = false): Promise<boolean> {
           credentials: 'include'
         })
       } catch {
-        if (platformToken.value === expectedPlatformToken) expireSession('server_unavailable')
+        if (platformToken.value === expectedPlatformToken) markConnectionUnstable()
         return false
       }
       if (await isServerDownResponse(response)) {
-        if (platformToken.value === expectedPlatformToken) expireSession('server_unavailable')
+        if (platformToken.value === expectedPlatformToken) markConnectionUnstable()
         return false
       }
       if (response.status === 401 || response.status === 403) {
@@ -372,7 +383,7 @@ function verifyActiveSession(forceRefresh = false): Promise<boolean> {
         return false
       }
       if (!response.ok) {
-        if (platformToken.value === expectedPlatformToken) expireSession('server_unavailable')
+        if (platformToken.value === expectedPlatformToken) markConnectionUnstable()
         return false
       }
       const parsed = await readJsonSafely(response)
@@ -397,11 +408,11 @@ function verifyActiveSession(forceRefresh = false): Promise<boolean> {
           credentials: 'include'
         })
       } catch {
-        if (accessToken.value === expectedAccessToken) expireSession('server_unavailable')
+        if (accessToken.value === expectedAccessToken) markConnectionUnstable()
         return false
       }
       if (await isServerDownResponse(response)) {
-        if (accessToken.value === expectedAccessToken) expireSession('server_unavailable')
+        if (accessToken.value === expectedAccessToken) markConnectionUnstable()
         return false
       }
       if (response.ok) {
@@ -453,7 +464,7 @@ function verifyActiveSession(forceRefresh = false): Promise<boolean> {
       if (response.status === 401) {
         needsRefresh = true
       } else {
-        if (accessToken.value === expectedAccessToken) expireSession('server_unavailable')
+        if (accessToken.value === expectedAccessToken) markConnectionUnstable()
         return false
       }
     }
@@ -467,13 +478,17 @@ function verifyActiveSession(forceRefresh = false): Promise<boolean> {
         return true
       } catch (error) {
         if (accessToken.value === expectedAccessToken) {
-          expireSession(isServerUnavailableFailure(error) ? 'server_unavailable' : 'expired')
+          if (isServerUnavailableFailure(error)) markConnectionUnstable()
+          else expireSession('expired')
         }
         return false
       }
     }
     return true
-  })().finally(() => {
+  })().then(ok => {
+    if (ok) connectionNotice.value = ''
+    return ok
+  }).finally(() => {
     sessionCheckInFlight = null
   })
   return sessionCheckInFlight
@@ -583,6 +598,7 @@ onMounted(() => {
   window.addEventListener('aiconnect:session', onSessionEvent)
   window.addEventListener('aiconnect:mfa-required', onMfaRequiredEvent)
   window.addEventListener('aiconnect:session-expired', onSessionExpiredEvent)
+  window.addEventListener(CONNECTION_UNSTABLE_EVENT, markConnectionUnstable)
   window.addEventListener('hashchange', onHashChange)
   void restoreSession()
 })
@@ -591,6 +607,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('aiconnect:session', onSessionEvent)
   window.removeEventListener('aiconnect:mfa-required', onMfaRequiredEvent)
   window.removeEventListener('aiconnect:session-expired', onSessionExpiredEvent)
+  window.removeEventListener(CONNECTION_UNSTABLE_EVENT, markConnectionUnstable)
   window.removeEventListener('hashchange', onHashChange)
 })
 </script>
@@ -641,4 +658,6 @@ onBeforeUnmount(() => {
     @open-register="openRegisterFromLogin"
     @cancel-mfa="signOut"
   />
+  <!-- Outside the v-if chain above: a transport warning shown over the console. -->
+  <div v-if="connectionNotice && activeView === 'console'" class="connection-banner" role="status" aria-live="polite">{{ connectionNotice }}</div>
 </template>

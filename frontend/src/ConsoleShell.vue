@@ -1,30 +1,59 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, defineAsyncComponent, defineComponent, h, nextTick, onBeforeUnmount, onMounted, ref, type Component } from 'vue'
 import BaseModal from './BaseModal.vue'
 import DateTimePreferences from './DateTimePreferences.vue'
 import DashboardPage from './DashboardPage.vue'
 import ProjectsPage from './ProjectsPage.vue'
 import ScopedOverviewPage from './ScopedOverviewPage.vue'
 import SideNav from './SideNav.vue'
-const AuditLogPage = defineAsyncComponent(() => import('./AuditLogPage.vue'))
-const DeveloperPortalPage = defineAsyncComponent(() => import('./DeveloperPortalPage.vue'))
-const DevDocsPage = defineAsyncComponent(() => import('./DevDocsPage.vue'))
-const InfrastructurePage = defineAsyncComponent(() => import('./InfrastructurePage.vue'))
-const SystemStructurePage = defineAsyncComponent(() => import('./SystemStructurePage.vue'))
-const ExternalProvidersPage = defineAsyncComponent(() => import('./ExternalProvidersPage.vue'))
-const ServicesPage = defineAsyncComponent(() => import('./ServicesPage.vue'))
-const FlowDesignerPage = defineAsyncComponent(() => import('./flow-designer/FlowDesignerPage.vue'))
-const TeamsPage = defineAsyncComponent(() => import('./TeamsPage.vue'))
-const ObservabilityPage = defineAsyncComponent(() => import('./ObservabilityPage.vue'))
-const NotificationsPage = defineAsyncComponent(() => import('./NotificationsPage.vue'))
-const UsagePage = defineAsyncComponent(() => import('./UsagePage.vue'))
-const QuotaPage = defineAsyncComponent(() => import('./QuotaPage.vue'))
-const DataProtectionPage = defineAsyncComponent(() => import('./DataProtectionPage.vue'))
-const ApiPlaygroundPage = defineAsyncComponent(() => import('./ApiPlaygroundPage.vue'))
-const ModelPlaygroundPage = defineAsyncComponent(() => import('./ModelPlaygroundPage.vue'))
-const PlatformAdminPage = defineAsyncComponent(() => import('./PlatformAdminPage.vue'))
-const BetaOperatorPage = defineAsyncComponent(() => import('./BetaOperatorPage.vue'))
-const WorkspaceRelationship = defineAsyncComponent(() => import('./WorkspaceRelationship.vue'))
+
+/** Shown when a lazily loaded page chunk could not be fetched (e.g. an unstable connection). */
+const PageLoadError = defineComponent({
+  name: 'PageLoadError',
+  setup() {
+    const reload = () => {
+      if (typeof window !== 'undefined') window.location.reload()
+    }
+    return () => h('section', { class: 'page-load-error', role: 'alert' }, [
+      h('strong', '화면을 불러오지 못했습니다.'),
+      h('p', '서버 연결이 불안정해 이 화면의 구성 파일을 받지 못했습니다. 로그인은 유지됩니다.'),
+      h('button', { type: 'button', class: 'secondary-button', onClick: reload }, '새로고침')
+    ])
+  }
+})
+
+/** A page chunk that retries a failed or stalled download, then shows a visible error instead of an empty page. */
+function lazyPage(loader: () => Promise<unknown>): Component {
+  return defineAsyncComponent({
+    loader: loader as () => Promise<Component>,
+    timeout: 20_000,
+    errorComponent: PageLoadError,
+    onError(_error, retry, fail, attempts) {
+      if (attempts <= 2) setTimeout(retry, 800 * attempts)
+      else fail()
+    }
+  })
+}
+
+const AuditLogPage = lazyPage(() => import('./AuditLogPage.vue'))
+const DeveloperPortalPage = lazyPage(() => import('./DeveloperPortalPage.vue'))
+const DevDocsPage = lazyPage(() => import('./DevDocsPage.vue'))
+const InfrastructurePage = lazyPage(() => import('./InfrastructurePage.vue'))
+const SystemStructurePage = lazyPage(() => import('./SystemStructurePage.vue'))
+const ExternalProvidersPage = lazyPage(() => import('./ExternalProvidersPage.vue'))
+const ServicesPage = lazyPage(() => import('./ServicesPage.vue'))
+const FlowDesignerPage = lazyPage(() => import('./flow-designer/FlowDesignerPage.vue'))
+const TeamsPage = lazyPage(() => import('./TeamsPage.vue'))
+const ObservabilityPage = lazyPage(() => import('./ObservabilityPage.vue'))
+const NotificationsPage = lazyPage(() => import('./NotificationsPage.vue'))
+const UsagePage = lazyPage(() => import('./UsagePage.vue'))
+const QuotaPage = lazyPage(() => import('./QuotaPage.vue'))
+const DataProtectionPage = lazyPage(() => import('./DataProtectionPage.vue'))
+const ApiPlaygroundPage = lazyPage(() => import('./ApiPlaygroundPage.vue'))
+const ModelPlaygroundPage = lazyPage(() => import('./ModelPlaygroundPage.vue'))
+const PlatformAdminPage = lazyPage(() => import('./PlatformAdminPage.vue'))
+const BetaOperatorPage = lazyPage(() => import('./BetaOperatorPage.vue'))
+const WorkspaceRelationship = lazyPage(() => import('./WorkspaceRelationship.vue'))
 import {
   accountTierLabel,
   adminFetch,

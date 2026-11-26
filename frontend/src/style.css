@@ -732,3 +732,8 @@ kbd { padding: 3px 6px; border: 1px solid var(--border-strong); border-radius: 5
     overflow: hidden;
   }
 }
+
+/* Transport failures keep the session; this non-blocking notice explains the hiccup. */
+.connection-banner { position: fixed; z-index: 60; left: 50%; bottom: 18px; transform: translateX(-50%); max-width: min(560px, calc(100vw - 32px)); padding: 10px 16px; border: 1px solid var(--warning); border-radius: 10px; background: var(--warning-dim); color: var(--text); font-size: 13px; box-shadow: var(--shadow-soft); }
+.page-load-error { display: grid; gap: 10px; justify-items: start; max-width: 560px; margin: 32px auto; padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.page-load-error p { margin: 0; color: var(--muted); }

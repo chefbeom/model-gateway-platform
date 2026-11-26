@@ -732,7 +732,7 @@ test('Root and api cleanly exit to LoginView on time expiration, server shutdown
     'aiconnect.user': JSON.stringify(sampleUser)
   }, '#projects')
 
-  // C. Server shutdown / unreachable (network TypeError or 503) on reload -> cleanly exits to LoginView
+  // C. Server unreachable (network TypeError or 503) on reload -> session is kept with a connection warning
   for (const failureMode of ['network', '503']) {
     await withDomGlobals(async () => {
       globalThis.fetch = async url => {
@@ -746,9 +746,8 @@ test('Root and api cleanly exit to LoginView on time expiration, server shutdown
       const app = renderer.createApp(Root)
       app.mount(root)
       await flush()
-      assert.match(textContent(root), /^LOGIN_STEP:.*연결이 끊어졌거나 종료/)
-      assert.equal(globalThis.sessionStorage.getItem('aiconnect.accessToken'), null)
-      assert.equal(globalThis.window.location.hash, '')
+      assert.match(textContent(root), /^CONSOLE_USER.*서버 연결이 불안정/)
+      assert.notEqual(globalThis.sessionStorage.getItem('aiconnect.accessToken'), null)
       app.unmount()
     }, {
       'aiconnect.accessToken': makeJwt(600),
@@ -775,7 +774,7 @@ test('Root and api cleanly exit to LoginView on time expiration, server shutdown
     'aiconnect.platformToken': 'stale-break-glass-token'
   }, '#platform-admin')
 
-  // E. Active ConsoleShell exits immediately when adminFetch fails after refresh (redeploy/expiry) or 502 server shutdown
+  // E. Active ConsoleShell exits when adminFetch fails after refresh (redeploy/expiry); a 502 keeps the session
   for (const mode of ['redeploy-401', 'gateway-502']) {
     const initialJwt = makeJwt(600)
     await withDomGlobals(async () => {
@@ -803,9 +802,14 @@ test('Root and api cleanly exit to LoginView on time expiration, server shutdown
       failRequests = true
       await assert.rejects(() => api.adminFetch('/api/admin/organizations', { accessToken: initialJwt }))
       await flush()
-      assert.match(textContent(root), /^LOGIN_STEP:/)
-      assert.equal(globalThis.sessionStorage.getItem('aiconnect.accessToken'), null)
-      assert.equal(globalThis.window.location.hash, '')
+      if (mode === 'gateway-502') {
+        assert.match(textContent(root), /^CONSOLE_USER.*서버 연결이 불안정/)
+        assert.equal(globalThis.sessionStorage.getItem('aiconnect.accessToken'), initialJwt)
+      } else {
+        assert.match(textContent(root), /^LOGIN_STEP:/)
+        assert.equal(globalThis.sessionStorage.getItem('aiconnect.accessToken'), null)
+        assert.equal(globalThis.window.location.hash, '')
+      }
       app.unmount()
     }, {
       'aiconnect.accessToken': initialJwt,
@@ -954,9 +958,12 @@ test('Root and api cleanly exit to LoginView on time expiration, server shutdown
     await assert.rejects(() => api.setupTotp('expired-onboarding-jwt'))
     assert.deepEqual(expiredEvents, ['expired'])
 
+    const unstableEvents = []
+    globalThis.window.addEventListener('aiconnect:connection-unstable', e => unstableEvents.push(e.detail?.reason))
     globalThis.fetch = async () => ({ ok: false, status: 503, text: async () => 'Down', json: async () => { throw new SyntaxError('html') } })
     await assert.rejects(() => api.enrollTotp('onboarding-jwt', '123456'))
-    assert.deepEqual(expiredEvents, ['expired', 'server_unavailable'])
+    assert.deepEqual(expiredEvents, ['expired'])
+    assert.deepEqual(unstableEvents, ['server_unavailable'])
   })
 })
 

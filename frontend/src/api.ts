@@ -226,6 +226,14 @@ export function notifySessionExpired(reason: SessionExpiredReason = 'expired'): 
   dispatchWindowEvent<{ reason: SessionExpiredReason }>('aiconnect:session-expired', { reason })
 }
 
+/** Fired when a request fails for transport reasons (network error, 502/503/504, non-JSON 5xx such as an edge 52x).
+ *  The session stays valid: only the server can end it (401 after a failed refresh, or invalidation). */
+export const CONNECTION_UNSTABLE_EVENT = 'aiconnect:connection-unstable'
+
+export function notifyConnectionUnstable(): void {
+  dispatchWindowEvent<{ reason: 'server_unavailable' }>(CONNECTION_UNSTABLE_EVENT, { reason: 'server_unavailable' })
+}
+
 export function isServerUnavailableStatus(status: number): boolean {
   return status === 502 || status === 503 || status === 504
 }
@@ -409,25 +417,33 @@ async function sendWithSessionGuard(
     platformTokenPresent?: boolean
     networkMessage: string
     parseNonSession401?: (response: Response) => Promise<Error | null>
+    /** Idempotent requests (GET/HEAD) are retried once after a transport failure before giving up. */
+    retryTransient?: boolean
   }
 ): Promise<Response> {
-  const invoke = async (overrideToken?: string): Promise<Response> => {
+  // Transport failures (network error, 502/503/504, an edge's non-JSON 5xx) say nothing about the session,
+  // so they never log the user out: they surface as a connection warning and the request error.
+  const attempt = async (overrideToken: string | undefined, retriesLeft: number): Promise<Response> => {
     let response: Response
     try {
       response = await send(overrideToken)
     } catch (error) {
-      // An intentional abort (caller-side timeout/cancel) is not a server outage: never end the session for it.
+      // An intentional abort (caller-side timeout/cancel) is not a server outage.
       const name = typeof error === 'object' && error !== null ? (error as { name?: string }).name : undefined
       if (name === 'AbortError' || name === 'TimeoutError') throw error
-      notifySessionExpired('server_unavailable')
+      // Retry at once: the usual cause is one broken edge/origin connection, and a new request avoids it.
+      if (retriesLeft > 0) return attempt(overrideToken, retriesLeft - 1)
+      notifyConnectionUnstable()
       throw serverUnavailableError(options.networkMessage)
     }
     if (await isServerUnavailableResponse(response)) {
-      notifySessionExpired('server_unavailable')
-      throw serverUnavailableError('서버 점검 중이거나 연결이 종료되었습니다.', response.status)
+      if (retriesLeft > 0) return attempt(overrideToken, retriesLeft - 1)
+      notifyConnectionUnstable()
+      throw serverUnavailableError('서버 연결이 불안정하거나 점검 중입니다. 잠시 후 다시 시도하세요.', response.status)
     }
     return response
   }
+  const invoke = (overrideToken?: string): Promise<Response> => attempt(overrideToken, options.retryTransient ? 1 : 0)
 
   const first = await invoke()
   if (first.status !== 401) return first
@@ -447,7 +463,8 @@ async function sendWithSessionGuard(
   try {
     session = await refreshAuthentication()
   } catch (refreshError) {
-    notifySessionExpired(isServerUnavailableError(refreshError) ? 'server_unavailable' : 'expired')
+    if (isServerUnavailableError(refreshError)) notifyConnectionUnstable()
+    else notifySessionExpired('expired')
     throw refreshError
   }
 
@@ -551,7 +568,8 @@ export async function adminResponse(path: string, auth: AdminAuth, init: Request
     {
       allowRefresh: Boolean(auth.accessToken),
       platformTokenPresent: Boolean(auth.platformToken),
-      networkMessage: '서버와의 연결이 끊어져 세션을 종료합니다.'
+      networkMessage: '서버와의 연결이 불안정합니다. 잠시 후 다시 시도하세요.',
+      retryTransient: ['GET', 'HEAD'].includes((init.method ?? 'GET').toUpperCase())
     }
   )
 }

@@ -33,11 +33,11 @@ test('createRequestTimeout aborts the signal and reports timedOut', async () => 
   assert.equal(cleared.signal.aborted, false)
 })
 
-test('an aborted admin request does not raise session-expired, a network failure does', async () => {
+test('an aborted admin request raises nothing; a network failure is retried once, then warns without ending the session', async () => {
   const previousFetch = globalThis.fetch
   const previousWindow = globalThis.window
   const events = []
-  globalThis.window = { dispatchEvent: event => { events.push(event.detail?.reason); return true }, location: { origin: 'http://localhost' } }
+  globalThis.window = { dispatchEvent: event => { events.push(`${event.type}:${event.detail?.reason}`); return true }, location: { origin: 'http://localhost' } }
   try {
     globalThis.fetch = (_url, init) => new Promise((_resolve, reject) => {
       init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
@@ -50,9 +50,29 @@ test('an aborted admin request does not raise session-expired, a network failure
     assert.equal(timeout.timedOut(), true)
     assert.deepEqual(events, [])
 
-    globalThis.fetch = async () => { throw new TypeError('Failed to fetch') }
+    let calls = 0
+    globalThis.fetch = async () => { calls += 1; throw new TypeError('Failed to fetch') }
     await assert.rejects(api.adminFetch('/api/admin/x', { accessToken: 'tok' }), /연결/)
-    assert.deepEqual(events, ['server_unavailable'])
+    assert.equal(calls, 2, 'an idempotent GET is retried once')
+    assert.deepEqual(events, ['aiconnect:connection-unstable:server_unavailable'])
+
+    // A transient failure that recovers on the retry is invisible to the user.
+    events.length = 0
+    calls = 0
+    globalThis.fetch = async () => {
+      calls += 1
+      if (calls === 1) return { ok: false, status: 522, text: async () => '<html>edge</html>', json: async () => { throw new SyntaxError('html') }, clone() { return this } }
+      return { ok: true, status: 200, text: async () => '{"ok":true}', json: async () => ({ ok: true }), clone() { return this } }
+    }
+    assert.deepEqual(await api.adminFetch('/api/admin/x', { accessToken: 'tok' }), { ok: true })
+    assert.equal(calls, 2)
+    assert.deepEqual(events, [])
+
+    // Non-idempotent requests are never replayed automatically.
+    calls = 0
+    globalThis.fetch = async () => { calls += 1; throw new TypeError('Failed to fetch') }
+    await assert.rejects(api.adminFetch('/api/admin/x', { accessToken: 'tok' }, { method: 'POST', body: '{}' }), /연결/)
+    assert.equal(calls, 1)
   } finally {
     globalThis.fetch = previousFetch
     if (previousWindow === undefined) delete globalThis.window
