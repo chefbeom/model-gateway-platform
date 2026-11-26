@@ -6,7 +6,7 @@ import { createRenderer, defineComponent, h, nextTick, ref } from 'vue'
 import ts from 'typescript'
 import { typeScriptModuleUrl } from './loadTypeScript.mjs'
 
-function compileVueComponent(relativePath, id, extraReplacements = {}) {
+function compileVueComponentUrl(relativePath, id, extraReplacements = {}) {
   const source = readFileSync(new URL(relativePath, import.meta.url), 'utf8')
   const { descriptor } = parse(source)
   let script = ts.transpileModule(
@@ -21,12 +21,17 @@ function compileVueComponent(relativePath, id, extraReplacements = {}) {
     .replace(/from ['"]\.\/quotaVisualization['"]/g, 'from ' + JSON.stringify(typeScriptModuleUrl('../src/quotaVisualization.ts')))
     .replace(/from ['"]\.\/requestFeedback['"]/g, 'from ' + JSON.stringify(typeScriptModuleUrl('../src/requestFeedback.ts')))
     .replace(/from ['"]\.\/externalCapabilities['"]/g, 'from ' + JSON.stringify(typeScriptModuleUrl('../src/externalCapabilities.ts')))
+    .replace(/from ['"]\.\/consoleNavigation['"]/g, 'from ' + JSON.stringify(typeScriptModuleUrl('../src/consoleNavigation.ts')))
   for (const [pattern, replacementUrl] of Object.entries(extraReplacements)) {
     script = script
       .replace(new RegExp(`from ['"]${pattern}['"]`, 'g'), 'from ' + JSON.stringify(replacementUrl))
       .replace(new RegExp(`import\\(['"]${pattern}['"]\\)`, 'g'), `import(${JSON.stringify(replacementUrl)})`)
   }
-  return import('data:text/javascript;base64,' + Buffer.from(script).toString('base64'))
+  return 'data:text/javascript;base64,' + Buffer.from(script).toString('base64')
+}
+
+function compileVueComponent(relativePath, id, extraReplacements = {}) {
+  return import(compileVueComponentUrl(relativePath, id, extraReplacements))
 }
 
 function stubModuleUrl(exportCode) {
@@ -282,7 +287,8 @@ test('ConsoleShell hides org-only nav from PROJECT_DIRECTOR/GENERAL_USER and qui
     '\\./ModelPlaygroundPage\\.vue': emptyComponentStub('ModelPlaygroundPage'),
     '\\./PlatformAdminPage\\.vue': emptyComponentStub('PlatformAdminPage'),
     '\\./BetaOperatorPage\\.vue': emptyComponentStub('BetaOperatorPage'),
-    '\\./WorkspaceRelationship\\.vue': emptyComponentStub('WorkspaceRelationship')
+    '\\./WorkspaceRelationship\\.vue': emptyComponentStub('WorkspaceRelationship'),
+    '\\./SideNav\\.vue': compileVueComponentUrl('../src/SideNav.vue', 'side-nav-gov-test')
   }
   const { default: ConsoleShell } = await compileVueComponent('../src/ConsoleShell.vue', 'shell-gov-test', stubs)
 
@@ -328,7 +334,7 @@ test('ConsoleShell hides org-only nav from PROJECT_DIRECTOR/GENERAL_USER and qui
         assert.equal(navText.includes(hidden), false, `Org-only nav leaked to director: ${hidden}`)
       }
       assert.equal(globalThis.window.location.hash, '#dashboard')
-      walk(sideNav, el => el.tag === 'button' && textContent(el).includes('프로젝트·멤버·권한·API 키'))[0].props.onClick()
+      walk(sideNav, el => el.tag === 'button' && el.props.title === '프로젝트·멤버·권한·API 키')[0].props.onClick()
       await nextTick()
 
       // Open settings -> 계정 추가 -> quick-invite modal

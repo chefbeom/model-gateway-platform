@@ -343,6 +343,7 @@ test('installDraftAutoClear clears on session expiry, drops other users on sessi
 /* ---------------- 6. ConsoleShell source ---------------- */
 
 const shell = readFileSync(new URL('../src/ConsoleShell.vue', import.meta.url), 'utf8')
+const consoleNav = readFileSync(new URL('../src/consoleNavigation.ts', import.meta.url), 'utf8')
 
 test('ConsoleShell wires the flow designer page for organization and platform admins only', () => {
   assert.match(shell, /defineAsyncComponent\(\(\) => import\('\.\/flow-designer\/FlowDesignerPage\.vue'\)\)/)
@@ -350,14 +351,15 @@ test('ConsoleShell wires the flow designer page for organization and platform ad
   assert.match(shell, /function knownPage\(value: string\): value is PageKey \{\s*return \[[^\]]*'flow-designer'/)
   assert.match(shell, /<FlowDesignerPage v-else-if="isOrgOrPlatformAdmin && page === 'flow-designer'"/)
   const block = name => {
-    const start = shell.indexOf(`const ${name}`)
+    const start = consoleNav.indexOf(`const ${name}`)
     assert.ok(start >= 0, `${name} exists`)
-    return shell.slice(start, shell.indexOf('\n]', start))
+    return consoleNav.slice(start, consoleNav.indexOf('\n]', start))
   }
   assert.match(block('adminNavItems: NavItem[]'), /id: 'flow-designer'/)
   assert.doesNotMatch(block('directorNavItems: NavItem[]'), /flow-designer/)
   assert.doesNotMatch(block('developerNavItems: NavItem[]'), /flow-designer/)
-  assert.equal(shell.match(/id: 'flow-designer'/g).length, 1)
+  assert.equal(consoleNav.match(/id: 'flow-designer'/g).length, 1)
+  assert.doesNotMatch(shell, /id: 'flow-designer'/, 'nav items live only in consoleNavigation.ts')
 })
 
 /* ---------------- 7. static safety ---------------- */
@@ -571,7 +573,7 @@ test('a model-specific prompt round-trips through compile, plan and request', ()
 })
 
 test('ConsoleShell nav item uses the workflow terminology and keeps the old search words', () => {
-  const line = shell.split('\n').find(row => row.includes("id: 'flow-designer'"))
+  const line = consoleNav.split('\n').find(row => row.includes("id: 'flow-designer'"))
   assert.ok(line)
   assert.match(line, /label: '워크플로우 디자이너'/)
   assert.match(line, /description: '[^']*워크플로우[^']*'/)

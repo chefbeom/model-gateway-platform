@@ -75,7 +75,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - name: Frontend behavior tests
-        run: npm run test:docs && npm run test:quota && npm run test:topology && npm run test:project-security && npm run test:runtime-status && npm run test:date-time && npm run test:playground-response && npm run test:external-model-deletion && npm run test:external-capabilities && npm run test:beta-operator && npm run test:totp-hierarchy && npm run test:project-governance && npm run test:flow-designer && npm run test:services-page && npm run test:registration-modal
+        run: npm run test:docs && npm run test:quota && npm run test:topology && npm run test:project-security && npm run test:runtime-status && npm run test:date-time && npm run test:playground-response && npm run test:external-model-deletion && npm run test:external-capabilities && npm run test:beta-operator && npm run test:totp-hierarchy && npm run test:project-governance && npm run test:flow-designer && npm run test:services-page && npm run test:registration-modal && npm run test:side-nav
       - run: npm run build
 
   deployment-contract:
