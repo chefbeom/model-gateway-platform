@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { SERVICE_KEY_PATTERN, WORKFLOW_TEMPLATES } from './catalog'
-import { buildPalette } from './palette'
-import type { FlowCommand, FlowGraph, PaletteModelItem, ServiceFlowSnapshot, WorkflowTemplateId } from './types'
+import { buildPalette, shortModelName } from './palette'
+import type { FlowCommand, FlowGraph, PaletteConnectionGroup, PaletteModelItem, ServiceFlowSnapshot, WorkflowTemplateId } from './types'
 
 const props = defineProps<{ snapshot: ServiceFlowSnapshot; graph: FlowGraph; readOnly: boolean }>()
 const emit = defineEmits<{ command: [FlowCommand]; dismiss: [] }>()
@@ -20,12 +20,17 @@ const projectsHidden = computed(() => props.snapshot.projectsHidden === true)
 const projects = computed(() => buildPalette(props.snapshot, props.graph, { query: '', showInactive: true, mode: 'basic' }).find((g) => g.id === 'entry')?.projects ?? [])
 
 // Only models that can serve requests right now (availability !== 'inactive').
-function usable(groupId: 'llm-local' | 'llm-external'): PaletteModelItem[] {
+// Grouped by connection (same grouping as the palette).
+function usableGroups(groupId: 'llm-local' | 'llm-external'): PaletteConnectionGroup[] {
   const group = buildPalette(props.snapshot, props.graph, { query: '', showInactive: true, mode: 'basic' }).find((g) => g.id === groupId)
-  return (group?.models ?? []).filter((m) => m.availability !== 'inactive')
+  return (group?.connections ?? [])
+    .map((c) => ({ ...c, models: c.models.filter((m) => m.availability !== 'inactive') }))
+    .filter((c) => c.models.length > 0)
 }
-const localModels = computed(() => usable('llm-local'))
-const externalModels = computed(() => usable('llm-external'))
+const localGroups = computed(() => usableGroups('llm-local'))
+const externalGroups = computed(() => usableGroups('llm-external'))
+const localModels = computed<PaletteModelItem[]>(() => localGroups.value.flatMap((c) => c.models))
+const externalModels = computed<PaletteModelItem[]>(() => externalGroups.value.flatMap((c) => c.models))
 
 const externalDisabled = computed(() => template.value === 'internal-only')
 
@@ -146,19 +151,25 @@ function create() {
         <p v-if="localModels.length + externalModels.length === 0" class="fd-hint">사용 가능한 모델이 없습니다. 인프라 화면에서 모델을 활성화하세요.</p>
         <div v-if="localModels.length > 0" class="fd-choices">
           <span class="fd-subhead">로컬</span>
-          <label v-for="item in localModels" :key="item.deploymentId" class="fd-choice">
-            <input type="checkbox" :checked="deploymentIds.includes(item.deploymentId)" :disabled="readOnly" :aria-label="`로컬 LLM ${item.displayName}`" @change="onModel(item.deploymentId, $event)" />
-            <span>{{ item.displayName }}</span>
-            <small class="fd-source">{{ item.sourceName }}{{ item.availability === 'degraded' ? ' · 상태 확인 필요' : '' }}</small>
-          </label>
+          <template v-for="conn in localGroups" :key="conn.id">
+            <span class="fd-conn-head">{{ conn.label }}<small v-if="conn.detail"> · {{ conn.detail }}</small></span>
+            <label v-for="item in conn.models" :key="item.deploymentId" class="fd-choice" :title="item.displayName">
+              <input type="checkbox" :checked="deploymentIds.includes(item.deploymentId)" :disabled="readOnly" :aria-label="`로컬 LLM ${item.displayName}`" @change="onModel(item.deploymentId, $event)" />
+              <span>{{ shortModelName(item.displayName, item.providerModelId) }}</span>
+              <small v-if="item.availability === 'degraded'" class="fd-source">상태 확인 필요</small>
+            </label>
+          </template>
         </div>
         <div v-if="externalModels.length > 0" class="fd-choices">
           <span class="fd-subhead">외부</span>
-          <label v-for="item in externalModels" :key="item.deploymentId" class="fd-choice" :class="{ 'is-off': externalDisabled }">
-            <input type="checkbox" :checked="deploymentIds.includes(item.deploymentId)" :disabled="readOnly || externalDisabled" :aria-label="`외부 LLM ${item.displayName}`" @change="onModel(item.deploymentId, $event)" />
-            <span>{{ item.displayName }}</span>
-            <small class="fd-source">{{ item.sourceName }}{{ item.availability === 'degraded' ? ' · 상태 확인 필요' : '' }}</small>
-          </label>
+          <template v-for="conn in externalGroups" :key="conn.id">
+            <span class="fd-conn-head">{{ conn.label }}<small v-if="conn.detail"> · {{ conn.detail }}</small></span>
+            <label v-for="item in conn.models" :key="item.deploymentId" class="fd-choice" :class="{ 'is-off': externalDisabled }" :title="item.displayName">
+              <input type="checkbox" :checked="deploymentIds.includes(item.deploymentId)" :disabled="readOnly || externalDisabled" :aria-label="`외부 LLM ${item.displayName}`" @change="onModel(item.deploymentId, $event)" />
+              <span>{{ shortModelName(item.displayName, item.providerModelId) }}</span>
+              <small v-if="item.availability === 'degraded'" class="fd-source">상태 확인 필요</small>
+            </label>
+          </template>
         </div>
         <small v-if="modelError" class="fd-error" role="status">{{ modelError }}</small>
       </fieldset>
@@ -219,6 +230,8 @@ function create() {
 .fd-fieldset legend { padding: 0; margin-bottom: 4px; }
 .fd-choices { display: grid; gap: 4px; max-height: 150px; overflow-y: auto; padding: 2px; }
 .fd-subhead { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .04em; }
+.fd-conn-head { margin-top: 4px; color: var(--text-soft); font-size: 10px; font-weight: 800; }
+.fd-conn-head small { color: var(--muted); font-size: 9px; font-weight: 600; }
 .fd-choice { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); font-size: 11px; cursor: pointer; }
 .fd-choice input[type='checkbox'] { flex: none; width: 16px; min-height: 16px; height: 16px; padding: 0; }
 .fd-choice:hover { border-color: var(--accent-border); }

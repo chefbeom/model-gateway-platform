@@ -2,6 +2,7 @@
 import { computed, nextTick } from 'vue'
 import CapabilityPicker from '../CapabilityPicker.vue'
 import { GUARDRAIL_PRESETS, NODE_TYPES, PROMPT_HELP_COMMON, PROMPT_HELP_MODEL, describeEdge, describeNode, modelAvailability, nodeFacts, nodeSpec, presetOf } from './catalog'
+import { groupModelsByConnection, shortModelName } from './palette'
 import { insertableTypesForEdge, isBranchPrompt, promptScopeForSplice } from './workflow'
 import type {
   AddableNodeType,
@@ -243,17 +244,24 @@ const takenDeploymentIds = computed(() => {
 })
 
 const modelOptions = computed(() => {
-  const groups = [
-    { label: '로컬 LLM', items: [] as Array<{ id: string; label: string }> },
-    { label: '외부 LLM', items: [] as Array<{ id: string; label: string }> },
-  ]
-  const sorted = props.snapshot.catalog.deployments.slice().sort((x, y) => x.displayName.localeCompare(y.displayName, 'ko') || x.id.localeCompare(y.id))
-  for (const d of sorted) {
-    if (takenDeploymentIds.value.has(d.id)) continue
-    const inactive = modelAvailability(d, props.snapshot.catalog).availability === 'inactive'
-    groups[d.external ? 1 : 0].items.push({ id: d.id, label: `${d.displayName} (${d.providerModelId})${inactive ? ' (중지)' : ''}` })
+  const catalog = props.snapshot.catalog
+  const free = catalog.deployments.filter((d) => !takenDeploymentIds.value.has(d.id))
+  const groups: Array<{ key: string; label: string; items: Array<{ id: string; label: string }> }> = []
+  for (const external of [false, true]) {
+    for (const g of groupModelsByConnection(free.filter((d) => d.external === external), catalog)) {
+      groups.push({
+        key: g.connection.id,
+        label: (external ? '외부 · ' : '로컬 · ') + g.connection.label,
+        items: g.items.map((d) => {
+          const inactive = modelAvailability(d, catalog).availability === 'inactive'
+          const short = shortModelName(d.displayName, d.providerModelId)
+          const base = short !== d.displayName ? short : d.displayName + ' (' + d.providerModelId + ')'
+          return { id: d.id, label: base + (inactive ? ' (중지)' : '') }
+        }),
+      })
+    }
   }
-  return groups.filter((g) => g.items.length > 0)
+  return groups
 })
 
 function onModelReplace(event: Event) {
@@ -484,7 +492,7 @@ function insertOnEdge(type: AddableNodeType) {
             <template v-else-if="field.kind === 'model-replace'">
               <select :id="fieldId(field)" :aria-label="field.label" :value="currentDeploymentId" :disabled="fieldDisabled(field)" @change="onModelReplace">
                 <option v-if="!modelOptions.some((g) => g.items.some((i) => i.id === currentDeploymentId))" :value="currentDeploymentId" disabled>{{ view.title }} (현재)</option>
-                <optgroup v-for="group in modelOptions" :key="group.label" :label="group.label">
+                <optgroup v-for="group in modelOptions" :key="group.key" :label="group.label">
                   <option v-for="item in group.items" :key="item.id" :value="item.id">{{ item.label }}</option>
                 </optgroup>
               </select>

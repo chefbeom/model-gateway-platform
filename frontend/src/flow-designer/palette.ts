@@ -1,10 +1,14 @@
 import { NODE_TYPES, modelAvailability, projectNodeId, projectSignals, toneOf } from './catalog'
 import type {
   AddableNodeType,
+  ConnectionMeta,
+  DeploymentConnectionGroup,
   DeploymentInfo,
+  FlowCatalog,
   FlowGraph,
   HealthTone,
   ModelAvailability,
+  PaletteConnectionGroup,
   PaletteGroup,
   PaletteGroupId,
   PaletteModelItem,
@@ -23,6 +27,8 @@ const GROUP_LABELS: Record<PaletteGroupId, string> = {
   'llm-local': '로컬 LLM',
   'llm-external': '외부 LLM',
 }
+
+const UNKNOWN_CONNECTION = '알 수 없는 연결'
 
 const AVAILABILITY_ORDER: Record<ModelAvailability, number> = { active: 0, degraded: 1, inactive: 2 }
 
@@ -80,6 +86,65 @@ function compareText(a: string, b: string): number {
   return a.localeCompare(b, 'ko')
 }
 
+const MODEL_EXTENSIONS = /\.(gguf|bin|safetensors)$/i
+
+/**
+ * Card title for a model. Only path-like names (containing `/` or `\`) are shortened to the file basename without
+ * a common model extension; every other name is returned unchanged. `providerModelId` is the fallback for an empty name.
+ */
+export function shortModelName(displayName: string, providerModelId: string): string {
+  const name = displayName.trim() !== '' ? displayName : providerModelId
+  if (!/[\\/]/.test(name)) return name
+  const base = name.split(/[\\/]/).filter((part) => part !== '').pop() ?? ''
+  const short = base.replace(MODEL_EXTENSIONS, '')
+  return short !== '' ? short : name
+}
+
+/** Resolves the connection a deployment belongs to; missing catalog entries land in an "unknown connection". */
+export function connectionOf(d: DeploymentInfo, catalog: FlowCatalog): ConnectionMeta {
+  if (d.external) {
+    const provider = d.externalProviderId ? catalog.providers.find((p) => p.id === d.externalProviderId) : undefined
+    if (provider) return { id: `provider:${provider.id}`, kind: 'provider', label: provider.displayName, detail: provider.providerType, tone: toneOf(provider.enabled, provider.healthStatus), enabled: provider.enabled }
+    return { id: 'unknown-external', kind: 'provider', label: UNKNOWN_CONNECTION, detail: '', tone: 'unknown', enabled: true }
+  }
+  const endpoint = d.runtimeEndpointId ? catalog.endpoints.find((e) => e.id === d.runtimeEndpointId) : undefined
+  if (endpoint) {
+    return { id: `endpoint:${endpoint.id}`, kind: 'endpoint', label: endpoint.displayName, detail: [endpoint.runtimeType, endpoint.addressLabel].filter((x) => !!x).join(' · '), tone: toneOf(endpoint.enabled, endpoint.healthStatus), enabled: endpoint.enabled }
+  }
+  return { id: 'unknown-local', kind: 'endpoint', label: UNKNOWN_CONNECTION, detail: '', tone: 'unknown', enabled: true }
+}
+
+interface Sortable { availability: ModelAvailability; displayName: string; deploymentId: string }
+function compareModels(a: Sortable, b: Sortable): number {
+  return AVAILABILITY_ORDER[a.availability] - AVAILABILITY_ORDER[b.availability] || compareText(a.displayName, b.displayName) || compareText(a.deploymentId, b.deploymentId)
+}
+
+/**
+ * Groups deployments by their connection. Connections with any active model come first, the unknown connection last within its tier, then by label, then id.
+ * Inside a connection models are sorted active -> degraded -> inactive, then by name. Shared by the palette,
+ * the quick-start picker and the inspector's model swap select.
+ */
+export function groupModelsByConnection(deployments: DeploymentInfo[], catalog: FlowCatalog): DeploymentConnectionGroup[] {
+  const byId = new Map<string, { connection: ConnectionMeta; items: Array<{ d: DeploymentInfo; availability: ModelAvailability }>; activeCount: number }>()
+  for (const d of deployments) {
+    const connection = connectionOf(d, catalog)
+    const entry = byId.get(connection.id) ?? { connection, items: [], activeCount: 0 }
+    const availability = modelAvailability(d, catalog).availability
+    entry.items.push({ d, availability })
+    if (availability === 'active') entry.activeCount += 1
+    byId.set(connection.id, entry)
+  }
+  return [...byId.values()]
+    .sort((a, b) => Number(b.activeCount > 0) - Number(a.activeCount > 0) || Number(a.connection.id.startsWith('unknown-')) - Number(b.connection.id.startsWith('unknown-')) || compareText(a.connection.label, b.connection.label) || compareText(a.connection.id, b.connection.id))
+    .map((g) => ({
+      connection: g.connection,
+      activeCount: g.activeCount,
+      items: g.items
+        .sort((a, b) => compareModels({ availability: a.availability, displayName: a.d.displayName, deploymentId: a.d.id }, { availability: b.availability, displayName: b.d.displayName, deploymentId: b.d.id }))
+        .map((x) => x.d),
+    }))
+}
+
 /** §9: the grouped, sorted and filtered palette model. Pure: the component only renders this. */
 export function buildPalette(snapshot: ServiceFlowSnapshot, graph: FlowGraph, options: PaletteOptions): PaletteGroup[] {
   const query = options.query.trim().toLowerCase()
@@ -110,7 +175,7 @@ export function buildPalette(snapshot: ServiceFlowSnapshot, graph: FlowGraph, op
         guarded: projectSignals(p).length > 0,
       }))
       .sort((a, b) => compareText(a.name, b.name) || compareText(a.projectId, b.projectId))
-  groups.push({ id: 'entry', label: GROUP_LABELS.entry, nodes: [], projects, models: [], hiddenCount: 0 })
+  groups.push({ id: 'entry', label: GROUP_LABELS.entry, nodes: [], projects, models: [], connections: [], hiddenCount: 0 })
 
   for (const [id, types] of nodeGroups) {
     groups.push({
@@ -119,23 +184,32 @@ export function buildPalette(snapshot: ServiceFlowSnapshot, graph: FlowGraph, op
       nodes: types.filter(wanted).map((t) => nodeItem(t, graph, snapshot)),
       projects: [],
       models: [],
+      connections: [],
       hiddenCount: 0,
     })
   }
 
   for (const external of [false, true]) {
     const id: PaletteGroupId = external ? 'llm-external' : 'llm-local'
-    const all = snapshot.catalog.deployments
-      .filter((d) => d.external === external)
-      .map((d) => modelItem(d, graph, snapshot))
-      .sort((a, b) => AVAILABILITY_ORDER[a.availability] - AVAILABILITY_ORDER[b.availability] || compareText(a.displayName, b.displayName) || compareText(a.deploymentId, b.deploymentId))
+    const connections: PaletteConnectionGroup[] = []
     let hiddenCount = 0
-    const models = all.filter((m) => {
-      if (searching || options.showInactive || m.availability !== 'inactive' || m.onCanvas) return true
-      hiddenCount += 1
-      return false
-    })
-    groups.push({ id, label: GROUP_LABELS[id], nodes: [], projects: [], models, hiddenCount })
+    for (const g of groupModelsByConnection(snapshot.catalog.deployments.filter((d) => d.external === external), snapshot.catalog)) {
+      const all = g.items.map((d) => modelItem(d, graph, snapshot))
+      let hidden = 0
+      const visible = all.filter((m) => {
+        if (searching || options.showInactive || m.availability !== 'inactive' || m.onCanvas) return true
+        hidden += 1
+        return false
+      })
+      hiddenCount += hidden
+      // A disabled connection whose models are all hidden is dropped (the group-level "hidden" toggle still reveals it);
+      // an enabled one stays as a header so users know it exists.
+      if (visible.length === 0 && !g.connection.enabled) continue
+      connections.push({ ...g.connection, models: visible, activeCount: g.activeCount, totalCount: all.length, hiddenCount: hidden })
+    }
+    // Flattened list keeps the historical global order (availability, then name).
+    const models = connections.flatMap((c) => c.models).sort(compareModels)
+    groups.push({ id, label: GROUP_LABELS[id], nodes: [], projects: [], models, connections, hiddenCount })
   }
 
   if (!searching) return groups
@@ -146,9 +220,14 @@ export function buildPalette(snapshot: ServiceFlowSnapshot, graph: FlowGraph, op
     const groupHit = matches(g.label, kindWord(g))
     const nodes = groupHit ? g.nodes : g.nodes.filter((n) => matches(n.label, n.description, NODE_TYPES[n.nodeType].keywords))
     const projectItems = groupHit ? g.projects : g.projects.filter((p) => matches(p.name, p.status))
-    const models = groupHit ? g.models : g.models.filter((m) => matches(m.displayName, m.providerModelId, m.sourceName))
+    const connections = groupHit
+      ? g.connections
+      : g.connections
+        .map((c) => (matches(c.label, c.detail) ? c : { ...c, models: c.models.filter((m) => matches(m.displayName, m.providerModelId, m.sourceName)) }))
+        .filter((c) => c.models.length > 0)
+    const models = groupHit ? g.models : connections.flatMap((c) => c.models).sort(compareModels)
     if (nodes.length + projectItems.length + models.length === 0) continue
-    result.push({ ...g, nodes, projects: projectItems, models, hiddenCount: 0 })
+    result.push({ ...g, nodes, projects: projectItems, models, connections, hiddenCount: 0 })
   }
   return result
 }

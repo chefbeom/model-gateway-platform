@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { llmNodeId, projectNodeId } from './catalog'
-import { buildPalette } from './palette'
-import type { AddableNodeType, DesignerMode, FlowCommand, FlowGraph, HealthTone, PaletteGroupId, PaletteModelItem, PaletteNodeItem, PaletteProjectItem, ServiceFlowSnapshot } from './types'
+import { buildPalette, shortModelName } from './palette'
+import type { AddableNodeType, DesignerMode, FlowCommand, FlowGraph, HealthTone, PaletteConnectionGroup, PaletteGroupId, PaletteModelItem, PaletteNodeItem, PaletteProjectItem, ServiceFlowSnapshot } from './types'
 
 const DND_MIME = 'application/x-aiconnect-flow-node'
 
@@ -13,6 +13,11 @@ const query = ref('')
 const showInactive = ref(false)
 // In-memory only: group id -> collapsed.
 const collapsed = ref<Record<string, boolean>>({})
+
+// In-memory only: 'groupId/connectionId' -> user override (true = open).
+// Default: open while searching or when the connection shows <= CONN_OPEN_LIMIT models, otherwise collapsed.
+const CONN_OPEN_LIMIT = 8
+const connOverride = ref<Record<string, boolean>>({})
 
 const TONE_LABEL: Record<HealthTone, string> = { healthy: '정상', warning: '주의', error: '오류', muted: '비활성', unknown: '미확인' }
 
@@ -31,6 +36,24 @@ function toggleGroup(id: PaletteGroupId) {
 
 function itemCount(g: { nodes: unknown[]; projects: unknown[]; models: unknown[] }): number {
   return g.nodes.length + g.projects.length + g.models.length
+}
+
+function connKey(groupId: PaletteGroupId, conn: PaletteConnectionGroup): string {
+  return groupId + '/' + conn.id
+}
+
+function connOpen(groupId: PaletteGroupId, conn: PaletteConnectionGroup): boolean {
+  if (searching.value) return true
+  return connOverride.value[connKey(groupId, conn)] ?? conn.models.length <= CONN_OPEN_LIMIT
+}
+
+function toggleConn(groupId: PaletteGroupId, conn: PaletteConnectionGroup) {
+  if (searching.value) return
+  connOverride.value = { ...connOverride.value, [connKey(groupId, conn)]: !connOpen(groupId, conn) }
+}
+
+function connTitle(conn: PaletteConnectionGroup): string {
+  return [conn.label, conn.detail, '활성 ' + conn.activeCount + ' / 전체 ' + conn.totalCount].filter((x) => x !== '').join(' · ')
 }
 
 /* ------------------------------ click / drag ------------------------------ */
@@ -136,29 +159,45 @@ function nodeTitle(item: PaletteNodeItem): string {
             </span>
           </button>
 
-          <button
-            v-for="item in group.models"
-            :key="item.deploymentId"
-            type="button"
-            class="fd-item"
-            :class="{ 'is-dimmed': item.availability === 'inactive' }"
-            :disabled="readOnly && !item.onCanvas"
-            :draggable="!readOnly && !item.onCanvas"
-            :aria-label="`${item.displayName} ${item.onCanvas ? '선택' : '워크플로우에 추가'}`"
-            @click="clickModel(item)"
-            @dragstart="dragStart($event, 'llm', item.deploymentId)"
-          >
-            <span class="fd-item-icon fd-item-icon--llm" aria-hidden="true">◆</span>
-            <span class="fd-item-main">
-              <strong :title="item.displayName">{{ item.displayName }}</strong>
-              <small :title="item.providerModelId">{{ item.providerModelId }}</small>
-              <small class="fd-source">{{ item.sourceName }}</small>
-              <span class="fd-chips">
-                <span class="fd-chip" :class="`fd-chip--${item.tone}`">{{ item.availability === 'inactive' ? item.reason : TONE_LABEL[item.tone] }}</span>
-                <span v-if="item.onCanvas" class="fd-chip fd-chip--accent">워크플로우에 있음</span>
+          <div v-for="conn in group.connections" :key="conn.id" class="fd-conn" :data-connection="conn.id">
+            <button type="button" class="fd-conn-head" :aria-expanded="connOpen(group.id, conn)" :title="connTitle(conn)" @click="toggleConn(group.id, conn)">
+              <span class="fd-caret" aria-hidden="true">{{ connOpen(group.id, conn) ? '▾' : '▸' }}</span>
+              <span class="fd-dot" :class="`fd-dot--${conn.tone}`" aria-hidden="true"></span>
+              <span class="fd-conn-main">
+                <strong>{{ conn.label }}</strong>
+                <small v-if="conn.detail">{{ conn.detail }}</small>
               </span>
-            </span>
-          </button>
+              <span class="fd-count" :title="`활성 ${conn.activeCount} / 전체 ${conn.totalCount}`">{{ conn.activeCount }}/{{ conn.totalCount }}</span>
+              <span v-if="conn.hiddenCount > 0" class="fd-conn-hidden">숨김 {{ conn.hiddenCount }}</span>
+            </button>
+            <div v-if="connOpen(group.id, conn)" class="fd-conn-body">
+              <button
+                v-for="item in conn.models"
+                :key="item.deploymentId"
+                type="button"
+                class="fd-item"
+                :class="{ 'is-dimmed': item.availability === 'inactive' }"
+                :disabled="readOnly && !item.onCanvas"
+                :draggable="!readOnly && !item.onCanvas"
+                :aria-label="`${item.displayName} ${item.onCanvas ? '선택' : '워크플로우에 추가'}`"
+                :title="item.displayName"
+                @click="clickModel(item)"
+                @dragstart="dragStart($event, 'llm', item.deploymentId)"
+              >
+                <span class="fd-item-icon fd-item-icon--llm" aria-hidden="true">◆</span>
+                <span class="fd-item-main">
+                  <strong>{{ shortModelName(item.displayName, item.providerModelId) }}</strong>
+                  <small v-if="shortModelName(item.displayName, item.providerModelId) !== item.displayName">{{ item.displayName }}</small>
+                  <small v-else>{{ item.providerModelId }}</small>
+                  <span class="fd-chips">
+                    <span class="fd-chip" :class="`fd-chip--${item.tone}`">{{ item.availability === 'inactive' ? item.reason : TONE_LABEL[item.tone] }}</span>
+                    <span v-if="item.onCanvas" class="fd-chip fd-chip--accent">워크플로우에 있음</span>
+                  </span>
+                </span>
+              </button>
+              <p v-if="conn.models.length === 0" class="fd-empty">표시할 모델이 없습니다.</p>
+            </div>
+          </div>
 
           <button v-if="group.hiddenCount > 0" type="button" class="fd-hidden-link" @click="showInactive = true">중지·미로드 {{ group.hiddenCount }}개 숨김 · 표시</button>
           <button v-else-if="showInactive && (group.id === 'llm-local' || group.id === 'llm-external') && group.models.some((m) => m.availability === 'inactive' && !m.onCanvas)" type="button" class="fd-hidden-link" @click="showInactive = false">중지·미로드 숨기기</button>
@@ -239,6 +278,18 @@ function nodeTitle(item: PaletteNodeItem): string {
 .fd-chip--warning { border-color: var(--warning); background: var(--warning-dim); color: var(--warning); }
 .fd-chip--error { border-color: var(--danger); background: var(--danger-dim); color: var(--danger); }
 .fd-chip--accent { border-color: var(--accent-border); background: var(--accent-dim); color: var(--accent-strong); }
+.fd-conn { display: grid; gap: 6px; }
+.fd-conn-head { width: 100%; display: flex; align-items: center; gap: 6px; padding: 6px 8px; text-align: left; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-3); color: var(--text); cursor: pointer; }
+.fd-conn-head:hover { border-color: var(--accent-border); }
+.fd-conn-main { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.fd-conn-main strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 10px; font-weight: 800; }
+.fd-conn-main small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font-size: 8px; }
+.fd-conn-hidden { color: var(--faint); font-size: 8px; white-space: nowrap; }
+.fd-conn-body { display: grid; gap: 6px; padding-left: 8px; border-left: 2px solid var(--border); }
+.fd-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.fd-dot--healthy { background: var(--accent); }
+.fd-dot--warning { background: var(--warning); }
+.fd-dot--error { background: var(--danger); }
 .fd-hidden-link { padding: 4px 2px; border: 0; background: transparent; color: var(--accent-strong); font-size: 10px; font-weight: 700; text-align: left; cursor: pointer; }
 .fd-hidden-link:hover { text-decoration: underline; }
 </style>

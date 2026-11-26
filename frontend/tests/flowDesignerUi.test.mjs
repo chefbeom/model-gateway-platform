@@ -61,7 +61,7 @@ test('FlowInspector: v2 fields, protected deletion, model replace and edge panel
 
 test('FlowPalette: renders buildPalette output without its own sorting', () => {
   const text = read('FlowPalette.vue')
-  assert.match(text, /import \{ buildPalette \} from '\.\/palette'/)
+  assert.match(text, /import \{ buildPalette(, shortModelName)? \} from '\.\/palette'/)
   assert.doesNotMatch(text, /localeCompare/)
   assert.doesNotMatch(text, /\.sort\(/)
   assert.match(text, /중지·미로드/)
@@ -111,4 +111,19 @@ test('no browser storage, raw HTML injection or hardcoded colours in the Vue com
     assert.doesNotMatch(text, /#[0-9a-fA-F]{3,8}\b|rgba?\(/, `${name} must use CSS variables only`)
     assert.doesNotMatch(text, /bindTarget|deployment-binding/, `${name} must not use legacy v1 members`)
   }
+})
+
+test('connection groups: palette sub-groups, quick start headings and inspector optgroups share one grouping', () => {
+  const palette = read('FlowPalette.vue')
+  assert.match(palette, /v-for="conn in group\.connections"/)
+  assert.match(palette, /class="fd-conn-head"[^>]*:aria-expanded="connOpen\(group\.id, conn\)"/)
+  assert.match(palette, /shortModelName\(item\.displayName, item\.providerModelId\)/)
+  assert.match(palette, /@dragstart="dragStart\(\$event, 'llm', item\.deploymentId\)"/)
+  assert.match(palette, /@click="clickModel\(item\)"/)
+  const quick = read('FlowQuickStart.vue')
+  assert.match(quick, /conn\.label/)
+  assert.match(quick, /shortModelName/)
+  const inspector = read('FlowInspector.vue')
+  assert.match(inspector, /groupModelsByConnection/)
+  assert.match(inspector, /<optgroup v-for="group in modelOptions" :key="group\.key"/)
 })
