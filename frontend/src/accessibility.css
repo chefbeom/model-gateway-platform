@@ -16,13 +16,11 @@
 
 body { font-size: 15px; }
 
-.nav-group > p,
 .scope-card > span,
 .card-kicker,
 .data-table th,
 .modal-kicker { font-size: 10px; }
 
-.nav-group button strong,
 .scope-card select,
 .runtime-node strong,
 .quick-grid b,
@@ -32,7 +30,6 @@ body { font-size: 15px; }
 .modal-header p,
 .settings-section-title { font-size: 12px; }
 
-.nav-group button small,
 .scope-card small,
 .metric-card > span,
 .metric-card small,

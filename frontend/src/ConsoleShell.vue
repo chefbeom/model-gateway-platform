@@ -5,6 +5,7 @@ import DateTimePreferences from './DateTimePreferences.vue'
 import DashboardPage from './DashboardPage.vue'
 import ProjectsPage from './ProjectsPage.vue'
 import ScopedOverviewPage from './ScopedOverviewPage.vue'
+import SideNav from './SideNav.vue'
 const AuditLogPage = defineAsyncComponent(() => import('./AuditLogPage.vue'))
 const DeveloperPortalPage = defineAsyncComponent(() => import('./DeveloperPortalPage.vue'))
 const DevDocsPage = defineAsyncComponent(() => import('./DevDocsPage.vue'))
@@ -35,6 +36,7 @@ import {
   type User
 } from './api'
 import { copyText } from './clipboard'
+import { buildNavSections, docsNavItem, navCategoryLabel, navExpansionMode, navItemsFor, searchNavItems, type NavRole } from './consoleNavigation'
 import { formatDateTime } from './dateTime'
 
 type Theme = 'dark' | 'light'
@@ -45,54 +47,11 @@ type Organization = { id: string; name: string; status: string }
 type AccessibleProject = { id: string; name: string; status: string }
 type Membership = { organizationId: string; role: OrganizationRole }
 type SessionContext = { platformAdmin: boolean; accountTier?: AccountTier; totpEnabled?: boolean; mfaState?: MfaState; memberships: Membership[] }
-type NavItem = { id: Exclude<PageKey, 'docs'>; label: string; description: string; keywords: string; icon: string; group: string }
 
 const props = defineProps<{ user: User | null; platformTokenSession: boolean; theme: Theme; fontScale: FontScale }>()
 const emit = defineEmits<{ logout: []; toggleTheme: []; fontScaleChanged: [value: FontScale] }>()
 
 const auth = computed<AdminAuth>(() => ({ accessToken: sessionStorage.getItem('aiconnect.accessToken') ?? undefined, platformToken: sessionStorage.getItem('aiconnect.platformToken') ?? undefined }))
-const adminNavItems: NavItem[] = [
-  { id: 'dashboard', label: '대시보드', description: '요청·장애·런타임 핵심 지표', keywords: 'overview health dashboard', icon: '◔', group: '운영' },
-  { id: 'portal', label: '내 API', description: '프로젝트·사용 모델·API 키', keywords: 'my api project model key', icon: '⌘', group: '워크스페이스' },
-  { id: 'infrastructure', label: '인프라스트럭처', description: '노드·Runtime·배포 모델', keywords: 'server gpu lm studio endpoint model', icon: '◇', group: '운영' },
-  { id: 'system', label: '시스템 구조', description: '요청 경로 · Target · 서버 연결 상태', keywords: '시스템 구조 연결도 상태 architecture structure topology infrastructure provider llm team project api key', icon: '~', group: 'Operations' },
-  { id: 'external', label: '외부 AI', description: 'OpenAI·승인·수동·자동 Failover', keywords: 'openai external provider cloud approval failover', icon: '◎', group: '운영' },
-  { id: 'services', label: 'LLM 서비스', description: '논리 모델과 라우팅 정책', keywords: 'service model failover routing', icon: '▣', group: '운영' },
-  { id: 'flow-designer', label: '워크플로우 디자이너', description: '노드와 간선으로 서비스 워크플로우 구성 · 실험', keywords: 'workflow designer flow canvas node edge graph pipeline routing 워크플로우 노드 간선 플로우 디자이너 배치 캔버스 실험 experimental', icon: '⌬', group: '운영' },
-  { id: 'teams', label: '팀과 부서', description: '부서·역할·프로젝트 소유', keywords: 'team department role audit', icon: '⌘', group: '워크스페이스 관리' },
-  { id: 'projects', label: '프로젝트', description: '프로젝트·권한·API 키', keywords: 'project key quota credential', icon: '⌘', group: '워크스페이스 관리' },
-  { id: 'relationship', label: '조직 관계도', description: '최고 관리자·조직·프로젝트·구성원 계층도', keywords: 'organization relationship hierarchy chart tree member manager 조직 관계도 계층도', icon: '◈', group: '워크스페이스' },
-  { id: 'observability', label: '관측성', description: '요청·장애·Failover 추적', keywords: 'request incident failover monitor', icon: '◉', group: '관측' },
-  { id: 'usage', label: '사용량', description: '토큰·비용·API 호출 이력', keywords: 'usage token cost billing', icon: '◴', group: '관측' },
-  { id: 'notifications', label: '알림 채널', description: 'Discord와 Telegram 연동', keywords: 'notification discord telegram alert', icon: '◇', group: '시스템' },
-  { id: 'audit', label: '감사 로그', description: '관리자 변경·열람 증적', keywords: 'audit log admin change security', icon: '◎', group: '시스템' },
-  { id: 'quotas', label: '요금·한도', description: '범위별 예산과 초과 차단', keywords: 'budget quota limit spend cost', icon: '₩', group: '관측' },
-  { id: 'data-protection', label: '데이터 보호', description: '민감정보 탐지·외부 전송 정책', keywords: 'security privacy dlp pii secret local only external block', icon: '◇', group: '시스템' },
-  { id: 'playground', label: 'API 테스트', description: '모델 연결·Chat Completions 테스트', keywords: 'playground api test chat completion models', icon: '▷', group: '개발자 도구' },
-  { id: 'model-playground', label: '모델 테스트 콘솔', description: '등록된 Runtime·Provider 모델 직접 대화 테스트', keywords: 'model playground chat runtime provider streaming file test', icon: '◈', group: '개발자 도구' }
-]
-const directorNavItems: NavItem[] = [
-  { id: 'dashboard', label: '대시보드', description: '접근 범위 요약', keywords: 'dashboard overview', icon: '◔', group: '홈' },
-  { id: 'observability', label: '관측성', description: '접근 범위 요청 이력', keywords: 'request monitor', icon: '◉', group: '관측·비용' },
-  { id: 'projects', label: '프로젝트', description: '프로젝트·멤버·권한·API 키', keywords: 'project key member delegation policy', icon: '⌘', group: '워크스페이스 관리' },
-  { id: 'relationship', label: '조직 관계도', description: '최고 관리자·조직·프로젝트·구성원 계층도', keywords: 'organization relationship hierarchy chart tree member manager 조직 관계도 계층도', icon: '◈', group: '워크스페이스' },
-  { id: 'quotas', label: '요금·한도', description: '프로젝트 예산과 관리자 상한', keywords: 'budget quota limit spend cost ceiling', icon: '₩', group: '내 작업' },
-  { id: 'data-protection', label: '데이터 보호', description: '프로젝트·API 키 민감정보 정책', keywords: 'security privacy dlp pii secret local only', icon: '◇', group: '내 작업' },
-  { id: 'portal', label: '내 API', description: '프로젝트·사용 모델·API 키', keywords: 'my api project model key', icon: '⌘', group: '내 작업' },
-  { id: 'usage', label: 'API 사용량', description: '프로젝트·API 키 토큰·비용 이력', keywords: 'usage token cost request', icon: '◴', group: '내 작업' },
-  { id: 'playground', label: 'API 테스트', description: '모델 연결·Chat Completions 테스트', keywords: 'playground api test chat completion models', icon: '▷', group: '내 작업' }
-]
-const platformNavItem: NavItem = { id: 'platform', label: 'Platform Admin', description: '조직·사용자·키·데이터 정리', keywords: 'platform admin organization user api key cleanup purge', icon: '⚡', group: '시스템' }
-const developerNavItems: NavItem[] = [
-  { id: 'dashboard', label: '대시보드', description: '접근 범위 요약', keywords: 'dashboard overview', icon: '◔', group: '홈' },
-  { id: 'observability', label: '관측성', description: '내 API 키 요청 이력', keywords: 'request monitor', icon: '◉', group: '관측·비용' },
-  { id: 'quotas', label: '요금·한도', description: '내 API 키 추정 비용', keywords: 'budget quota cost', icon: '₩', group: '관측·비용' },
-  { id: 'portal', label: '내 API', description: '프로젝트·사용 모델·API 키', keywords: 'my api project model key', icon: '⌘', group: '내 작업' },
-  { id: 'relationship', label: '조직 관계도', description: '최고 관리자·조직·프로젝트·구성원 계층도', keywords: 'organization relationship hierarchy chart tree member manager 조직 관계도 계층도', icon: '◈', group: '워크스페이스' },
-  { id: 'usage', label: 'API 사용량', description: '내 API 키의 토큰·비용·요청', keywords: 'usage token cost request', icon: '◴', group: '내 작업' },
-  { id: 'playground', label: 'API 테스트', description: '모델 연결·Chat Completions 테스트', keywords: 'playground api test chat completion models', icon: '▷', group: '내 작업' }
-]
-const docsItem = { id: 'docs' as const, label: 'Dev-Docs', description: '제품 가이드 · API 참조', keywords: 'docs manual guide api lm studio' }
 const fontScaleOptions: Array<{ value: FontScale; label: string; description: string }> = [
   { value: '100', label: '기본', description: '100%' }, { value: '115', label: '권장', description: '115%' },
   { value: '125', label: '크게', description: '125%' }, { value: '135', label: '매우 크게', description: '135%' }
@@ -148,20 +107,12 @@ const isOrgOrPlatformAdmin = computed(() =>
 )
 const isProjectDirector = computed(() => !isOrgOrPlatformAdmin.value && effectiveAccountTier.value === 'PROJECT_DIRECTOR')
 const canInviteAccounts = computed(() => isOrgOrPlatformAdmin.value || isProjectDirector.value)
-const navItems = computed(() => [
-  ...(isOrgOrPlatformAdmin.value
-    ? (platformAdmin.value ? [...adminNavItems, platformNavItem] : adminNavItems)
-    : isProjectDirector.value
-      ? directorNavItems
-      : developerNavItems),
-  ...(platformAdmin.value || betaOperator.value ? [{id:'beta' as const,label:'초대 서비스 운영',description:'초대·접근·운영 상태',keywords:'beta invitation invite',icon:'◇',group:'운영'}] : [])
-].map(item => ({ ...item, group: item.id === 'dashboard' ? '홈'
-  : ['relationship', 'projects', 'teams', 'portal', 'data-protection'].includes(item.id) ? '워크스페이스'
-  : ['playground', 'model-playground'].includes(item.id) ? '개발자 도구'
-  : ['observability', 'usage', 'quotas'].includes(item.id) ? '관측·비용' : '인프라·시스템' })))
-const groups = computed(() => ['홈', '워크스페이스', '개발자 도구', '관측·비용', '인프라·시스템'].filter(group => navItems.value.some(item => item.group === group)))
-const allNavigation = computed(() => [...navItems.value, docsItem])
-const currentNav = computed(() => allNavigation.value.find(item => item.id === page.value) ?? navItems.value[0] ?? docsItem)
+const navRole = computed<NavRole>(() => isOrgOrPlatformAdmin.value ? 'admin' : isProjectDirector.value ? 'director' : 'developer')
+const navItems = computed(() => navItemsFor({ role: navRole.value, platformAdmin: platformAdmin.value, betaOperator: betaOperator.value }))
+const navSections = computed(() => buildNavSections(navItems.value))
+const navMode = computed(() => navExpansionMode(navRole.value))
+const allNavigation = computed(() => [...navItems.value, docsNavItem])
+const currentNav = computed(() => allNavigation.value.find(item => item.id === page.value) ?? navItems.value[0] ?? docsNavItem)
 const currentOrganization = computed(() => organizations.value.find(item => item.id === organizationId.value) ?? null)
 const profileName = computed(() => profileLabel.value.trim() || props.user?.email || 'Platform session')
 const profileRole = computed(() => {
@@ -176,10 +127,7 @@ const totpBadgeLabel = computed(() => {
 const issuedInviteLink = computed(() =>
   issuedAccountInvite.value ? registrationUrl(issuedAccountInvite.value.registrationPath) : ''
 )
-const searchResults = computed(() => {
-  const query = search.value.trim().toLowerCase()
-  return query ? allNavigation.value.filter(item => `${item.label} ${item.description} ${item.keywords}`.toLowerCase().includes(query)) : allNavigation.value
-})
+const searchResults = computed(() => searchNavItems(allNavigation.value, search.value))
 
 function knownPage(value: string): value is PageKey {
   return ['beta', 'dashboard', 'relationship', 'infrastructure', 'system', 'external', 'services', 'flow-designer', 'teams', 'projects', 'observability', 'usage', 'quotas', 'data-protection', 'notifications', 'audit', 'platform', 'portal', 'playground', 'model-playground', 'docs'].includes(value)
@@ -390,7 +338,7 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
     <aside class="sidebar" :class="{ open: sidebarOpen }">
       <div class="sidebar-brand"><img src="/favicon.svg" alt="" class="brand-logo" width="34" height="34" /><span><strong>AiConnect</strong><small>LLM CONTROL PLANE</small></span></div>
       <div class="scope-card"><span>WORKSPACE</span><select :value="organizationId" :disabled="busy" @change="selectOrganization(($event.target as HTMLSelectElement).value)"><option value="">조직 선택</option><option v-for="organization in organizations" :key="organization.id" :value="organization.id">{{ organization.name }} · {{ organization.status }}</option></select><small>{{ currentOrganization?.name ?? '배정된 조직을 선택하세요.' }}</small></div>
-      <nav class="side-nav" aria-label="주요 기능"><section v-for="group in groups" :key="group" class="nav-group"><p>{{ group }}</p><button v-for="item in navItems.filter(nav => nav.group === group)" :key="item.id" :class="{ active: page === item.id }" @click="navigate(item.id)"><span class="nav-icon">{{ item.icon }}</span><span><strong>{{ item.label }}</strong><small>{{ item.description }}</small></span><i></i></button></section></nav>
+      <SideNav :sections="navSections" :active-id="page" :mode="navMode" @navigate="navigate" />
       <div class="sidebar-support">
         <p>도움말</p>
         <button class="sidebar-doc-link" :class="{ active: page === 'docs' }" @click="navigate('docs')">
@@ -404,7 +352,7 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
 
     <div class="console-stage">
       <header class="topbar">
-        <div class="topbar-leading"><button class="icon-button mobile-menu" aria-label="메뉴 열기" @click="sidebarOpen = true">☰</button><div class="breadcrumb"><span>AiConnect</span><b>/</b><strong>{{ currentNav.label }}</strong></div></div>
+        <div class="topbar-leading"><button class="icon-button mobile-menu" aria-label="메뉴 열기" @click="sidebarOpen = true">☰</button><div class="breadcrumb"><span>AiConnect</span><b>/</b><template v-if="navCategoryLabel(currentNav.id)"><span class="breadcrumb-category">{{ navCategoryLabel(currentNav.id) }}</span><b>/</b></template><strong>{{ currentNav.label }}</strong></div></div>
         <div class="topbar-actions">
           <button class="feature-search" @click="openSearch"><span>⌕</span><em>기능 검색</em><kbd>⌘K</kbd></button>
           <button class="icon-button" :aria-label="theme === 'dark' ? '라이트 모드' : '다크 모드'" @click="emit('toggleTheme')">{{ theme === 'dark' ? '☀' : '◐' }}</button>
@@ -457,7 +405,7 @@ onBeforeUnmount(() => { window.removeEventListener('hashchange', onHashChange); 
       </main>
     </div>
 
-    <div v-if="searchOpen" class="command-backdrop" @mousedown.self="searchOpen = false"><section class="command-palette" role="dialog" aria-modal="true" aria-label="기능 검색"><div class="command-input"><span>⌕</span><input ref="searchInput" v-model="search" placeholder="기능, 모델, API 키 검색" /><kbd>ESC</kbd></div><div class="command-results"><p>기능으로 이동</p><button v-for="item in searchResults" :key="item.id" @click="navigate(item.id)"><span class="nav-icon">{{ item.id === 'docs' ? '?' : ('icon' in item ? item.icon : '') }}</span><span><strong>{{ item.label }}</strong><small>{{ item.description }}</small></span><kbd>↵</kbd></button></div></section></div>
+    <div v-if="searchOpen" class="command-backdrop" @mousedown.self="searchOpen = false"><section class="command-palette" role="dialog" aria-modal="true" aria-label="기능 검색"><div class="command-input"><span>⌕</span><input ref="searchInput" v-model="search" placeholder="기능, 모델, API 키 검색" /><kbd>ESC</kbd></div><div class="command-results"><p>기능으로 이동</p><button v-for="item in searchResults" :key="item.id" @click="navigate(item.id)"><span class="nav-icon">{{ item.id === 'docs' ? '?' : ('icon' in item ? item.icon : '') }}</span><span><strong>{{ item.label }}</strong><small>{{ navCategoryLabel(item.id) }} · {{ item.description }}</small></span><kbd>↵</kbd></button></div></section></div>
 
     <BaseModal :open="profileOpen" title="프로필 설정" description="콘솔에 표시되는 이름만 이 브라우저에 저장됩니다." size="sm" @close="profileOpen = false">
       <div class="modal-form">
