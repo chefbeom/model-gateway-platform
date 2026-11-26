@@ -6,6 +6,12 @@ import LoginView from './LoginView.vue'
 import TotpOnboardingView from './TotpOnboardingView.vue'
 import { clearReplacedAccessTokens, logout, normalizeSession, refreshAuthentication, type MfaState, type Session, type User } from './api'
 
+function clearStashedDrafts() {
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+    window.dispatchEvent(new CustomEvent('aiconnect:clear-drafts'))
+  }
+}
+
 type Theme = 'dark' | 'light'
 type FontScale = '100' | '115' | '125' | '135'
 
@@ -125,6 +131,7 @@ function acceptSession(raw: Session) {
 }
 
 function acceptPlatformToken(token: string) {
+  clearStashedDrafts()
   platformSessionVersion.value += 1
   platformToken.value = token
   accessToken.value = ''
@@ -163,6 +170,7 @@ function sessionExpiredNotice(reason?: string): string {
 }
 
 function clearSession() {
+  clearStashedDrafts()
   clearJwtRefreshTimer()
   clearReplacedAccessTokens()
   accessToken.value = ''

@@ -513,7 +513,7 @@ public class LmStudioModelDiscovery {
         if (value == null) return false;
         String name = value.replaceAll("([a-z0-9])([A-Z])", "$1_$2")
                 .toLowerCase(java.util.Locale.ROOT).replace('-', '_');
-        return name.matches(".*(^|_)(api_key|apikey|password|passwd|secret|credential|authorization|bearer|access_token|refresh_token|hf_token|hft|private_key|ssl_key|auth|cookie|token)($|_).*");
+        return name.matches(".*(^|_)(api_keys?|apikeys?|passwords?|passwds?|secrets?|credentials?|authorization|bearer|access_tokens?|refresh_tokens?|hf_tokens?|hft|private_keys?|ssl_keys?|auth|cookies?|tokens?|headers?)($|_).*");
     }
 
     private JsonNode scalar(String raw) {
@@ -573,7 +573,7 @@ public class LmStudioModelDiscovery {
             int equals = option.indexOf('=');
             String name = equals >= 0 ? option.substring(0, equals) : option;
             if (sensitiveName(name)) {
-                if (equals < 0 && index + 1 < args.size()) index++;
+                if (equals < 0 && index + 1 < args.size() && !args.path(index + 1).asText("").startsWith("-")) index++;
                 continue;
             }
             if (args.path(index).isTextual()) {

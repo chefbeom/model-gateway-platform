@@ -7,13 +7,13 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 
 final class SseModelRewritingInputStream extends InputStream {
-    private final BufferedReader source;
+    private final BoundedLineReader source;
     private final ObjectMapper objectMapper;
     private final String logicalModel;
     private ByteArrayInputStream current = new ByteArrayInputStream(new byte[0]);
     private boolean finished;
     SseModelRewritingInputStream(InputStream source, ObjectMapper objectMapper, String logicalModel) {
-        this.source = new BufferedReader(new InputStreamReader(source, StandardCharsets.UTF_8)); this.objectMapper = objectMapper; this.logicalModel = logicalModel;
+        this.source = new BoundedLineReader(source); this.objectMapper = objectMapper; this.logicalModel = logicalModel;
     }
     @Override public int read() throws IOException {
         while (current.available() == 0 && !finished) fill();

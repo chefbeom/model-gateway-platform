@@ -38,6 +38,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 
 /**
  * Performs reversible format-preserving pseudonymization on outbound LLM requests
@@ -64,11 +65,22 @@ public class DataProtectionRedactor {
     private static final Set<String> STRUCTURAL_FIELDS = Set.of(
             "model", "stream", "temperature", "top_p", "top_k", "n", "seed", "max_tokens",
             "max_completion_tokens", "presence_penalty", "frequency_penalty", "logprobs",
-            "parallel_tool_calls", "service_tier", "stream_options"
+            "parallel_tool_calls", "service_tier", "stream_options",
+            "role", "type", "name", "tool_call_id", "id", "index", "finish_reason"
     );
     private static final Set<String> MEDIA_DATA_FIELDS = Set.of(
             "url", "file", "image", "audio", "video", "data", "attachment", "image_url", "file_data"
     );
+    private static final Pattern STRICT_BASE64_MEDIA_DATA = Pattern.compile(
+            "(?i)^data:(?:(?:image|audio|video)/[a-z0-9.+-]+|application/(?:pdf|octet-stream));base64,[A-Za-z0-9+/=\\s]+$");
+    /** Schema fields whose value is raw (non data-URI) base64 binary, e.g. chat input_audio.data. */
+    private static final Set<String> RAW_BASE64_MEDIA_FIELDS = Set.of(
+            "input_audio.data", "audio.data", "file.file_data", "input_file.file_data", "input_image.image_data"
+    );
+    private static final Pattern RAW_BASE64 = Pattern.compile("^[A-Za-z0-9+/]+={0,2}$");
+    /** Fixed allowance per custom pattern, plus a linear allowance per input character (see customRegexStepBudget). */
+    private static final int MAX_CUSTOM_REGEX_STEPS = 100_000;
+    private static final int CUSTOM_REGEX_STEPS_PER_CHAR = 32;
     private static final List<String> KOREAN_NAME_SURROGATES = List.of("김가명", "이가명", "박가명");
 
     private final ObjectMapper objectMapper;
@@ -105,6 +117,11 @@ public class DataProtectionRedactor {
 
     public RedactionVault redactRequest(ObjectNode request, EffectiveDataProtectionPolicy policy,
                                         LlmService service, boolean invokeMaskerLlm) {
+        return redactRequest(request, policy, service, invokeMaskerLlm, true);
+    }
+
+    public RedactionVault redactRequest(ObjectNode request, EffectiveDataProtectionPolicy policy,
+                                        LlmService service, boolean invokeMaskerLlm, boolean allowExternalMasker) {
         RedactionVault vault = new RedactionVault("DETERMINISTIC_REGEX");
         if (request == null) return vault;
         EffectiveDataProtectionPolicy effective = policy == null ? EffectiveDataProtectionPolicy.defaults() : policy;
@@ -114,7 +131,7 @@ public class DataProtectionRedactor {
         redactNode(request, "", effective, maskPersonNames, vault, counters, 0);
 
         if (invokeMaskerLlm && service != null && service.getMaskerDeploymentId() != null) {
-            applyTrustedMaskerLlm(request, service, vault);
+            applyTrustedMaskerLlm(request, service, vault, allowExternalMasker);
         }
         return vault;
     }
@@ -157,9 +174,9 @@ public class DataProtectionRedactor {
             if (att != null) {
                 boolean expiredOrRevoked = !att.validFor(endpoint.getBaseUrl(), Instant.now());
                 if (att.getClassification() == RuntimeTrustAttestation.Classification.EXTERNAL_UNVERIFIED
-                        || (att.getClassification() != RuntimeTrustAttestation.Classification.INTERNAL && expiredOrRevoked)) {
+                        || expiredOrRevoked) {
                     throw new ApiException(HttpStatus.BAD_REQUEST, "UNTRUSTED_MASKER_DEPLOYMENT",
-                            "외부 미확인 또는 신뢰 철회된 Runtime은 마스킹 작업에 사용할 수 없습니다.");
+                            "외부 미확인 또는 신뢰 철회·만료된 Runtime은 마스킹 작업에 사용할 수 없습니다.");
                 }
             }
         }
@@ -187,7 +204,7 @@ public class DataProtectionRedactor {
                 String nextPath = fieldPath.isEmpty() ? key : fieldPath + "." + key;
                 JsonNode val = entry.getValue();
                 if (val.isTextual()) {
-                    if (isMediaDataField(nextPath)) continue;
+                    if (isBinaryMediaPayload(nextPath, val.asText())) continue;
                     String updated = redactText(val.asText(), policy, maskPersonNames, vault, counters);
                     if (!updated.equals(val.asText())) {
                         object.put(key, updated);
@@ -280,40 +297,67 @@ public class DataProtectionRedactor {
             }, vault);
             for (String custom : policy.customPatterns()) {
                 if (custom == null || custom.isBlank()) continue;
+                Pattern compiled;
                 try {
-                    Pattern compiled = Pattern.compile(custom);
-                    current = replacePattern(current, compiled, match -> {
+                    compiled = Pattern.compile(custom);
+                } catch (PatternSyntaxException malformed) {
+                    // Patterns are validated when saved; a legacy malformed pattern cannot match anything.
+                    continue;
+                }
+                try {
+                    current = replacePatternBounded(current, compiled, match -> {
                         if (vault.containsSurrogate(match)) return match;
                         String existing = vault.surrogateFor(match);
                         if (existing != null) return existing;
                         int n = counters.confidential.incrementAndGet();
                         return vault.register("CONFIDENTIAL", match, "[REDACTED_CONFIDENTIAL_" + n + "]", "REGEX");
-                    }, vault);
-                } catch (RuntimeException ignored) { }
+                    }, vault, customRegexStepBudget(current.length()));
+                } catch (StepBudgetExceededException stepLimit) {
+                    // Fail closed: never forward text that a configured pattern could not finish masking.
+                    throw new ApiException(HttpStatus.FORBIDDEN, "DATA_PROTECTION_INCOMPLETE",
+                            "A custom data-protection pattern could not finish masking this request, so it was not sent externally. Simplify the pattern or shorten the request.");
+                }
             }
         }
         return current;
     }
 
     private String replacePattern(String input, Pattern pattern, Function<String, String> mapper, RedactionVault vault) {
-        Matcher matcher = pattern.matcher(input);
-        StringBuilder sb = new StringBuilder();
+        return replacePatternBounded(input, pattern, mapper, vault, Integer.MAX_VALUE);
+    }
+
+    private String replacePatternBounded(String input, Pattern pattern, Function<String, String> mapper,
+                                         RedactionVault vault, int maxSteps) {
+        CharSequence seq = maxSteps == Integer.MAX_VALUE ? input : new BoundedCharSequence(input, maxSteps);
+        Matcher matcher = pattern.matcher(seq);
+        // Copy unmatched text from the plain input by offset so only the regex engine itself spends the step budget.
+        StringBuilder sb = new StringBuilder(input.length());
+        int copied = 0;
         while (matcher.find()) {
-            String matched = matcher.group();
-            if (matched == null || matched.isEmpty()) continue;
+            int start = matcher.start(), end = matcher.end();
+            if (end <= start) continue;
+            String matched = input.substring(start, end);
             String replacement = vault.isSurrogateValue(matched) ? matched : mapper.apply(matched);
-            matcher.appendReplacement(sb, Matcher.quoteReplacement(replacement));
+            sb.append(input, copied, start).append(replacement);
+            copied = end;
         }
-        matcher.appendTail(sb);
+        sb.append(input, copied, input.length());
         return sb.toString();
     }
 
-    private void applyTrustedMaskerLlm(ObjectNode request, LlmService service, RedactionVault vault) {
+    /** Linear in the input length so well-behaved patterns always finish; catastrophic backtracking still trips it. */
+    static int customRegexStepBudget(int inputLength) {
+        long budget = (long) MAX_CUSTOM_REGEX_STEPS + (long) inputLength * CUSTOM_REGEX_STEPS_PER_CHAR;
+        return (int) Math.min(Integer.MAX_VALUE - 1L, budget);
+    }
+
+    private void applyTrustedMaskerLlm(ObjectNode request, LlmService service, RedactionVault vault, boolean allowExternalMasker) {
         UUID deploymentId = service.getMaskerDeploymentId();
         if (deploymentId == null || deployments == null) return;
         if (!isTrustedMaskerDeployment(service.getOrganizationId(), deploymentId)) return;
         ModelDeployment masker = deployments.findById(deploymentId).orElse(null);
         if (masker == null) return;
+        if (masker.isExternal() && !allowExternalMasker) return;
 
         String collectedText = collectPromptText(request);
         if (collectedText.isBlank()) return;
@@ -361,14 +405,22 @@ public class DataProtectionRedactor {
             JsonNode parsed = objectMapper.readTree(content.substring(firstBrace, lastBrace + 1));
             JsonNode replacements = parsed.path("replacements");
             if (!replacements.isArray()) return;
+            int ctxSeq = 1;
             for (JsonNode item : replacements) {
                 String orig = item.path("original").asText("").trim();
                 String sur = item.path("surrogate").asText("").trim();
                 if (orig.length() < 2 || orig.length() > 200 || sur.isEmpty() || sur.length() > 200) continue;
                 if (orig.equals(sur) || vault.isSurrogateValue(orig) || NAME_STOPWORDS.contains(orig)) continue;
                 if (!collectedText.contains(orig) || orig.length() > Math.max(24, collectedText.length() * 6 / 10)) continue;
+                if (sur.length() < 2 || vault.isSurrogateValue(sur) || collectedText.contains(sur)) {
+                    while (vault.isSurrogateValue("[MASKED_CTX_" + ctxSeq + "]")
+                            || collectedText.contains("[MASKED_CTX_" + ctxSeq + "]")) {
+                        ctxSeq++;
+                    }
+                    sur = "[MASKED_CTX_" + (ctxSeq++) + "]";
+                }
                 String registered = vault.register("CONTEXT_LLM", orig, sur, masker.getDisplayName());
-                replaceLiteralInRequestNodes(request, orig, registered);
+                replaceLiteralInRequestNodes(request, "", orig, registered);
             }
         } catch (Exception ignored) {
             // Non-JSON responses from the masker worker must never abort deterministic protection.
@@ -380,33 +432,56 @@ public class DataProtectionRedactor {
         JsonNode messages = request.path("messages");
         if (messages.isArray()) {
             for (JsonNode msg : messages) {
-                JsonNode content = msg.path("content");
-                if (content.isTextual()) {
-                    if (sb.length() > 0) sb.append('\n');
-                    sb.append(content.asText());
-                }
+                appendContentText(msg.path("content"), sb);
             }
         }
-        if (sb.isEmpty() && request.path("input").isTextual()) {
-            sb.append(request.path("input").asText());
+        if (sb.isEmpty()) {
+            appendContentText(request.path("input"), sb);
         }
         return sb.toString();
     }
 
-    private void replaceLiteralInRequestNodes(JsonNode node, String target, String replacement) {
+    private static void appendContentText(JsonNode content, StringBuilder sb) {
+        if (content == null || content.isNull() || content.isMissingNode()) return;
+        if (content.isTextual()) {
+            if (sb.length() > 0) sb.append('\n');
+            sb.append(content.asText());
+            return;
+        }
+        if (content.isArray()) {
+            for (JsonNode part : content) {
+                if (part.isTextual()) {
+                    if (sb.length() > 0) sb.append('\n');
+                    sb.append(part.asText());
+                } else if (part.isObject()) {
+                    JsonNode text = part.path("text");
+                    if (text.isTextual()) {
+                        if (sb.length() > 0) sb.append('\n');
+                        sb.append(text.asText());
+                    } else if (part.has("content")) {
+                        appendContentText(part.path("content"), sb);
+                    }
+                }
+            }
+        }
+    }
+
+    private void replaceLiteralInRequestNodes(JsonNode node, String path, String target, String replacement) {
         if (node == null || node.isNull()) return;
         if (node instanceof ObjectNode obj) {
             List<Map.Entry<String, JsonNode>> snapshot = new ArrayList<>();
             obj.fields().forEachRemaining(snapshot::add);
             for (Map.Entry<String, JsonNode> entry : snapshot) {
                 if (STRUCTURAL_FIELDS.contains(entry.getKey())) continue;
+                String nextPath = path.isEmpty() ? entry.getKey() : path + "." + entry.getKey();
                 if (entry.getValue().isTextual()) {
                     String current = entry.getValue().asText();
+                    if (isBinaryMediaPayload(nextPath, current)) continue;
                     if (current.contains(target)) {
                         obj.put(entry.getKey(), current.replace(target, replacement));
                     }
                 } else {
-                    replaceLiteralInRequestNodes(entry.getValue(), target, replacement);
+                    replaceLiteralInRequestNodes(entry.getValue(), nextPath, target, replacement);
                 }
             }
         } else if (node instanceof ArrayNode arr) {
@@ -418,10 +493,41 @@ public class DataProtectionRedactor {
                         arr.set(i, current.replace(target, replacement));
                     }
                 } else {
-                    replaceLiteralInRequestNodes(item, target, replacement);
+                    replaceLiteralInRequestNodes(item, path, target, replacement);
                 }
             }
         }
+    }
+
+    private static final class StepBudgetExceededException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+    }
+
+    private static final class BoundedCharSequence implements CharSequence {
+        private final CharSequence delegate;
+        private final int[] remainingSteps;
+
+        private BoundedCharSequence(CharSequence delegate, int maxSteps) {
+            this(delegate, new int[]{maxSteps});
+        }
+
+        private BoundedCharSequence(CharSequence delegate, int[] remainingSteps) {
+            this.delegate = delegate;
+            this.remainingSteps = remainingSteps;
+        }
+
+        @Override public int length() { return delegate.length(); }
+
+        @Override public char charAt(int index) {
+            if (--remainingSteps[0] < 0) throw new StepBudgetExceededException();
+            return delegate.charAt(index);
+        }
+
+        @Override public CharSequence subSequence(int start, int end) {
+            return new BoundedCharSequence(delegate.subSequence(start, end), remainingSteps);
+        }
+
+        @Override public String toString() { return delegate.toString(); }
     }
 
     private static String nextNameSurrogate(int index) {
@@ -429,6 +535,26 @@ public class DataProtectionRedactor {
             return KOREAN_NAME_SURROGATES.get(index - 1);
         }
         return "사용자" + index;
+    }
+
+    /**
+     * Binary payloads must reach the provider byte-for-byte: strict base64 data URIs in media fields, and raw
+     * base64 in fields whose schema defines them as binary (validated, otherwise treated as ordinary text).
+     */
+    static boolean isBinaryMediaPayload(String fieldPath, String value) {
+        if (value == null || value.isEmpty()) return false;
+        if (isMediaDataField(fieldPath) && STRICT_BASE64_MEDIA_DATA.matcher(value).matches()) return true;
+        if (fieldPath == null) return false;
+        String[] parts = fieldPath.toLowerCase().split("\\.");
+        if (parts.length < 2 || !RAW_BASE64_MEDIA_FIELDS.contains(parts[parts.length - 2] + "." + parts[parts.length - 1])) return false;
+        String compact = value.replaceAll("\\s+", "");
+        if (compact.isEmpty() || compact.length() % 4 != 0 || !RAW_BASE64.matcher(compact).matches()) return false;
+        try {
+            java.util.Base64.getDecoder().decode(compact);
+            return true;
+        } catch (IllegalArgumentException invalid) {
+            return false;
+        }
     }
 
     private static boolean isMediaDataField(String fieldName) {
@@ -465,18 +591,24 @@ public class DataProtectionRedactor {
         public String register(String category, String original, String surrogate, String source) {
             String existing = originalToSurrogate.get(original);
             if (existing != null) return existing;
-            originalToSurrogate.put(original, surrogate);
-            surrogateToOriginal.put(surrogate, original);
-            maxSurrogateLength = Math.max(maxSurrogateLength, surrogate.length());
+            String unique = surrogate;
+            int seq = entries.size() + 1;
+            while (surrogateToOriginal.containsKey(unique)
+                    && !java.util.Objects.equals(surrogateToOriginal.get(unique), original)) {
+                unique = "[MASKED_" + (seq++) + "]";
+            }
+            originalToSurrogate.put(original, unique);
+            surrogateToOriginal.put(unique, original);
+            maxSurrogateLength = Math.max(maxSurrogateLength, unique.length());
             if ("PII_RESIDENT_NUMBER".equals(category) || "PII_PHONE".equals(category)) {
-                String compact = surrogate.replace("-", "");
-                if (!compact.equals(surrogate) && !surrogateToOriginal.containsKey(compact)) {
+                String compact = unique.replace("-", "");
+                if (!compact.equals(unique) && !surrogateToOriginal.containsKey(compact)) {
                     surrogateToOriginal.put(compact, original);
                     maxSurrogateLength = Math.max(maxSurrogateLength, compact.length());
                 }
             }
-            entries.add(new RedactionEntry(category, original, surrogate, source));
-            return surrogate;
+            entries.add(new RedactionEntry(category, original, unique, source));
+            return unique;
         }
 
         public String surrogateFor(String original) { return originalToSurrogate.get(original); }
@@ -550,6 +682,12 @@ public class DataProtectionRedactor {
             JsonNode content = obj.path("content");
             if (content.isTextual()) {
                 obj.put("content", restoreText(content.asText()));
+            } else if (content.isArray()) {
+                for (JsonNode part : content) {
+                    if (part instanceof ObjectNode partObj && partObj.path("text").isTextual()) {
+                        partObj.put("text", restoreText(partObj.path("text").asText()));
+                    }
+                }
             }
         }
     }

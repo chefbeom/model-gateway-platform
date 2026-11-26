@@ -33,6 +33,15 @@ spec:
     - matches:
         - path: { type: PathPrefix, value: /api }
         - path: { type: PathPrefix, value: /v1 }
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            remove:
+              - X-Admin-Token
+              - X-AIConnect-Beta-Ingress
+              - Forwarded
+              - X-Forwarded-Host
+              - X-Forwarded-Port
       backendRefs:
         - name: {{ include "aiconnect.fullname" . }}-backend
           port: {{ .Values.backend.service.port }}

@@ -40,9 +40,16 @@ public class SecretCipher {
     public String decrypt(String ciphertext) {
         if (ciphertext == null || ciphertext.isBlank()) return null;
         try {
-            String[] parts = ciphertext.split("\\.", 2);
+            String[] parts = ciphertext.split("\\.", -1);
+            if (parts.length != 2 || parts[0].isEmpty() || parts[1].isEmpty()) {
+                throw new IllegalArgumentException("Malformed ciphertext");
+            }
+            byte[] nonce = Base64.getDecoder().decode(parts[0]);
+            if (nonce.length != 12) {
+                throw new IllegalArgumentException("Invalid GCM nonce length");
+            }
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(128, Base64.getDecoder().decode(parts[0])));
+            cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(128, nonce));
             return new String(cipher.doFinal(Base64.getDecoder().decode(parts[1])), StandardCharsets.UTF_8);
         } catch (Exception exception) {
             throw new IllegalStateException("Could not decrypt runtime token", exception);

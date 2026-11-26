@@ -21,7 +21,7 @@ public class QuotaFilter extends OncePerRequestFilter {
     private final ObjectMapper objectMapper;
     private final QuotaService quotaService;
     public QuotaFilter(ObjectMapper objectMapper, QuotaService quotaService) { this.objectMapper = objectMapper; this.quotaService = quotaService; }
-    @Override protected boolean shouldNotFilter(HttpServletRequest request) { return !"POST".equals(request.getMethod()) || !"/v1/chat/completions".equals(request.getRequestURI()); }
+    @Override protected boolean shouldNotFilter(HttpServletRequest request) { return !"POST".equals(request.getMethod()) || !"/v1/chat/completions".equals(RequestPathResolver.resolve(request)); }
     @Override protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain) throws IOException, ServletException {
         byte[] raw = request.getInputStream().readAllBytes();
         try {

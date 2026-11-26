@@ -15,6 +15,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -54,6 +55,7 @@ class ServiceTargetSystemPromptIntegrationTest {
     @Autowired LlmServiceRepository services;
     @Autowired ServiceTargetRepository targets;
     @Autowired ProjectServiceAccessRepository access;
+    @Autowired LlmRequestAttemptRepository attemptRepository;
 
     private ModelDeployment deployment(Organization org, String name, int port) {
         InferenceNode node = nodes.save(new InferenceNode(org.getId(), name + "-node", null, "DIRECT", null));
@@ -190,6 +192,41 @@ class ServiceTargetSystemPromptIntegrationTest {
             assertThat(secondBody.get().path("messages").get(0).path("content").asText()).isEqualTo("S\n\nC");
         } finally {
             first.stop(0); second.stop(0);
+        }
+    }
+
+    @Test
+    void responseCacheHitSkipsLeaseAndLeavesNoAttemptRow() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+        AtomicReference<JsonNode> received = new AtomicReference<>();
+        HttpServer provider = server(200, okJson(), "application/json", calls, received);
+        try {
+            Organization org = organizations.save(new Organization("Target Prompt Cache Org"));
+            Project project = projects.save(new Project(org.getId(), "tp-cache"));
+            IssuedApiKey key = apiKeyService.issue(project.getId(), "tp", null);
+            LlmService svc = new LlmService(org.getId(), "tp-cache", "tp-cache", FailoverPolicy.STRICT, RetryPolicy.SAFE,
+                    false, "[]", BigDecimal.ZERO, BigDecimal.ZERO);
+            svc.configureResponseCache(true, 300);
+            svc = services.save(svc);
+            UUID deploymentId = deployment(org, "tp-cache-dep", provider.getAddress().getPort()).getId();
+            targets.save(new ServiceTarget(svc.getId(), deploymentId, 1, 100, false, null));
+            access.save(new ProjectServiceAccess(project.getId(), svc.getId()));
+
+            String body = "{\"model\":\"tp-cache\",\"messages\":[{\"role\":\"user\",\"content\":\"cache me\"}],\"stream\":false}";
+            for (int i = 0; i < 2; i++) {
+                mvc.perform(post("/v1/chat/completions").header("Authorization", "Bearer " + key.secret())
+                                .contentType(MediaType.APPLICATION_JSON).content(body))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.model").value("tp-cache"));
+            }
+            assertThat(calls).hasValue(1);
+            var rows = attemptRepository.findAll().stream()
+                    .filter(a -> deploymentId.equals(ReflectionTestUtils.getField(a, "deploymentId")))
+                    .toList();
+            assertThat(rows).hasSize(1);
+            assertThat(rows).noneMatch(a -> "IN_PROGRESS".equals(ReflectionTestUtils.getField(a, "status")));
+        } finally {
+            provider.stop(0);
         }
     }
 

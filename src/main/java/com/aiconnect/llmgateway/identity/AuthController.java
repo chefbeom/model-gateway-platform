@@ -133,12 +133,19 @@ public class AuthController {
     }
 
     private void assertSameOriginIfPresent(HttpServletRequest request) {
+        String fetchSite = request.getHeader("Sec-Fetch-Site");
+        if (fetchSite != null && !fetchSite.isBlank()
+                && !"same-origin".equalsIgnoreCase(fetchSite.trim())
+                && !"none".equalsIgnoreCase(fetchSite.trim())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ORIGIN_MISMATCH", "Cross-origin auth request rejected.");
+        }
         String origin = request.getHeader("Origin");
-        if (origin == null || origin.isBlank()) {
+        String candidate = (origin != null && !origin.isBlank()) ? origin : request.getHeader("Referer");
+        if (candidate == null || candidate.isBlank()) {
             return;
         }
         try {
-            java.net.URI originUri = java.net.URI.create(origin.trim());
+            java.net.URI originUri = java.net.URI.create(candidate.trim());
             String originHost = originUri.getHost();
             if (originHost == null || originHost.isBlank()) {
                 throw new ApiException(HttpStatus.FORBIDDEN, "ORIGIN_MISMATCH", "Cross-origin auth request rejected.");

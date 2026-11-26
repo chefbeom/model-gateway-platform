@@ -1,5 +1,6 @@
 package com.aiconnect.llmgateway.quota;
 
+import com.aiconnect.llmgateway.web.RequestPathResolver;
 import com.aiconnect.llmgateway.web.ApiException;
 import com.aiconnect.llmgateway.web.BufferedBodyRequest;
 import com.aiconnect.llmgateway.web.OpenAiError;
@@ -39,7 +40,7 @@ public class SpendQuotaFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !"POST".equals(request.getMethod()) || !"/v1/chat/completions".equals(request.getRequestURI());
+        return !"POST".equals(request.getMethod()) || !"/v1/chat/completions".equals(RequestPathResolver.resolve(request));
     }
 
     @Override

@@ -22,8 +22,9 @@ public class AdminTokenFilter extends OncePerRequestFilter {
     private final GatewayProperties properties;
     private final AuditService audit;
     public AdminTokenFilter(GatewayProperties properties, AuditService audit) { this.properties = properties; this.audit = audit; }
-    @Override protected boolean shouldNotFilter(HttpServletRequest request) { return !request.getRequestURI().startsWith("/api/admin/"); }
+    @Override protected boolean shouldNotFilter(HttpServletRequest request) { return !RequestPathResolver.resolve(request).startsWith("/api/admin/"); }
     @Override protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain) throws ServletException, IOException {
+        String path = RequestPathResolver.resolve(request);
         String supplied = request.getHeader("X-Admin-Token");
         String expected = properties.adminToken();
         boolean platformToken = supplied != null && !supplied.isBlank()
@@ -41,8 +42,8 @@ public class AdminTokenFilter extends OncePerRequestFilter {
             filterChain.doFilter(request, response);
             if (isMutation(request) && response.getStatus() < 400) {
                 Map<String, Object> details = platformToken
-                        ? Map.of("method", request.getMethod(), "path", request.getRequestURI(), "status", response.getStatus(), "authMethod", "BREAK_GLASS_TOKEN")
-                        : Map.of("method", request.getMethod(), "path", request.getRequestURI(), "status", response.getStatus());
+                        ? Map.of("method", request.getMethod(), "path", path, "status", response.getStatus(), "authMethod", "BREAK_GLASS_TOKEN")
+                        : Map.of("method", request.getMethod(), "path", path, "status", response.getStatus());
                 audit.record(auditContext.organizationId(), platformToken ? null : CurrentActor.userIdOrNull(),
                         "ADMIN_CONFIGURATION_CHANGED", "HTTP_ENDPOINT", null, details);
             }

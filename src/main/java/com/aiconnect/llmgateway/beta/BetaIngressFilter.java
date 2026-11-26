@@ -2,6 +2,7 @@ package com.aiconnect.llmgateway.beta;
 
 import com.aiconnect.llmgateway.service.ApiKeyService;
 import com.aiconnect.llmgateway.web.ApiException;
+import com.aiconnect.llmgateway.web.RequestPathResolver;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -36,7 +37,7 @@ public class BetaIngressFilter extends OncePerRequestFilter {
         if (marker == null || marker.length() < 32 || !MessageDigest.isEqual(marker.getBytes(StandardCharsets.UTF_8), supplied.getBytes(StandardCharsets.UTF_8))) {
             fail(response, 403, "BETA_INGRESS_DENIED"); return;
         }
-        String method=request.getMethod(), path=request.getRequestURI();
+        String method=request.getMethod(), path=RequestPathResolver.resolve(request);
         boolean redeem="POST".equals(method) && "/api/beta/invitations/redeem".equals(path);
         boolean api=("POST".equals(method) && "/v1/chat/completions".equals(path)) || ("GET".equals(method) && "/v1/models".equals(path));
         if (!redeem && !api) { fail(response, 404, "NOT_FOUND"); return; }

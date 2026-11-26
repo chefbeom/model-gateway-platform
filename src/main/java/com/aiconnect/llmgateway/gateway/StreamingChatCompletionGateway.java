@@ -215,15 +215,16 @@ public class StreamingChatCompletionGateway {
                     continue;
                 }
                 ObjectNode proxied = request.deepCopy();
+                DataProtectionRedactor.RedactionVault redactionVault = null;
+                boolean allowExternalMasker = protection.externalApiAllowed() && !betaAccess.isBetaProject(audit.getProjectId());
+                if (protection.redactionRequired() && redactor != null
+                        && (candidate.external() || candidate.externalDataBoundary())) {
+                    redactionVault = redactor.redactRequest(proxied, protection.policy(), service, true, allowExternalMasker);
+                }
                 service.applySystemPromptTemplate(proxied, candidate.target() == null ? null : candidate.target().getSystemPromptTemplate());
                 proxied.put("model", candidate.deployment().getProviderModelId());
                 service.applyTemperaturePolicy(proxied);
                 proxied.withObject("stream_options").put("include_usage", true);
-                DataProtectionRedactor.RedactionVault redactionVault = null;
-                if (protection.redactionRequired() && redactor != null
-                        && (candidate.external() || candidate.externalDataBoundary() || service.getMaskerDeploymentId() != null)) {
-                    redactionVault = redactor.redactRequest(proxied, protection.policy(), service, true);
-                }
                 if (candidate.external()) {
                     service.applyOpenAiRequestPolicy(proxied);
                     candidate.deployment().applyOpenAiDefaults(proxied);
@@ -277,7 +278,11 @@ public class StreamingChatCompletionGateway {
                                 settleOrHoldDone = true;
                                 providerCap.holdUnsettled(provRes, "STREAM_START_FAILED_UNSETTLED");
                             }
-                            if (spendQuota != null) {
+                            boolean chargeable = candidate.external()
+                                    || (candidate.externalDataBoundary() && candidate.endpoint() != null
+                                            && candidate.endpoint().getInputPricePerMillion() != null
+                                            && candidate.endpoint().getOutputPricePerMillion() != null);
+                            if (spendQuota != null && chargeable) {
                                 spendQuota.holdUnsettled(spendReservation, "STREAM_START_FAILED_UNSETTLED");
                             }
                         }
@@ -331,7 +336,11 @@ public class StreamingChatCompletionGateway {
                         settleOrHoldDone = true;
                         providerCap.holdUnsettled(provRes, "AMBIGUOUS_UPSTREAM_FAILURE");
                     }
-                    if (spendQuota != null) {
+                    boolean chargeable = candidate.external()
+                            || (candidate.externalDataBoundary() && candidate.endpoint() != null
+                                    && candidate.endpoint().getInputPricePerMillion() != null
+                                    && candidate.endpoint().getOutputPricePerMillion() != null);
+                    if (spendQuota != null && chargeable) {
                         spendQuota.holdUnsettled(spendReservation, "AMBIGUOUS_UPSTREAM_FAILURE");
                     }
                 }

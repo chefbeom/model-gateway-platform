@@ -118,6 +118,7 @@ class SecurityHardeningIntegrationTest {
     @Autowired AccessTokenService accessTokens;
     @Autowired AuthProperties authProperties;
     @Autowired AppUserRepository users;
+    @Autowired com.aiconnect.llmgateway.identity.OrganizationMemberRepository organizationMembers;
     @Autowired AuthRefreshTokenRepository refreshTokens;
     @Autowired OrganizationRepository organizations;
     @Autowired InferenceNodeRepository nodes;
@@ -599,5 +600,64 @@ class SecurityHardeningIntegrationTest {
         Mac mac = Mac.getInstance("HmacSHA256");
         mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
         return Base64.getUrlEncoder().withoutPadding().encodeToString(mac.doFinal(data.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    @Test
+    void filterCanonicalizesEncodedPathsProtectsPlatformAdminsAndBlocksCrossSiteRefresh() throws Exception {
+        Organization organization = organizations.save(new Organization("Encoded Bypass Guard Org"));
+        Project project = projects.save(new Project(organization.getId(), "Encoded Guard Project"));
+
+        // 1. Percent-encoded /api/admin paths and /v1/chat/completions must never bypass filters
+        mvc.perform(get(java.net.URI.create("/%61pi/admin/organizations")))
+                .andExpect(status().isUnauthorized());
+
+        AppUser member = identity.createUser("encoded-member@example.com", "StrongPassword123!", false, AccountTier.GENERAL_USER, null);
+        identity.grantMembership(organization.getId(), member.getId(), OrganizationRole.DEVELOPER);
+        projectMemberships.save(new ProjectMembership(project.getId(), member.getId(), ProjectMembership.Role.MEMBER, false));
+        String memberJwt = loginVerifiedJwt(member);
+
+        LlmService svc = services.save(new LlmService(organization.getId(), "enc-svc", "Enc Svc",
+                FailoverPolicy.STRICT, RetryPolicy.SAFE, false, "[]", BigDecimal.ZERO, BigDecimal.ZERO));
+        LlmRequest reqRow = new LlmRequest("req_enc_bypass", project.getId(), null, member.getId(), svc, false);
+        reqRow.succeed(null, 1, 1, 5L, 200, 0);
+        llmRequests.saveAndFlush(reqRow);
+
+        mvc.perform(get(java.net.URI.create("/api/admin/projects/" + project.getId() + "/requests/req_enc_bypass/%63ontent"))
+                        .header("Authorization", "Bearer " + memberJwt))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("SENSITIVE_CONTENT_ACCESS_DENIED"));
+
+        mvc.perform(post(java.net.URI.create("/v1/%63hat/completions"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"model\":\"enc-svc\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}"))
+                .andExpect(status().isUnauthorized());
+
+        // 2. Non-platform ORGANIZATION_ADMIN cannot remove a SYSTEM_ADMIN from an organization
+        AppUser orgAdmin = identity.createUser("org-admin-protect@example.com", "StrongPassword123!", false, AccountTier.GENERAL_USER, null);
+        organizationMembers.save(new com.aiconnect.llmgateway.identity.OrganizationMember(organization.getId(), orgAdmin.getId(), OrganizationRole.ORGANIZATION_ADMIN));
+        AppUser sysAdmin = identity.createUser("sys-admin-target@example.com", "StrongPassword123!", true, AccountTier.SYSTEM_ADMIN, null);
+        identity.grantMembership(organization.getId(), sysAdmin.getId(), OrganizationRole.ORGANIZATION_ADMIN);
+        String orgAdminJwt = loginVerifiedJwt(orgAdmin);
+
+        mvc.perform(delete("/api/admin/organizations/" + organization.getId() + "/users/" + sysAdmin.getId())
+                        .header("Authorization", "Bearer " + orgAdminJwt))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("PLATFORM_ADMIN_PROTECTED"));
+
+        // 3. Cross-site Sec-Fetch-Site on /api/auth/refresh is rejected
+        mvc.perform(post("/api/auth/refresh")
+                        .header("Sec-Fetch-Site", "cross-site"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("ORIGIN_MISMATCH"));
+
+        // 4. LmStudioModelDiscovery redacts CLI args after boolean flags without index-skipping
+        var discovery = new com.aiconnect.llmgateway.admin.LmStudioModelDiscovery(mapper);
+        var modelInventory = mapper.readTree("{\"data\":[{\"id\":\"m1\",\"args\":[\"--auth\",\"--api-key\",\"sk-live-secret\",\"--host\",\"127.0.0.1\"]}]}");
+        var discovered = discovery.discover(modelInventory, RuntimeType.LLAMA_CPP);
+        assertThat(discovered.get(0).metadataJson()).doesNotContain("sk-live-secret");
+
+        // 5. SecretCipher rejects malformed / wrong-nonce-length ciphertexts
+        assertThatThrownBy(() -> secretCipher.decrypt("AAAA.BBBB"))
+                .isInstanceOf(IllegalStateException.class);
     }
 }

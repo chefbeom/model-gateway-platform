@@ -36,14 +36,14 @@ public class SessionAuthenticationFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !request.getRequestURI().startsWith("/api/");
+        return !RequestPathResolver.resolve(request).startsWith("/api/");
     }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws IOException, ServletException {
         String header = request.getHeader(HttpHeaders.AUTHORIZATION);
-        String uri = request.getRequestURI();
+        String uri = RequestPathResolver.resolve(request);
         boolean isAuthPath = uri.startsWith("/api/auth/");
         boolean isTotpAuthPath = uri.startsWith("/api/auth/totp/");
 

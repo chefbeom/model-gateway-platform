@@ -57,17 +57,18 @@ public class OrganizationAuthorizationFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !request.getRequestURI().startsWith("/api/admin/");
+        return !RequestPathResolver.resolve(request).startsWith("/api/admin/");
     }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws IOException, ServletException {
+        String uri = RequestPathResolver.resolve(request);
         if (request.getContentLengthLong() > MAX_BODY_BYTES) { response.sendError(413, "Request body exceeds the permitted size."); return; }
         if (Boolean.TRUE.equals(request.getAttribute("aiconnect.platform-admin"))) {
             byte[] body = request.getInputStream().readNBytes(MAX_BODY_BYTES + 1);
             if (body.length > MAX_BODY_BYTES) { response.sendError(413, "Request body exceeds the permitted size."); return; }
-            UUID organizationId = organizationFor(request.getMethod(), request.getRequestURI(), parse(body));
+            UUID organizationId = organizationFor(request.getMethod(), uri, parse(body));
             attachOrganization(request, organizationId);
             filterChain.doFilter(new BufferedBodyRequest(request, body), response);
             return;
@@ -80,12 +81,11 @@ public class OrganizationAuthorizationFilter extends OncePerRequestFilter {
         if (actor.platformAdmin()) {
             byte[] body = request.getInputStream().readNBytes(MAX_BODY_BYTES + 1);
             if (body.length > MAX_BODY_BYTES) { response.sendError(413, "Request body exceeds the permitted size."); return; }
-            UUID organizationId = organizationFor(request.getMethod(), request.getRequestURI(), parse(body));
+            UUID organizationId = organizationFor(request.getMethod(), uri, parse(body));
             attachOrganization(request, organizationId);
             filterChain.doFilter(new BufferedBodyRequest(request, body), response);
             return;
         }
-        String uri = request.getRequestURI();
         if ("GET".equals(request.getMethod()) && "/api/admin/organizations".equals(uri)) {
             filterChain.doFilter(request, response);
             return;
@@ -143,7 +143,8 @@ public class OrganizationAuthorizationFilter extends OncePerRequestFilter {
             return;
         }
         UUID teamId = teamFor(uri);
-        if (teamId != null && "GET".equals(request.getMethod()) && !uri.endsWith("/deletion-preview")) {
+        if (teamId != null && "GET".equals(request.getMethod()) && !uri.endsWith("/deletion-preview")
+                && access.teamRole(actor, teamId).isPresent()) {
             filterChain.doFilter(new BufferedBodyRequest(request, body), response);
             return;
         }
@@ -175,7 +176,7 @@ public class OrganizationAuthorizationFilter extends OncePerRequestFilter {
 
     private boolean isOrganizationDiscoveryPath(String uri) {
         return uri.matches("/api/admin/organizations/[0-9a-fA-F-]+/projects")
-                || uri.matches("/api/admin/organizations/[0-9a-fA-F-]+/teams(/[-0-9a-fA-F]+/members)?");
+                || uri.matches("/api/admin/organizations/[0-9a-fA-F-]+/teams");
     }
 
     private UUID organizationFor(String method, String uri, JsonNode body) {

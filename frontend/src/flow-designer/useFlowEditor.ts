@@ -108,6 +108,7 @@ export function useFlowEditor(props: FlowEditorProps, canvas: Ref<CanvasHandle |
   const quickStartDismissed = ref(false)
 
   let loadTicket = 0
+  let loadedUserId = currentUserId()
 
   /* ---------- derived ---------- */
   const issues = computed(() => (base.value && graph.value ? validateGraph(graph.value, base.value) : []))
@@ -141,8 +142,9 @@ export function useFlowEditor(props: FlowEditorProps, canvas: Ref<CanvasHandle |
   function stashCurrent() {
     const snapshot = base.value
     const current = graph.value
-    if (!snapshot || !current || !dirty.value) return
-    stashDraft({ userId: currentUserId(), organizationId: snapshot.organizationId, serviceId: snapshot.serviceId, base: snapshot, graph: current, viewport: { ...viewport.value }, savedAt: Date.now() })
+    const activeUser = currentUserId()
+    if (!snapshot || !current || !dirty.value || activeUser === 'anonymous' || activeUser !== loadedUserId) return
+    stashDraft({ userId: activeUser, organizationId: snapshot.organizationId, serviceId: snapshot.serviceId, base: snapshot, graph: current, viewport: { ...viewport.value }, savedAt: Date.now() })
     draftTick.value += 1
   }
 
@@ -172,6 +174,7 @@ export function useFlowEditor(props: FlowEditorProps, canvas: Ref<CanvasHandle |
     const organizationId = props.organizationId
     const auth = props.auth
     const userId = currentUserId()
+    loadedUserId = userId
     selectedKey.value = serviceId ?? NEW_SERVICE_KEY
     loadState.value = 'loading'
     loadError.value = ''

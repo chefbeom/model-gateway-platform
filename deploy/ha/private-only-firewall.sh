@@ -22,22 +22,24 @@ fi
 
 apply_rules() {
   iptables -N DOCKER-USER 2>/dev/null || true
-  iptables -C DOCKER-USER -p tcp --dport "${http_port}" -s 127.0.0.0/8 -m comment --comment aiconnect-private-loopback -j ACCEPT 2>/dev/null \
-    || iptables -I DOCKER-USER 1 -p tcp --dport "${http_port}" -s 127.0.0.0/8 -m comment --comment aiconnect-private-loopback -j ACCEPT
-  iptables -C DOCKER-USER -i tailscale0 -p tcp --dport "${http_port}" -m comment --comment aiconnect-private-tailnet -j ACCEPT 2>/dev/null \
-    || iptables -I DOCKER-USER 2 -i tailscale0 -p tcp --dport "${http_port}" -m comment --comment aiconnect-private-tailnet -j ACCEPT
-  iptables -C DOCKER-USER -p tcp --dport "${http_port}" -s "${private_cidr}" -m comment --comment aiconnect-private-vcn -j ACCEPT 2>/dev/null \
-    || iptables -I DOCKER-USER 3 -p tcp --dport "${http_port}" -s "${private_cidr}" -m comment --comment aiconnect-private-vcn -j ACCEPT
+  iptables -C DOCKER-USER -p tcp -m conntrack --ctorigdstport "${http_port}" -s 127.0.0.0/8 -m comment --comment aiconnect-private-loopback -j ACCEPT 2>/dev/null \
+    || iptables -I DOCKER-USER 1 -p tcp -m conntrack --ctorigdstport "${http_port}" -s 127.0.0.0/8 -m comment --comment aiconnect-private-loopback -j ACCEPT
+  iptables -C DOCKER-USER -i tailscale0 -p tcp -m conntrack --ctorigdstport "${http_port}" -m comment --comment aiconnect-private-tailnet -j ACCEPT 2>/dev/null \
+    || iptables -I DOCKER-USER 2 -i tailscale0 -p tcp -m conntrack --ctorigdstport "${http_port}" -m comment --comment aiconnect-private-tailnet -j ACCEPT
+  iptables -C DOCKER-USER -p tcp -m conntrack --ctorigdstport "${http_port}" -s "${private_cidr}" -m comment --comment aiconnect-private-vcn -j ACCEPT 2>/dev/null \
+    || iptables -I DOCKER-USER 3 -p tcp -m conntrack --ctorigdstport "${http_port}" -s "${private_cidr}" -m comment --comment aiconnect-private-vcn -j ACCEPT
   iptables -D DOCKER-USER -p tcp --dport "${http_port}" -m comment --comment aiconnect-private-drop-public -j DROP 2>/dev/null || true
-  iptables -C DOCKER-USER -p tcp --dport "${http_port}" -m conntrack --ctstate NEW --ctstatus DNAT -m comment --comment aiconnect-private-drop-public -j DROP 2>/dev/null \
-    || iptables -I DOCKER-USER 4 -p tcp --dport "${http_port}" -m conntrack --ctstate NEW --ctstatus DNAT -m comment --comment aiconnect-private-drop-public -j DROP
+  iptables -C DOCKER-USER -p tcp -m conntrack --ctorigdstport "${http_port}" --ctstate NEW --ctstatus DNAT -m comment --comment aiconnect-private-drop-public -j DROP 2>/dev/null \
+    || iptables -I DOCKER-USER 4 -p tcp -m conntrack --ctorigdstport "${http_port}" --ctstate NEW --ctstatus DNAT -m comment --comment aiconnect-private-drop-public -j DROP
 
   if command -v ip6tables >/dev/null 2>&1; then
     ip6tables -N DOCKER-USER 2>/dev/null || true
-    ip6tables -C DOCKER-USER -i tailscale0 -p tcp --dport "${http_port}" -m comment --comment aiconnect-private-tailnet-v6 -j ACCEPT 2>/dev/null \
-      || ip6tables -I DOCKER-USER 1 -i tailscale0 -p tcp --dport "${http_port}" -m comment --comment aiconnect-private-tailnet-v6 -j ACCEPT
-    ip6tables -C DOCKER-USER -p tcp --dport "${http_port}" -m conntrack --ctstate NEW --ctstatus DNAT -m comment --comment aiconnect-private-drop-public-v6 -j DROP 2>/dev/null \
-      || ip6tables -I DOCKER-USER 2 -p tcp --dport "${http_port}" -m conntrack --ctstate NEW --ctstatus DNAT -m comment --comment aiconnect-private-drop-public-v6 -j DROP
+    ip6tables -C DOCKER-USER -p tcp -m conntrack --ctorigdstport "${http_port}" -s ::1/128 -m comment --comment aiconnect-private-loopback-v6 -j ACCEPT 2>/dev/null \
+      || ip6tables -I DOCKER-USER 1 -p tcp -m conntrack --ctorigdstport "${http_port}" -s ::1/128 -m comment --comment aiconnect-private-loopback-v6 -j ACCEPT
+    ip6tables -C DOCKER-USER -i tailscale0 -p tcp -m conntrack --ctorigdstport "${http_port}" -m comment --comment aiconnect-private-tailnet-v6 -j ACCEPT 2>/dev/null \
+      || ip6tables -I DOCKER-USER 2 -i tailscale0 -p tcp -m conntrack --ctorigdstport "${http_port}" -m comment --comment aiconnect-private-tailnet-v6 -j ACCEPT
+    ip6tables -C DOCKER-USER -p tcp -m conntrack --ctorigdstport "${http_port}" --ctstate NEW --ctstatus DNAT -m comment --comment aiconnect-private-drop-public-v6 -j DROP 2>/dev/null \
+      || ip6tables -I DOCKER-USER 3 -p tcp -m conntrack --ctorigdstport "${http_port}" --ctstate NEW --ctstatus DNAT -m comment --comment aiconnect-private-drop-public-v6 -j DROP
   fi
 }
 

@@ -143,9 +143,20 @@ public class OrganizationAccessService {
                 "조직 계정 권한과 이 조직의 팀 배정만 제거합니다. 다른 조직 소속과 로그인 계정 자체는 유지됩니다.");
     }
 
+    @Transactional(readOnly = true)
+    public boolean isPlatformAdminUser(UUID userId) {
+        return users.findById(userId).map(AppUser::isPlatformAdmin).orElse(false);
+    }
+
     @Transactional
     public void removeOrganizationUser(UUID organizationId, UUID userId) {
         OrganizationMember membership = requireOrganizationMember(organizationId, userId);
+        if (isPlatformAdminUser(userId)
+                && CurrentActor.principal().isPresent()
+                && !CurrentActor.principal().get().platformAdmin()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "PLATFORM_ADMIN_PROTECTED",
+                    "Only a platform administrator can remove a system administrator.");
+        }
         if (membership.getRole() == OrganizationRole.ORGANIZATION_ADMIN
                 && organizationMembers.countByIdOrganizationIdAndRole(organizationId, OrganizationRole.ORGANIZATION_ADMIN) <= 1) {
             throw new ApiException(HttpStatus.CONFLICT, "LAST_ORGANIZATION_ADMIN",

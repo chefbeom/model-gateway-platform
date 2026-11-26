@@ -180,6 +180,8 @@ public class RequestDiagnosticService {
                     "프로젝트의 외부 AI 전송 금지가 모든 API 키에 적용되어 외부 Target을 제외했습니다. API 키·서비스의 보호 설정을 OFF로 바꿔도 이 제한은 해제되지 않습니다. 인프라에서 로컬 모델을 준비하고 해당 논리 서비스의 Target에 연결하세요.");
             case "DATA_POLICY_BLOCKED" -> new RequestDiagnosticPayload.Recommendation(code, "데이터 보호 정책 확인",
                     "요청에 민감정보가 감지되어 외부 전송이 차단되었습니다. 프로젝트·API 키·서비스의 보호 모드와 허용 동작을 확인하거나 민감정보를 제거하세요.");
+            case "DATA_PROTECTION_INCOMPLETE" -> new RequestDiagnosticPayload.Recommendation(code, "사용자 정의 마스킹 패턴 점검",
+                    "사용자 정의 정규식 패턴이 실행 한도 안에 마스킹을 끝내지 못해 원문 외부 전송을 막았습니다. 중첩 반복(예: (.*a){n})이 없는 단순한 패턴으로 바꾸거나 요청을 줄이세요.");
             case "DATA_PROTECTION_EXTERNAL_BLOCKED" -> new RequestDiagnosticPayload.Recommendation(code, "외부 전송 차단 정책 확인",
                     "보호 정책이 외부 Provider 전송을 허용하지 않습니다. 로컬 Target을 준비하거나 정책 범위를 프로젝트·키별로 조정하세요.");
             case "DATA_PROTECTION_EXTERNAL_FAILOVER_BLOCKED" -> new RequestDiagnosticPayload.Recommendation(code, "외부 Failover 차단 정책 확인",
@@ -213,6 +215,7 @@ public class RequestDiagnosticService {
         if ("MODEL_UNAVAILABLE".equals(code)) return "호환되고 정상이며 승인된 Target이 없습니다. 평가 대상 " + targets.size() + "개 중 " + excluded + "개가 제외되었습니다.";
         if ("UPSTREAM_REJECTED".equals(code)) return "선택된 Provider가 요청을 거부했고 현재 Retry 정책에서 Failover가 허용되지 않았습니다.";
         if ("DATA_POLICY_BLOCKED".equals(code)) return "민감정보 보호 정책이 요청의 외부 전송을 차단했습니다. 원문은 저장하지 않고 분류명만 기록했습니다.";
+        if ("DATA_PROTECTION_INCOMPLETE".equals(code)) return "사용자 정의 마스킹 패턴이 실행 한도를 넘어 마스킹을 끝내지 못했으므로 외부 전송을 차단했습니다.";
         if ("DATA_PROTECTION_EXTERNAL_BLOCKED".equals(code)) return "데이터 보호 정책에 따라 외부 Target이 제외되었습니다. 로컬 Target만 선택할 수 있습니다.";
         if ("DATA_PROTECTION_EXTERNAL_FAILOVER_BLOCKED".equals(code)) return "데이터 보호 정책에 따라 자동 외부 Failover가 제외되었습니다.";
         return "요청 처리 중 " + code + " 오류가 발생했습니다. 평가 대상 " + targets.size() + "개, 사용 가능 " + eligible + "개입니다.";
