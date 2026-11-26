@@ -2,7 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import FlowNodeCard from './FlowNodeCard.vue'
 import { GRID_SIZE, NODE_TYPES, describeNode } from './catalog'
-import { canConnect, nearestCompatiblePort } from './graphOps'
+import { canConnectInView, nearestPortInView } from './graphOps'
+import { buildConnectionView, connectionDragIds, connectionIdForDeployment, describeConnectionNode, isConnectionId, isConnectionNode, viewPortsOf } from './connections'
 import { dependencyClosure, insertableTypesForEdge, promptScopeForSplice } from './workflow'
 import {
   bezierPath,
@@ -28,12 +29,14 @@ import type {
   FlowGraph,
   FlowNode,
   FlowSelection,
+  FlowViewMode,
   NodeChangeKind,
   NodeView,
   Point,
   PortRef,
   ServiceFlowSnapshot,
   ValidationIssue,
+  ViewEdge,
   Viewport,
 } from './types'
 
@@ -46,6 +49,7 @@ const props = withDefaults(defineProps<{
   nodeChanges: Record<string, NodeChangeKind>
   readOnly: boolean
   mode?: DesignerMode
+  viewMode?: FlowViewMode
 }>(), { mode: 'advanced' })
 
 const emit = defineEmits<{
@@ -73,17 +77,26 @@ const marquee = ref<{ x: number; y: number; width: number; height: number } | nu
 const spaceDown = ref(false)
 const interactionMode = ref<'idle' | 'pan' | 'marquee' | 'node' | 'wire'>('idle')
 
-interface DragState { ids: Set<string>; dx: number; dy: number; snap: boolean }
+interface DragState { ids: Set<string>; dx: number; dy: number; snap: boolean; anchorId: string }
 interface WireState { from: PortRef; to: Point; target: PortRef | null; compat: Map<string, string[]> }
 const dragState = shallowRef<DragState | null>(null)
 const wire = shallowRef<WireState | null>(null)
 
 const vp = computed<Viewport>(() => live.value ?? props.viewport)
 
+/* ------------------------------ connection-centric view ------------------------------ */
+const viewKind = computed<FlowViewMode>(() => (props.viewMode === 'connection' ? 'connection' : 'model'))
+const connectionView = computed(() => (viewKind.value === 'connection' ? buildConnectionView(props.graph, props.snapshot) : null))
+const dimmedIds = computed(() => new Set(connectionView.value?.dimmed ?? []))
+const FRAME_PAD = 12
+
 /* ------------------------------ derived data ------------------------------ */
 // Basic mode hides infrastructure nodes and host edges from rendering and hit-testing (data stays in the graph).
 const HIDDEN_IN_BASIC = new Set(['endpoint', 'provider'])
 const visibleGraph = computed<FlowGraph>(() => {
+  // Connection view: every node is drawn (connections included in basic mode); edges are the projection (§3.1).
+  const view = connectionView.value
+  if (view) return { ...props.graph, nodes: props.graph.nodes, edges: view.edges }
   if (props.mode !== 'basic') return props.graph
   const nodes = props.graph.nodes.filter((n) => !HIDDEN_IN_BASIC.has(n.type))
   const edges = props.graph.edges.filter((e) => e.kind !== 'host')
@@ -102,7 +115,7 @@ const views = computed(() => {
   const result = new Map<string, NodeView>()
   const alive = new Set<string>()
   for (const node of props.graph.nodes) {
-    const view = describeNode(node, props.graph, props.snapshot)
+    const view = viewKind.value === 'connection' && isConnectionNode(node) ? describeConnectionNode(node, props.graph, props.snapshot) : describeNode(node, props.graph, props.snapshot)
     const key = JSON.stringify(view)
     const cached = viewCache.get(node.id)
     alive.add(node.id)
@@ -123,11 +136,33 @@ function dragPosition(node: FlowNode, drag: DragState): Point {
   return drag.snap ? { x: snapToGrid(x), y: snapToGrid(y) } : { x: Math.round(x), y: Math.round(y) }
 }
 
+/** Display position before any drag: derived in the connection view (§5.3), the stored position otherwise. */
+function basePos(node: FlowNode): Point {
+  return connectionView.value?.positions[node.id] ?? { x: node.x, y: node.y }
+}
+
+/** Connection view: one snapped delta for the whole dragged set, taken from the pressed node (§4.3). */
+function groupDelta(drag: DragState): Point {
+  const anchor = nodeMap.value.get(drag.anchorId)
+  const base = anchor ? basePos(anchor) : { x: 0, y: 0 }
+  const x = base.x + drag.dx
+  const y = base.y + drag.dy
+  const p = drag.snap ? { x: snapToGrid(x), y: snapToGrid(y) } : { x: Math.round(x), y: Math.round(y) }
+  return { x: p.x - base.x, y: p.y - base.y }
+}
+
 function effective(node: FlowNode): FlowNode {
   const drag = dragState.value
-  if (!drag || !drag.ids.has(node.id)) return node
-  const p = dragPosition(node, drag)
-  return { ...node, x: p.x, y: p.y }
+  let p = basePos(node)
+  if (drag && drag.ids.has(node.id)) {
+    if (connectionView.value) {
+      const d = groupDelta(drag)
+      p = { x: p.x + d.x, y: p.y + d.y }
+    } else {
+      p = dragPosition(node, drag)
+    }
+  }
+  return p.x === node.x && p.y === node.y ? node : { ...node, x: p.x, y: p.y }
 }
 
 function cardStyle(node: FlowNode): Record<string, string> {
@@ -137,9 +172,7 @@ function cardStyle(node: FlowNode): Record<string, string> {
 }
 
 function offsetKey(node: FlowNode): string {
-  const drag = dragState.value
-  if (!drag || !drag.ids.has(node.id)) return ''
-  const p = dragPosition(node, drag)
+  const p = effective(node)
   return `${p.x},${p.y}`
 }
 
@@ -155,24 +188,28 @@ function highlightKey(nodeId: string): string {
   return highlightOf(nodeId).join('|')
 }
 
-interface EdgeView { edge: FlowEdge; d: string; mid: Point; selected: boolean; dim: boolean; drop: boolean }
+interface EdgeView { edge: FlowEdge; d: string; mid: Point; selected: boolean; dim: boolean; drop: boolean; interactive: boolean; detached: boolean }
 const hoverEdgeId = ref<string | null>(null)
 const dropEdgeId = ref<string | null>(null)
 const edgeViews = computed<EdgeView[]>(() => {
   const result: EdgeView[] = []
-  for (const edge of visibleGraph.value.edges) {
+  for (const edge of visibleGraph.value.edges as Array<FlowEdge & Partial<Pick<ViewEdge, 'interactive' | 'detached'>>>) {
     const from = nodeMap.value.get(edge.from.nodeId)
     const to = nodeMap.value.get(edge.to.nodeId)
     if (!from || !to) continue
     const a = portAnchor(effective(from), edge.from.portId, 'out')
     const b = portAnchor(effective(to), edge.to.portId, 'in')
+    const interactive = edge.interactive !== false
+    const detached = edge.detached === true
     result.push({
       edge,
       d: bezierPath(a, b),
       mid: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 },
-      selected: selectedEdges.value.has(edge.id),
-      dim: edge.kind === 'route' && to.type === 'llm' && to.props.enabled === false,
+      selected: interactive && selectedEdges.value.has(edge.id),
+      dim: (edge.kind === 'route' && to.type === 'llm' && to.props.enabled === false) || dimmedIds.value.has(edge.to.nodeId),
       drop: dropEdgeId.value === edge.id,
+      interactive,
+      detached,
     })
   }
   return result
@@ -183,14 +220,32 @@ const wirePath = computed(() => {
   if (!w) return ''
   const fromNode = nodeMap.value.get(w.from.nodeId)
   if (!fromNode) return ''
-  const a = portAnchor(fromNode, w.from.portId, 'out')
+  const a = portAnchor(effective(fromNode), w.from.portId, 'out')
   let b = w.to
   if (w.target) {
     const targetNode = nodeMap.value.get(w.target.nodeId)
-    if (targetNode) b = portAnchor(targetNode, w.target.portId, 'in')
+    if (targetNode) b = portAnchor(effective(targetNode), w.target.portId, 'in')
   }
   return bezierPath(a, b)
 })
+
+const groupFrames = computed(() => {
+  const view = connectionView.value
+  if (!view) return []
+  const drag = dragState.value
+  return view.groups.map((g) => {
+    const d = drag && drag.ids.has(g.connectionId) ? groupDelta(drag) : { x: 0, y: 0 }
+    return { id: g.connectionId, health: g.health, x: g.frame.x - FRAME_PAD + d.x, y: g.frame.y - FRAME_PAD + d.y, width: g.frame.width + FRAME_PAD * 2, height: g.frame.height + FRAME_PAD * 2 }
+  })
+})
+
+/** Geometry of what is drawn: visible nodes at their display positions (fit, marquee, drop hit testing). */
+const displayGraph = computed<FlowGraph>(() => ({ ...visibleGraph.value, nodes: visibleGraph.value.nodes.map(effective) }))
+/** Only real (interactive) edges can take a palette drop. */
+const spliceGraph = computed<FlowGraph>(() => ({
+  ...displayGraph.value,
+  edges: displayGraph.value.edges.filter((e) => (e as Partial<ViewEdge>).interactive !== false),
+}))
 
 const selectedEdgeButton = computed(() => {
   if (props.readOnly) return null
@@ -319,14 +374,14 @@ function fit() {
   measure()
   if (!(size.value.width > 0) || !(size.value.height > 0)) { pendingFit = true; return }
   pendingFit = false
-  commitViewport(fitViewport(graphBounds(visibleGraph.value), size.value), true)
+  commitViewport(fitViewport(graphBounds(displayGraph.value), size.value), true)
 }
 
 function centerOn(nodeId: string) {
   const node = nodeMap.value.get(nodeId)
   if (!node) return
   measure()
-  const rect = nodeRect(node)
+  const rect = nodeRect(effective(node))
   const zoom = vp.value.zoom
   commitViewport({
     x: size.value.width / 2 - (rect.x + rect.width / 2) * zoom,
@@ -474,17 +529,19 @@ function beginNodePress(event: PointerEvent, nodeId: string) {
   }
   const base = pressWasSelected ? [...props.selection.nodeIds] : event.shiftKey ? [...props.selection.nodeIds, nodeId] : [nodeId]
   // Dependent nodes (masker, model prompt, hosts, policy) follow their owner; Ctrl/Cmd moves the selection alone.
-  dragIds = event.ctrlKey || event.metaKey ? base : dependencyClosure(props.graph, base)
+  // Connection view: a connection, its models and their prompts always move as one group (§4.3).
+  const alone = event.ctrlKey || event.metaKey
+  dragIds = connectionView.value ? connectionDragIds(props.graph, connectionView.value, base, alone) : alone ? base : dependencyClosure(props.graph, base)
   interactionMode.value = 'node'
   capture(event)
 }
 
 function beginWire(event: PointerEvent, from: PortRef) {
   const compat = new Map<string, string[]>()
-  for (const node of props.graph.nodes) {
-    for (const port of NODE_TYPES[node.type].ports) {
+  for (const node of visibleGraph.value.nodes) {
+    for (const port of viewPortsOf(node, viewKind.value)) {
       if (port.direction !== 'in') continue
-      if (canConnect(props.graph, from, { nodeId: node.id, portId: port.id }, props.snapshot).ok) {
+      if (canConnectInView(props.graph, from, { nodeId: node.id, portId: port.id }, props.snapshot, viewKind.value).ok) {
         const list = compat.get(node.id) ?? []
         list.push(`in:${port.id}`)
         compat.set(node.id, list)
@@ -521,13 +578,13 @@ function flush() {
   } else if (mode === 'node') {
     if (moved && !props.readOnly) {
       const zoom = vp.value.zoom
-      dragState.value = { ids: new Set(dragIds), dx: dxScreen / zoom, dy: dyScreen / zoom, snap: !lastEvent.altKey }
+      dragState.value = { ids: new Set(dragIds), dx: dxScreen / zoom, dy: dyScreen / zoom, snap: !lastEvent.altKey, anchorId: pressNodeId ?? '' }
     }
   } else if (mode === 'wire') {
     const w = wire.value
     if (!w) return
     const world = screenToWorld(localPoint(lastEvent), vp.value)
-    const target = nearestCompatiblePort(props.graph, w.from, world, 24 / vp.value.zoom, props.snapshot)
+    const target = nearestPortInView(props.graph, w.from, world, 24 / vp.value.zoom, props.snapshot, viewKind.value, (n) => effective(n))
     wire.value = { ...w, to: world, target }
   }
 }
@@ -540,6 +597,11 @@ function resetInteraction() {
   marquee.value = null
   pressNodeId = null
   moved = false
+}
+
+function wireCommand(from: PortRef, to: PortRef): FlowCommand {
+  if (viewKind.value === 'connection' && (isConnectionId(from.nodeId) || isConnectionId(to.nodeId))) return { type: 'connectConnection', from, to }
+  return { type: 'connect', from, to }
 }
 
 function onPointerUp(event: PointerEvent) {
@@ -569,7 +631,7 @@ function onPointerUp(event: PointerEvent) {
     if (m && (m.width >= CLICK_THRESHOLD || m.height >= CLICK_THRESHOLD)) {
       const a = screenToWorld({ x: m.x, y: m.y }, vp.value)
       const b = screenToWorld({ x: m.x + m.width, y: m.y + m.height }, vp.value)
-      const ids = nodesInRect(visibleGraph.value, { x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y })
+      const ids = nodesInRect(displayGraph.value, { x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y })
       setSelection(additive ? [...new Set([...baseSelection.nodeIds, ...ids])] : ids, additive ? baseSelection.edgeIds : [])
     } else if (!additive) {
       setSelection([], [])
@@ -581,11 +643,12 @@ function onPointerUp(event: PointerEvent) {
     const shift = pressShift
     resetInteraction()
     if (drag && didMove) {
+      const delta = connectionView.value ? groupDelta(drag) : null
       const moves: Array<{ nodeId: string; x: number; y: number }> = []
       for (const id of drag.ids) {
         const node = nodeMap.value.get(id)
         if (!node) continue
-        const p = dragPosition(node, drag)
+        const p = delta ? { x: node.x + delta.x, y: node.y + delta.y } : dragPosition(node, drag)
         if (p.x !== node.x || p.y !== node.y) moves.push({ nodeId: id, x: p.x, y: p.y })
       }
       if (moves.length > 0 && !props.readOnly) emit('command', { type: 'moveNodes', moves })
@@ -597,14 +660,18 @@ function onPointerUp(event: PointerEvent) {
     const el = document.elementFromPoint(event.clientX, event.clientY)
     resetInteraction()
     if (from && target) {
-      emit('command', { type: 'connect', from, to: target })
+      emit('command', wireCommand(from, target))
     } else if (from && didMove) {
       const portEl = el?.closest('[data-port-dir="in"]')
       const nodeId = portEl?.getAttribute('data-node-id')
       const portId = portEl?.getAttribute('data-port-id')
       if (nodeId && portId) {
-        const check = canConnect(props.graph, from, { nodeId, portId }, props.snapshot)
-        if (!check.ok) announce(check.reason)
+        const check = canConnectInView(props.graph, from, { nodeId, portId }, props.snapshot, viewKind.value)
+        if (!check.ok) {
+          announce(check.reason)
+          // Connection view: a refused connection/model wire is also explained in the page message bar (D9).
+          if (viewKind.value === 'connection' && (isConnectionId(from.nodeId) || isConnectionId(nodeId))) emit('command', { type: 'connectConnection', from, to: { nodeId, portId } })
+        }
       }
     }
   }
@@ -676,7 +743,9 @@ function onKeyDown(event: KeyboardEvent) {
     const step = event.shiftKey ? 64 : GRID_SIZE
     const dx = key === 'ArrowLeft' ? -step : key === 'ArrowRight' ? step : 0
     const dy = key === 'ArrowUp' ? -step : key === 'ArrowDown' ? step : 0
-    const ids = mod ? props.selection.nodeIds : dependencyClosure(props.graph, props.selection.nodeIds)
+    const ids = connectionView.value
+      ? connectionDragIds(props.graph, connectionView.value, props.selection.nodeIds, mod)
+      : mod ? props.selection.nodeIds : dependencyClosure(props.graph, props.selection.nodeIds)
     const moves = ids
       .map((id) => nodeMap.value.get(id))
       .filter((n): n is FlowNode => !!n)
@@ -706,7 +775,7 @@ function onKeyDown(event: KeyboardEvent) {
     if (props.readOnly) return
     if (props.selection.nodeIds.length === 0 && props.selection.edgeIds.length === 0) return
     event.preventDefault()
-    emit('command', { type: 'removeItems', nodeIds: [...props.selection.nodeIds], edgeIds: [...props.selection.edgeIds] })
+    emit('command', { type: 'removeItems', nodeIds: [...props.selection.nodeIds], edgeIds: [...props.selection.edgeIds], withConnectionModels: viewKind.value === 'connection' })
     return
   }
   if (key === 'f' || key === 'F') { event.preventDefault(); fit(); return }
@@ -733,6 +802,10 @@ function onFocusOut(event: FocusEvent) {
 }
 
 /* ------------------------------ node card events ------------------------------ */
+function nodeAction(node: FlowNode): string | null {
+  return connectionView.value && isConnectionNode(node) && !props.readOnly && !node.collapsed ? '＋ 모델 추가' : null
+}
+
 function onToggleCollapse(nodeId: string, collapsed: boolean) {
   if (props.readOnly) return
   emit('command', { type: 'toggleCollapse', nodeIds: [nodeId], collapsed })
@@ -765,7 +838,7 @@ function onDragOver(event: DragEvent) {
   event.preventDefault()
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
   const world = screenToWorld(localPoint(event), vp.value)
-  const id = nearestEdge(visibleGraph.value, world, DROP_RADIUS / vp.value.zoom, SPLICE_KINDS)
+  const id = nearestEdge(spliceGraph.value, world, DROP_RADIUS / vp.value.zoom, SPLICE_KINDS)
   if (id !== dropEdgeId.value) dropEdgeId.value = id
 }
 
@@ -782,21 +855,35 @@ function onDrop(event: DragEvent) {
   try { parsed = JSON.parse(event.dataTransfer?.getData(DND_MIME) ?? '') } catch { return }
   if (!parsed || typeof parsed !== 'object') return
   const { nodeType, refId } = parsed as { nodeType?: unknown; refId?: unknown }
-  if (typeof nodeType !== 'string' || !ADDABLE.includes(nodeType as AddableNodeType)) return
   if (refId !== null && refId !== undefined && (typeof refId !== 'string' || refId.length > 80)) return
   const world = screenToWorld(localPoint(event), vp.value)
+  const snapped = { x: snapToGrid(world.x), y: snapToGrid(world.y) }
+  // Connection view: a palette connection header becomes a (pinned) connection node at the drop point.
+  if (nodeType === 'connection') {
+    if (viewKind.value === 'connection' && typeof refId === 'string' && isConnectionId(refId)) emit('command', { type: 'addConnection', connectionId: refId, position: snapped })
+    return
+  }
+  if (typeof nodeType !== 'string' || !ADDABLE.includes(nodeType as AddableNodeType)) return
   const type = nodeType as AddableNodeType
-  const edgeId = nearestEdge(visibleGraph.value, world, DROP_RADIUS / vp.value.zoom, SPLICE_KINDS)
+  const edgeId = nearestEdge(spliceGraph.value, world, DROP_RADIUS / vp.value.zoom, SPLICE_KINDS)
   if (edgeId && insertableTypesForEdge(props.graph, edgeId, props.snapshot).includes(type)) {
     spliceRequested = true
     emit('command', { type: 'addNode', nodeType: type, refId: typeof refId === 'string' ? refId : null, spliceEdgeId: edgeId })
     return
   }
+  // Connection view: a model lands behind its own connection (its group), never as a loose LLM.
+  if (viewKind.value === 'connection' && type === 'llm' && typeof refId === 'string') {
+    const connectionId = connectionIdForDeployment(refId, props.snapshot)
+    if (connectionId) {
+      emit('command', { type: 'addConnectionModels', connectionId, deploymentIds: [refId], position: snapped })
+      return
+    }
+  }
   emit('command', {
     type: 'addNode',
     nodeType: type,
     refId: typeof refId === 'string' ? refId : null,
-    position: { x: snapToGrid(world.x), y: snapToGrid(world.y) },
+    position: snapped,
     autoWire: !event.altKey,
   })
 }
@@ -899,15 +986,18 @@ watch(() => props.selection, (selection) => {
   >
     <div class="fd-world" :style="worldStyle">
       <svg class="fd-edges" width="1" height="1" style="overflow: visible" aria-hidden="true">
+        <g v-if="groupFrames.length > 0" class="fd-group-frames">
+          <rect v-for="frame in groupFrames" :key="frame.id" class="fd-group-frame" :class="`is-${frame.health}`" :x="frame.x" :y="frame.y" :width="frame.width" :height="frame.height" rx="16" ry="16" />
+        </g>
         <g
           v-for="item in edgeViews"
           :key="item.edge.id"
           class="fd-edge"
-          :class="[`fd-edge--${item.edge.kind}`, { 'is-selected': item.selected, 'is-dim': item.dim, 'is-drop': item.drop }]"
-          @pointerenter="hoverEdgeId = item.edge.id"
+          :class="[`fd-edge--${item.edge.kind}`, { 'is-selected': item.selected, 'is-dim': item.dim, 'is-drop': item.drop, 'is-decor': !item.interactive, 'is-detached': item.detached }]"
+          @pointerenter="item.interactive && (hoverEdgeId = item.edge.id)"
           @pointerleave="hoverEdgeId === item.edge.id && (hoverEdgeId = null)"
         >
-          <path class="fd-edge-hit" :d="item.d" :data-edge-id="item.edge.id" />
+          <path v-if="item.interactive" class="fd-edge-hit" :d="item.d" :data-edge-id="item.edge.id" />
           <path class="fd-edge-line" :d="item.d" />
           <g
             v-if="insertTypes.has(item.edge.id)"
@@ -945,16 +1035,18 @@ watch(() => props.selection, (selection) => {
       <FlowNodeCard
         v-for="node in visibleGraph.nodes"
         :key="node.id"
-        v-memo="[node, views.get(node.id), selectedNodes.has(node.id), nodeChanges[node.id] ?? null, counts[node.id], offsetKey(node), highlightKey(node.id), readOnly]"
+        v-memo="[node, views.get(node.id), selectedNodes.has(node.id), nodeChanges[node.id] ?? null, counts[node.id], offsetKey(node), highlightKey(node.id), readOnly, viewKind, dimmedIds.has(node.id)]"
         :style="cardStyle(node)"
         :node="node"
         :view="views.get(node.id)!"
-        :ports="NODE_TYPES[node.type].ports"
+        :ports="viewPortsOf(node, viewKind)"
         :selected="selectedNodes.has(node.id)"
         :change="nodeChanges[node.id] ?? null"
         :counts="counts[node.id] ?? ZERO_COUNTS"
         :highlight-port-ids="highlightOf(node.id)"
         :read-only="readOnly"
+        :dimmed="dimmedIds.has(node.id)"
+        :action="nodeAction(node)"
         @toggle-collapse="onToggleCollapse"
         @activate="onActivate"
       />
@@ -1020,6 +1112,11 @@ watch(() => props.selection, (selection) => {
 .fd-edge--host .fd-edge-line { stroke: var(--faint); stroke-dasharray: 3 5; }
 .fd-edge.is-drop .fd-edge-line { stroke: var(--accent-strong); stroke-width: 4; stroke-dasharray: none; }
 .fd-edge.is-dim { opacity: .4; }
+.fd-group-frame { fill: var(--surface-2); stroke: var(--border); stroke-width: 1; }
+.fd-group-frame.is-degraded { stroke: var(--warning); }
+.fd-group-frame.is-offline, .fd-group-frame.is-disabled { stroke-dasharray: 6 5; opacity: .7; }
+.fd-edge.is-decor .fd-edge-line { opacity: .85; }
+.fd-edge.is-detached .fd-edge-line { stroke: var(--muted); stroke-dasharray: 4 6; }
 .fd-edge:hover .fd-edge-line { stroke-width: 3; }
 .fd-edge.is-selected .fd-edge-line { stroke-width: 3; }
 .fd-edge.is-selected .fd-edge-hit { stroke: var(--accent-dim); }

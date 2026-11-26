@@ -171,6 +171,16 @@ export function validateGraph(graph: FlowGraph, base: ServiceFlowSnapshot): Vali
     }
   }
 
+  // --- connections (connection-centric view: a connection placed before its models) ---
+  for (const node of graph.nodes) {
+    if ((node.type !== 'endpoint' && node.type !== 'provider') || node.props.pinned !== true) continue
+    if (graph.edges.some((e) => e.kind === 'host' && e.to.nodeId === node.id)) continue
+    add('CONNECTION_EMPTY', 'warning', '모델이 없는 연결입니다. 연결 노드에서 모델을 추가하거나 연결을 삭제하세요. 이 노드만으로는 서버 설정이 바뀌지 않습니다.', {
+      nodeId: node.id,
+      fix: { label: '연결 삭제', command: { type: 'removeItems', nodeIds: [node.id], edgeIds: [], withConnectionModels: true } },
+    })
+  }
+
   // --- access ---
   const before = new Set(base.config.accessProjectIds)
   const after = new Set(L.accessProjectIds)

@@ -2,11 +2,12 @@
 import { computed, ref } from 'vue'
 import { llmNodeId, projectNodeId } from './catalog'
 import { buildPalette, shortModelName } from './palette'
-import type { AddableNodeType, DesignerMode, FlowCommand, FlowGraph, HealthTone, PaletteConnectionGroup, PaletteGroupId, PaletteModelItem, PaletteNodeItem, PaletteProjectItem, ServiceFlowSnapshot } from './types'
+import { connectionIdForDeployment } from './connections'
+import type { AddableNodeType, DesignerMode, FlowCommand, FlowGraph, FlowViewMode, HealthTone, PaletteConnectionGroup, PaletteGroupId, PaletteModelItem, PaletteNodeItem, PaletteProjectItem, ServiceFlowSnapshot } from './types'
 
 const DND_MIME = 'application/x-aiconnect-flow-node'
 
-const props = withDefaults(defineProps<{ snapshot: ServiceFlowSnapshot; graph: FlowGraph; readOnly: boolean; mode?: DesignerMode }>(), { mode: 'advanced' })
+const props = withDefaults(defineProps<{ snapshot: ServiceFlowSnapshot; graph: FlowGraph; readOnly: boolean; mode?: DesignerMode; viewMode?: FlowViewMode }>(), { mode: 'advanced' })
 const emit = defineEmits<{ command: [FlowCommand]; 'select-node': [string] }>()
 
 const query = ref('')
@@ -72,16 +73,31 @@ function clickProject(item: PaletteProjectItem) {
   else if (!props.readOnly) emit('command', { type: 'addNode', nodeType: 'project', refId: item.projectId, position: null })
 }
 
+const connectionFirst = computed(() => props.viewMode === 'connection')
+
+function connectionDraggable(conn: PaletteConnectionGroup): boolean {
+  return connectionFirst.value && conn.addable && !conn.onCanvas && !props.readOnly
+}
+
+function clickConnection(conn: PaletteConnectionGroup) {
+  if (conn.onCanvas) { emit('select-node', conn.id); return }
+  if (props.readOnly || !conn.addable) return
+  emit('command', { type: 'addConnection', connectionId: conn.id, position: null })
+}
+
 function clickModel(item: PaletteModelItem) {
-  if (item.onCanvas) emit('select-node', llmNodeId(item.deploymentId))
-  else if (!props.readOnly) emit('command', { type: 'addNode', nodeType: 'llm', refId: item.deploymentId, position: null })
+  if (item.onCanvas) { emit('select-node', llmNodeId(item.deploymentId)); return }
+  if (props.readOnly) return
+  const connectionId = connectionFirst.value ? connectionIdForDeployment(item.deploymentId, props.snapshot) : null
+  if (connectionId) emit('command', { type: 'addConnectionModels', connectionId, deploymentIds: [item.deploymentId], position: null })
+  else emit('command', { type: 'addNode', nodeType: 'llm', refId: item.deploymentId, position: null })
 }
 
 function nodeClickable(item: PaletteNodeItem): boolean {
   return item.onCanvas || (!props.readOnly && item.clickDisabledReason === null)
 }
 
-function dragStart(event: DragEvent, nodeType: AddableNodeType, refId: string | null) {
+function dragStart(event: DragEvent, nodeType: AddableNodeType | 'connection', refId: string | null) {
   if (props.readOnly || !event.dataTransfer) { event.preventDefault(); return }
   event.dataTransfer.setData(DND_MIME, JSON.stringify({ nodeType, refId }))
   event.dataTransfer.effectAllowed = 'copy'
@@ -112,6 +128,7 @@ function nodeTitle(item: PaletteNodeItem): string {
         </h3>
 
         <div v-if="isOpen(group.id)" class="fd-section-body">
+            <p v-if="connectionFirst && (group.id === 'llm-local' || group.id === 'llm-external')" class="fd-empty">연결 머리글을 캔버스로 끌어 놓거나 ＋를 누른 뒤, 연결 노드에서 모델을 고르세요.</p>
           <p v-if="group.id === 'entry' && projectsHidden" class="fd-empty">플랫폼 토큰 세션에서는 프로젝트가 표시되지 않습니다.</p>
           <p v-else-if="group.id === 'entry' && group.projects.length === 0" class="fd-empty">표시할 프로젝트가 없습니다.</p>
 
@@ -160,16 +177,35 @@ function nodeTitle(item: PaletteNodeItem): string {
           </button>
 
           <div v-for="conn in group.connections" :key="conn.id" class="fd-conn" :data-connection="conn.id">
-            <button type="button" class="fd-conn-head" :aria-expanded="connOpen(group.id, conn)" :title="connTitle(conn)" @click="toggleConn(group.id, conn)">
-              <span class="fd-caret" aria-hidden="true">{{ connOpen(group.id, conn) ? '▾' : '▸' }}</span>
-              <span class="fd-dot" :class="`fd-dot--${conn.tone}`" aria-hidden="true"></span>
-              <span class="fd-conn-main">
-                <strong>{{ conn.label }}</strong>
-                <small v-if="conn.detail">{{ conn.detail }}</small>
-              </span>
-              <span class="fd-count" :title="`활성 ${conn.activeCount} / 전체 ${conn.totalCount}`">{{ conn.activeCount }}/{{ conn.totalCount }}</span>
-              <span v-if="conn.hiddenCount > 0" class="fd-conn-hidden">숨김 {{ conn.hiddenCount }}</span>
-            </button>
+            <div class="fd-conn-row">
+              <button
+                type="button"
+                class="fd-conn-head"
+                :aria-expanded="connOpen(group.id, conn)"
+                :title="connTitle(conn)"
+                :draggable="connectionDraggable(conn)"
+                @click="toggleConn(group.id, conn)"
+                @dragstart="dragStart($event, 'connection', conn.id)"
+              >
+                <span class="fd-caret" aria-hidden="true">{{ connOpen(group.id, conn) ? '▾' : '▸' }}</span>
+                <span class="fd-dot" :class="`fd-dot--${conn.tone}`" aria-hidden="true"></span>
+                <span class="fd-conn-main">
+                  <strong>{{ conn.label }}</strong>
+                  <small v-if="conn.detail">{{ conn.detail }}</small>
+                </span>
+                <span class="fd-count" :title="`활성 ${conn.activeCount} / 전체 ${conn.totalCount}`">{{ conn.activeCount }}/{{ conn.totalCount }}</span>
+                <span v-if="conn.hiddenCount > 0" class="fd-conn-hidden">숨김 {{ conn.hiddenCount }}</span>
+              </button>
+              <button
+                v-if="connectionFirst && conn.addable"
+                type="button"
+                class="fd-conn-add"
+                :disabled="readOnly && !conn.onCanvas"
+                :title="conn.onCanvas ? '워크플로우의 연결 노드를 선택합니다.' : '연결을 워크플로우에 놓습니다. 끌어 놓아도 됩니다.'"
+                :aria-label="`${conn.label} ${conn.onCanvas ? '연결 선택' : '연결을 워크플로우에 추가'}`"
+                @click="clickConnection(conn)"
+              >{{ conn.onCanvas ? '선택' : '＋' }}</button>
+            </div>
             <div v-if="connOpen(group.id, conn)" class="fd-conn-body">
               <button
                 v-for="item in conn.models"
@@ -284,6 +320,11 @@ function nodeTitle(item: PaletteNodeItem): string {
 .fd-conn-main { flex: 1; min-width: 0; display: grid; gap: 1px; }
 .fd-conn-main strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 10px; font-weight: 800; }
 .fd-conn-main small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font-size: 8px; }
+.fd-conn-row { display: flex; align-items: stretch; gap: 6px; }
+.fd-conn-row .fd-conn-head { flex: 1; min-width: 0; }
+.fd-conn-head[draggable='true'] { cursor: grab; }
+.fd-conn-add { flex: none; min-width: 34px; padding: 0 8px; border: 1px solid var(--accent-border); border-radius: 8px; background: var(--accent-dim); color: var(--accent-strong); font-size: 10px; font-weight: 800; cursor: pointer; }
+.fd-conn-add:disabled { cursor: not-allowed; opacity: .5; }
 .fd-conn-hidden { color: var(--faint); font-size: 8px; white-space: nowrap; }
 .fd-conn-body { display: grid; gap: 6px; padding-left: 8px; border-left: 2px solid var(--border); }
 .fd-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }

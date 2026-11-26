@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { DesignerMode, FlowToolbarAction } from './types'
+import type { DesignerMode, FlowToolbarAction, FlowViewMode } from './types'
 
 const props = withDefaults(defineProps<{
   canUndo: boolean
@@ -14,6 +14,7 @@ const props = withDefaults(defineProps<{
   compact: boolean
   zoom?: number
   mode?: DesignerMode
+  viewMode?: FlowViewMode
   canNormalize?: boolean
 }>(), { zoom: 1, mode: 'advanced', canNormalize: false })
 
@@ -58,6 +59,11 @@ const editBlocked = () => props.readOnly || props.busy
     <div class="fd-group fd-mode" role="group" aria-label="표시 모드">
       <button type="button" class="fd-btn fd-mode-btn" :class="{ 'is-active': mode === 'basic' }" :aria-pressed="mode === 'basic'" title="핵심 노드만 보여 줍니다." @click="fire('mode-basic')">기본</button>
       <button type="button" class="fd-btn fd-mode-btn" :class="{ 'is-active': mode === 'advanced' }" :aria-pressed="mode === 'advanced'" title="마스킹 워커, 생성 파라미터, 실행 위치 등 고급 항목을 보여 줍니다." @click="fire('mode-advanced')">고급</button>
+    </div>
+
+    <div class="fd-group fd-mode" role="group" aria-label="배치 보기">
+      <button type="button" class="fd-btn fd-mode-btn" :class="{ 'is-active': viewMode === 'connection' }" :aria-pressed="viewMode === 'connection'" title="로컬 서버·외부 Provider 같은 연결별로 모델을 묶어 보여 줍니다." @click="fire('view-connection')">연결 중심</button>
+      <button type="button" class="fd-btn fd-mode-btn" :class="{ 'is-active': viewMode !== 'connection' }" :aria-pressed="viewMode !== 'connection'" title="모델마다 실행 위치를 따로 보여 주는 기존 보기입니다." @click="fire('view-model')">모델 중심</button>
     </div>
 
     <button

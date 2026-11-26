@@ -18,7 +18,7 @@ const editor = useFlowEditor(props, canvasRef, stageRef)
 const {
   loadState, loadError, message, base, graph, viewport, selection, serviceOptions, selectedKey, restoredAt, hasNewDraft,
   layoutAvailable, layoutDirty, planOpen, planPhase, plan, planResults, planBusy,
-  narrow, compact, paletteOpen, inspectorOpen, mode, canNormalize, showQuickStart,
+  narrow, compact, paletteOpen, inspectorOpen, mode, viewMode, canNormalize, showQuickStart,
   issues, nodeChanges, changeCount, errorCount, warningCount, busy, readOnly, canUndo, canRedo, serviceLabel
 } = editor
 
@@ -67,28 +67,28 @@ function onServiceChange(event: Event) {
           :error-count="errorCount" :warning-count="warningCount"
           :layout-dirty="layoutDirty" :layout-available="layoutAvailable"
           :busy="busy" :read-only="readOnly" :compact="compact" :zoom="viewport.zoom"
-          :mode="mode" :can-normalize="canNormalize"
+          :mode="mode" :can-normalize="canNormalize" :view-mode="viewMode"
           @action="editor.onToolbarAction"
         />
         <div ref="stageRef" class="fd-stage" :class="{ 'fd-compact': compact }" aria-busy="false">
           <FlowPalette
             v-if="!compact || paletteOpen"
             class="fd-aside fd-aside-left"
-            :snapshot="base" :graph="graph" :read-only="readOnly" :mode="mode"
+            :snapshot="base" :graph="graph" :read-only="readOnly" :mode="mode" :view-mode="viewMode"
             @command="editor.handleCommand" @select-node="editor.focusNode"
           />
           <FlowCanvas
             ref="canvasRef"
             class="fd-canvas"
             :graph="graph" :snapshot="base" :viewport="viewport" :selection="selection"
-            :issues="issues" :node-changes="nodeChanges" :read-only="readOnly" :mode="mode"
+            :issues="issues" :node-changes="nodeChanges" :read-only="readOnly" :mode="mode" :view-mode="viewMode"
             @open-inspector="editor.openInspector" @update:viewport="editor.updateViewport" @update:selection="editor.updateSelection"
             @command="editor.handleCommand" @action="(action: 'undo' | 'redo') => (action === 'undo' ? editor.undo() : editor.redo())"
           />
           <FlowInspector
             v-if="!compact || inspectorOpen"
             class="fd-aside fd-aside-right"
-            :graph="graph" :snapshot="base" :selection="selection" :issues="issues" :read-only="readOnly" :mode="mode"
+            :graph="graph" :snapshot="base" :selection="selection" :issues="issues" :read-only="readOnly" :mode="mode" :view-mode="viewMode"
             @command="editor.handleCommand" @update:selection="editor.updateSelection" @focus-node="editor.focusNode"
           />
           <FlowQuickStart
@@ -105,6 +105,7 @@ function onServiceChange(event: Event) {
           <span>불러온 시각 {{ formatDateTime(base.loadedAt) }}</span>
           <span>확대 {{ Math.round(viewport.zoom * 100) }}%</span>
           <span>모드 {{ mode === 'advanced' ? '고급' : '기본' }}</span>
+          <span>보기 {{ viewMode === 'connection' ? '연결 중심' : '모델 중심' }}</span>
           <span v-if="layoutDirty" class="fd-warn">배치 미저장</span>
         </footer>
       </template>
