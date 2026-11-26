@@ -441,4 +441,21 @@ class DataProtectionRedactorTest {
         assertThat(new DataProtectionScanner(objectMapper).scan(userMessage(filler("", 60_000)), policy).classifications())
                 .doesNotContain(DataClassification.SCAN_INCOMPLETE);
     }
+    @Test
+    void schemaDefinedRawBase64MediaIsPreservedWhileTextIsStillMasked() throws Exception {
+        ObjectNode request = (ObjectNode) objectMapper.readTree("""
+                {"messages":[{"role":"user","content":[
+                  {"type":"text","text":"code ZZTOP here"},
+                  {"type":"input_audio","input_audio":{"data":"ZZTOPAAA","format":"wav"}},
+                  {"type":"input_audio","input_audio":{"data":"not base64 ZZTOP!","format":"wav"}}
+                ]}]}
+                """);
+        new DataProtectionRedactor(objectMapper).redactRequest(request, customPatternPolicy(List.of("ZZTOP")), null, false);
+        JsonNode parts = request.path("messages").get(0).path("content");
+        assertThat(parts.get(0).path("text").asText()).doesNotContain("ZZTOP");
+        assertThat(parts.get(1).path("input_audio").path("data").asText()).isEqualTo("ZZTOPAAA");
+        assertThat(parts.get(2).path("input_audio").path("data").asText()).doesNotContain("ZZTOP");
+        assertThat(DataProtectionRedactor.isBinaryMediaPayload("messages.content.input_audio.data", "ZZTOPAAA")).isTrue();
+        assertThat(DataProtectionRedactor.isBinaryMediaPayload("messages.content.text", "ZZTOPAAA")).isFalse();
+    }
 }

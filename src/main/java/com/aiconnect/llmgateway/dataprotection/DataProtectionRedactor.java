@@ -73,6 +73,11 @@ public class DataProtectionRedactor {
     );
     private static final Pattern STRICT_BASE64_MEDIA_DATA = Pattern.compile(
             "(?i)^data:(?:(?:image|audio|video)/[a-z0-9.+-]+|application/(?:pdf|octet-stream));base64,[A-Za-z0-9+/=\\s]+$");
+    /** Schema fields whose value is raw (non data-URI) base64 binary, e.g. chat input_audio.data. */
+    private static final Set<String> RAW_BASE64_MEDIA_FIELDS = Set.of(
+            "input_audio.data", "audio.data", "file.file_data", "input_file.file_data", "input_image.image_data"
+    );
+    private static final Pattern RAW_BASE64 = Pattern.compile("^[A-Za-z0-9+/]+={0,2}$");
     /** Fixed allowance per custom pattern, plus a linear allowance per input character (see customRegexStepBudget). */
     private static final int MAX_CUSTOM_REGEX_STEPS = 100_000;
     private static final int CUSTOM_REGEX_STEPS_PER_CHAR = 32;
@@ -199,7 +204,7 @@ public class DataProtectionRedactor {
                 String nextPath = fieldPath.isEmpty() ? key : fieldPath + "." + key;
                 JsonNode val = entry.getValue();
                 if (val.isTextual()) {
-                    if (isMediaDataField(nextPath) && STRICT_BASE64_MEDIA_DATA.matcher(val.asText()).matches()) continue;
+                    if (isBinaryMediaPayload(nextPath, val.asText())) continue;
                     String updated = redactText(val.asText(), policy, maskPersonNames, vault, counters);
                     if (!updated.equals(val.asText())) {
                         object.put(key, updated);
@@ -415,7 +420,7 @@ public class DataProtectionRedactor {
                     sur = "[MASKED_CTX_" + (ctxSeq++) + "]";
                 }
                 String registered = vault.register("CONTEXT_LLM", orig, sur, masker.getDisplayName());
-                replaceLiteralInRequestNodes(request, orig, registered);
+                replaceLiteralInRequestNodes(request, "", orig, registered);
             }
         } catch (Exception ignored) {
             // Non-JSON responses from the masker worker must never abort deterministic protection.
@@ -461,21 +466,22 @@ public class DataProtectionRedactor {
         }
     }
 
-    private void replaceLiteralInRequestNodes(JsonNode node, String target, String replacement) {
+    private void replaceLiteralInRequestNodes(JsonNode node, String path, String target, String replacement) {
         if (node == null || node.isNull()) return;
         if (node instanceof ObjectNode obj) {
             List<Map.Entry<String, JsonNode>> snapshot = new ArrayList<>();
             obj.fields().forEachRemaining(snapshot::add);
             for (Map.Entry<String, JsonNode> entry : snapshot) {
                 if (STRUCTURAL_FIELDS.contains(entry.getKey())) continue;
+                String nextPath = path.isEmpty() ? entry.getKey() : path + "." + entry.getKey();
                 if (entry.getValue().isTextual()) {
                     String current = entry.getValue().asText();
-                    if (isMediaDataField(entry.getKey()) && STRICT_BASE64_MEDIA_DATA.matcher(current).matches()) continue;
+                    if (isBinaryMediaPayload(nextPath, current)) continue;
                     if (current.contains(target)) {
                         obj.put(entry.getKey(), current.replace(target, replacement));
                     }
                 } else {
-                    replaceLiteralInRequestNodes(entry.getValue(), target, replacement);
+                    replaceLiteralInRequestNodes(entry.getValue(), nextPath, target, replacement);
                 }
             }
         } else if (node instanceof ArrayNode arr) {
@@ -487,7 +493,7 @@ public class DataProtectionRedactor {
                         arr.set(i, current.replace(target, replacement));
                     }
                 } else {
-                    replaceLiteralInRequestNodes(item, target, replacement);
+                    replaceLiteralInRequestNodes(item, path, target, replacement);
                 }
             }
         }
@@ -529,6 +535,26 @@ public class DataProtectionRedactor {
             return KOREAN_NAME_SURROGATES.get(index - 1);
         }
         return "사용자" + index;
+    }
+
+    /**
+     * Binary payloads must reach the provider byte-for-byte: strict base64 data URIs in media fields, and raw
+     * base64 in fields whose schema defines them as binary (validated, otherwise treated as ordinary text).
+     */
+    static boolean isBinaryMediaPayload(String fieldPath, String value) {
+        if (value == null || value.isEmpty()) return false;
+        if (isMediaDataField(fieldPath) && STRICT_BASE64_MEDIA_DATA.matcher(value).matches()) return true;
+        if (fieldPath == null) return false;
+        String[] parts = fieldPath.toLowerCase().split("\\.");
+        if (parts.length < 2 || !RAW_BASE64_MEDIA_FIELDS.contains(parts[parts.length - 2] + "." + parts[parts.length - 1])) return false;
+        String compact = value.replaceAll("\\s+", "");
+        if (compact.isEmpty() || compact.length() % 4 != 0 || !RAW_BASE64.matcher(compact).matches()) return false;
+        try {
+            java.util.Base64.getDecoder().decode(compact);
+            return true;
+        } catch (IllegalArgumentException invalid) {
+            return false;
+        }
     }
 
     private static boolean isMediaDataField(String fieldName) {
