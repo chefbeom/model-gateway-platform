@@ -28,7 +28,22 @@ import {
   promptScopeForSplice,
   rankOf,
 } from './workflow'
-import { COLUMN_WIDTH, autoLayout, placeNewNode, placeSpliced, portAnchor } from './layout'
+import { COLUMN_WIDTH, ROW_GAP, autoLayout, freeSpot, nodeSize, placeNewNode, placeSpliced, portAnchor, snapUp } from './layout'
+import {
+  autoLayoutByConnection,
+  connectionGroups,
+  connectionLaneOffset,
+  connectionMetaOf,
+  connectionOfNode,
+  defaultConnectionSpot,
+  hasIncomingRequest,
+  headOf,
+  isConnectionId,
+  isConnectionNode,
+  requestSourceFor,
+  unroutedHeads,
+  viewPortsOf,
+} from './connections'
 import type {
   AddableNodeType,
   CommandResult,
@@ -42,6 +57,7 @@ import type {
   FlowNode,
   FlowPropValue,
   FlowSelection,
+  FlowViewMode,
   NodeType,
   Point,
   PortRef,
@@ -62,6 +78,18 @@ const MSG_CYCLE = '순환 간선은 만들 수 없습니다.'
 const MSG_PROMPT_COMMON_EXISTS = '공통 시스템 프롬프트가 이미 있습니다. 특정 LLM에만 쓰려면 그 LLM 앞 간선의 ＋를 누르세요.'
 const MSG_TARGET_PROMPT_UNSUPPORTED = '서버가 모델별 시스템 프롬프트를 지원하지 않습니다.'
 const MSG_CANNOT_SPLICE = '이 간선에는 이 노드를 넣을 수 없습니다.'
+const MSG_CONN_UNKNOWN = '알 수 없는 연결입니다.'
+const MSG_CONN_NO_CATALOG_MODELS = '이 연결에는 등록된 모델이 없습니다.'
+const MSG_CONN_MODEL_MISMATCH = '선택한 모델 중 이 연결에 속하지 않는 모델이 있습니다.'
+const MSG_CONN_SOURCE = '연결 노드에는 라우터나 처리 단계(가드레일·공통 프롬프트·캐시·생성 파라미터)의 출력에서만 간선을 이을 수 있습니다.'
+const MSG_CONN_NO_MODELS = '이 연결에는 아직 모델이 없습니다. 연결 노드에서 모델을 먼저 추가하세요.'
+const MSG_CONN_ALL_ROUTED = '이 연결의 모델은 이미 모두 요청 경로에 연결되어 있습니다.'
+const MSG_CONN_NEEDS_ROUTER = '모델이 여러 개인 연결은 라우터에서 이어 주세요.'
+const MSG_CONN_TARGET = '연결 노드의 출력은 그 연결의 모델에만 이을 수 있습니다.'
+const MSG_CONN_MODEL_ROUTED = '이미 요청 경로에 연결된 모델입니다.'
+const MSG_CONN_NO_SOURCE = '이 모델을 이을 요청 경로가 없습니다. 라우터나 처리 단계를 먼저 추가하세요.'
+const msgOtherConnection = (label: string): string => `이 모델은 '${label}' 연결에 속합니다. 모델의 연결은 바꿀 수 없습니다. 다른 연결의 모델은 그 연결 노드에서 추가하세요.`
+const STAGE_TYPES: ReadonlySet<NodeType> = new Set<NodeType>(['guardrail', 'prompt', 'params', 'cache'])
 
 function cmp(a: string, b: string): number { return a < b ? -1 : a > b ? 1 : 0 }
 
@@ -238,6 +266,77 @@ export function nearestCompatiblePort(graph: FlowGraph, from: PortRef, point: Po
   return best
 }
 
+/** §4.4: connection-view wiring rules; the model view is exactly canConnect. */
+export function canConnectInView(graph: FlowGraph, from: PortRef, to: PortRef, snapshot: ServiceFlowSnapshot, view: FlowViewMode): ConnectCheck {
+  if (view !== 'connection') return canConnect(graph, from, to, snapshot)
+  const fromNode = findNode(graph, from.nodeId)
+  const toNode = findNode(graph, to.nodeId)
+  if (!fromNode || !toNode) return { ok: false, reason: MSG_NOT_FOUND }
+  if (fromNode.id === toNode.id) return { ok: false, reason: MSG_SAME_NODE }
+  if (isConnectionNode(toNode)) {
+    if (from.portId !== 'out' || to.portId !== 'in') return { ok: false, reason: MSG_DIRECTION }
+    const source = fromNode.type === 'router' || (STAGE_TYPES.has(fromNode.type) && !isBranchPrompt(fromNode))
+    if (!source) return { ok: false, reason: MSG_CONN_SOURCE }
+    const group = connectionGroups(graph).find((g) => g.connectionId === toNode.id)
+    if (!group || group.llms.length === 0) return { ok: false, reason: MSG_CONN_NO_MODELS }
+    const pending = unroutedHeads(graph, group)
+    if (pending.length === 0) return { ok: false, reason: MSG_CONN_ALL_ROUTED }
+    if (fromNode.type !== 'router' && pending.length > 1) return { ok: false, reason: MSG_CONN_NEEDS_ROUTER }
+    for (const head of pending) {
+      const check = canConnect(graph, from, { nodeId: head, portId: 'in' }, snapshot)
+      if (!check.ok) return check
+    }
+    return { ok: true, replaces: [] }
+  }
+  if (isConnectionNode(fromNode)) {
+    if (from.portId !== 'out' || to.portId !== 'in') return { ok: false, reason: MSG_DIRECTION }
+    const llmId = toNode.type === 'llm' ? toNode.id : isBranchPrompt(toNode) ? llmNodeId(toNode.id.slice('prompt:'.length)) : null
+    const llm = llmId ? findNode(graph, llmId) : undefined
+    if (!llm) return { ok: false, reason: MSG_CONN_TARGET }
+    const owner = connectionOfNode(graph, llm.id)
+    if (owner !== fromNode.id) return { ok: false, reason: owner ? msgOtherConnection(connectionMetaOf(owner, snapshot).label) : MSG_CONN_TARGET }
+    const head = headOf(graph, llm)
+    if (hasIncomingRequest(graph, head)) return { ok: false, reason: MSG_CONN_MODEL_ROUTED }
+    const group = connectionGroups(graph).find((g) => g.connectionId === fromNode.id)
+    const source = group ? requestSourceFor(graph, group, snapshot) : null
+    if (!source) return { ok: false, reason: MSG_CONN_NO_SOURCE }
+    const check = canConnect(graph, source, { nodeId: head, portId: 'in' }, snapshot)
+    return check.ok ? { ok: true, replaces: [] } : check
+  }
+  return canConnect(graph, from, to, snapshot)
+}
+
+/** nearestCompatiblePort for a view: view ports, view rules and display positions (the canvas passes them). */
+export function nearestPortInView(
+  graph: FlowGraph,
+  from: PortRef,
+  point: Point,
+  radius: number,
+  snapshot: ServiceFlowSnapshot,
+  view: FlowViewMode,
+  positionOf: (node: FlowNode) => Point,
+): PortRef | null {
+  let best: PortRef | null = null
+  let bestDistance = Infinity
+  for (const node of graph.nodes) {
+    const at = positionOf(node)
+    const placed = at.x === node.x && at.y === node.y ? node : { ...node, x: at.x, y: at.y }
+    for (const port of viewPortsOf(node, view)) {
+      if (port.direction !== 'in') continue
+      const ref: PortRef = { nodeId: node.id, portId: port.id }
+      const anchor = portAnchor(placed, port.id, 'in')
+      const distance = Math.hypot(anchor.x - point.x, anchor.y - point.y)
+      if (distance > radius) continue
+      if (!canConnectInView(graph, from, ref, snapshot, view).ok) continue
+      if (distance < bestDistance || (distance === bestDistance && best && (cmp(ref.nodeId, best.nodeId) || cmp(ref.portId, best.portId)) < 0)) {
+        best = ref
+        bestDistance = distance
+      }
+    }
+  }
+  return best
+}
+
 /* ------------------------------------------------------------------ */
 /* Derived nodes: hosts and inherited policies                         */
 /* ------------------------------------------------------------------ */
@@ -266,7 +365,7 @@ export function syncHostNodes(graph: FlowGraph, snapshot: ServiceFlowSnapshot): 
   for (const node of [...w.nodes.values()]) {
     if (node.type !== 'endpoint' && node.type !== 'provider') continue
     const used = [...w.edges.values()].some((e) => e.kind === 'host' && e.to.nodeId === node.id)
-    if (!used) {
+    if (!used && node.props.pinned !== true) {
       removeNodeAndEdges(w, node.id)
       const idx = created.indexOf(node.id)
       if (idx >= 0) created.splice(idx, 1)
@@ -558,12 +657,19 @@ export function applyCommand(graph: FlowGraph, command: FlowCommand, snapshot: S
         const node = w.nodes.get(id)
         if (!node) continue
         if (node.type === 'start') { error ??= '시작 노드는 삭제할 수 없습니다.'; continue }
-        if (NODE_TYPES[node.type].derived) { error ??= '자동으로 표시되는 노드라 삭제할 수 없습니다.'; continue }
+        const connection = command.withConnectionModels === true && isConnectionNode(node)
+        if (NODE_TYPES[node.type].derived && !connection) { error ??= '자동으로 표시되는 노드라 삭제할 수 없습니다.'; continue }
         if (node.type === 'guardrail' && isProtectedGuardrail(snapshot) && command.force !== true) {
           error ??= '외부 노출 방지 정책이 적용된 가드레일입니다. 인스펙터의 [보호 해제 후 삭제]를 사용하세요.'
           continue
         }
         requested.push(id)
+        // A model cannot exist outside its connection: deleting the connection takes its models along (§4.5).
+        if (connection) {
+          for (const e of graph.edges) {
+            if (e.kind === 'host' && e.to.nodeId === id && !requested.includes(e.from.nodeId)) requested.push(e.from.nodeId)
+          }
+        }
       }
       const expanded = new Set(dependencyClosure(graph, requested))
       for (const id of [...expanded]) {
@@ -731,7 +837,16 @@ export function applyCommand(graph: FlowGraph, command: FlowCommand, snapshot: S
     }
 
     case 'autoLayout':
-      return ok(autoLayout(graph, snapshot), true)
+      return ok(command.view === 'connection' ? autoLayoutByConnection(graph, snapshot) : autoLayout(graph, snapshot), true)
+
+    case 'addConnection':
+      return addConnectionCommand(graph, command, snapshot, ok, fail)
+
+    case 'addConnectionModels':
+      return addConnectionModelsCommand(graph, command, snapshot, ok, fail)
+
+    case 'connectConnection':
+      return connectConnectionCommand(graph, command, snapshot, ok, fail)
   }
 }
 
@@ -941,4 +1056,138 @@ function applyTemplateCommand(
     if (error) return fail(error)
   }
   return ok(autoLayout(g, snapshot), true, selectNode('start'))
+}
+
+/* ------------------------------------------------------------------ */
+/* Connection-centric commands (docs/workflow-connection-first-design.ko.md §4)                         */
+/* ------------------------------------------------------------------ */
+
+function addConnectionCommand(
+  graph: FlowGraph,
+  command: Extract<FlowCommand, { type: 'addConnection' }>,
+  snapshot: ServiceFlowSnapshot,
+  ok: Ok,
+  fail: Fail,
+): CommandResult {
+  const id = command.connectionId
+  if (!isConnectionId(id)) return fail(MSG_CONN_UNKNOWN)
+  if (findNode(graph, id)) return ok(graph, false, selectNode(id))
+  const refId = id.slice(id.indexOf(':') + 1)
+  const isProvider = id.startsWith('provider:')
+  const known = isProvider ? snapshot.catalog.providers.some((p) => p.id === refId) : snapshot.catalog.endpoints.some((e) => e.id === refId)
+  if (!known) return fail(MSG_CONN_UNKNOWN)
+  if (!snapshot.catalog.deployments.some((d) => hostNodeIdFor(d) === id)) return fail(MSG_CONN_NO_CATALOG_MODELS)
+  const position = command.position && Number.isFinite(command.position.x) && Number.isFinite(command.position.y) ? command.position : defaultConnectionSpot(graph, snapshot)
+  const w = begin(graph)
+  const node = makeNode(isProvider ? 'provider' : 'endpoint', id, refId, { pinned: true })
+  node.x = position.x
+  node.y = position.y
+  w.nodes.set(id, node)
+  return ok(toGraph(w), true, selectNode(id))
+}
+
+function addConnectionModelsCommand(
+  graph: FlowGraph,
+  command: Extract<FlowCommand, { type: 'addConnectionModels' }>,
+  snapshot: ServiceFlowSnapshot,
+  ok: Ok,
+  fail: Fail,
+): CommandResult {
+  const connectionId = command.connectionId
+  if (!isConnectionId(connectionId)) return fail(MSG_CONN_UNKNOWN)
+  const wanted = [...new Set(command.deploymentIds)]
+  for (const id of wanted) {
+    const deployment = deploymentOf(snapshot, id)
+    if (!deployment) return fail('알 수 없는 모델입니다.')
+    if (hostNodeIdFor(deployment) !== connectionId) return fail(MSG_CONN_MODEL_MISMATCH)
+  }
+  const selectHost = (g: FlowGraph): FlowSelection | null => (g.nodes.some((n) => n.id === connectionId) ? selectNode(connectionId) : null)
+  const fresh = wanted.filter((id) => !findNode(graph, llmNodeId(id)))
+  if (fresh.length === 0) return ok(graph, false, selectHost(graph))
+
+  // Remember the group as it was: its models (positions are re-read after the adds) or the empty connection's spot.
+  const before = connectionGroups(graph).find((g) => g.connectionId === connectionId)
+  const memberIds = before ? before.llms.map((n) => n.id) : []
+  const hostBefore = findNode(graph, connectionId)
+  const pinnedSpot = hostBefore && memberIds.length === 0 ? { x: hostBefore.x, y: hostBefore.y } : null
+
+  // Same path as the model view (identical props, wiring and router insertion: §3.4).
+  let g = graph
+  for (const id of fresh) {
+    const r = applyCommand(g, { type: 'addNode', nodeType: 'llm', refId: id }, snapshot)
+    if (r.error) return fail(r.error)
+    g = r.graph
+  }
+
+  // Stored (model-view) positions: below the siblings, or where the connection already is, or at the drop point.
+  const w = begin(g)
+  const offset = connectionLaneOffset(g)
+  const position = command.position && Number.isFinite(command.position.x) && Number.isFinite(command.position.y) ? command.position : null
+  let base: Point | null = null
+  if (memberIds.length > 0) {
+    const members = memberIds.map((id) => w.nodes.get(id)).filter((n): n is FlowNode => !!n)
+    if (members.length > 0) {
+      base = { x: Math.min(...members.map((n) => n.x)), y: snapUp(Math.max(...members.map((n) => n.y + nodeSize(n).height)) + ROW_GAP) }
+    }
+  } else if (pinnedSpot) {
+    base = { x: pinnedSpot.x + offset, y: pinnedSpot.y }
+  } else if (position) {
+    base = { x: position.x + offset, y: position.y }
+  }
+  if (base) {
+    const newIds = fresh.map(llmNodeId)
+    let y = base.y
+    for (let index = 0; index < newIds.length; index += 1) {
+      const node = w.nodes.get(newIds[index])
+      if (!node) continue
+      const pending = new Set(newIds.slice(index))
+      const others = [...w.nodes.values()].filter((n) => !pending.has(n.id) && n.id !== connectionId)
+      const spot = freeSpot(others, node, base.x, y)
+      node.x = spot.x
+      node.y = spot.y
+      y = snapUp(spot.y + nodeSize(node).height + ROW_GAP)
+    }
+  }
+  // A connection that had no models gets its model-view spot (right of its first model) now that it has users.
+  if (memberIds.length === 0 && w.nodes.has(connectionId)) copyPositions(w, placeNewNode(toGraph(w), connectionId, snapshot))
+  const result = toGraph(w)
+  return ok(result, true, selectHost(result))
+}
+
+function connectConnectionCommand(
+  graph: FlowGraph,
+  command: Extract<FlowCommand, { type: 'connectConnection' }>,
+  snapshot: ServiceFlowSnapshot,
+  ok: Ok,
+  fail: Fail,
+): CommandResult {
+  const check = canConnectInView(graph, command.from, command.to, snapshot, 'connection')
+  if (!check.ok) return fail(check.reason)
+  const fromNode = findNode(graph, command.from.nodeId) as FlowNode
+  const toNode = findNode(graph, command.to.nodeId) as FlowNode
+  let g = graph
+  const connectHead = (from: PortRef, head: string): string | null => {
+    const r = applyCommand(g, { type: 'connect', from, to: { nodeId: head, portId: 'in' } }, snapshot)
+    if (r.error) return r.error
+    g = r.graph
+    return null
+  }
+  if (isConnectionNode(toNode)) {
+    const group = connectionGroups(graph).find((x) => x.connectionId === toNode.id)
+    for (const head of group ? unroutedHeads(graph, group) : []) {
+      const error = connectHead(command.from, head)
+      if (error) return fail(error)
+    }
+    return ok(g, true, selectNode(toNode.id))
+  }
+  if (isConnectionNode(fromNode)) {
+    const group = connectionGroups(graph).find((x) => x.connectionId === fromNode.id)
+    const llm = findNode(graph, toNode.type === 'llm' ? toNode.id : llmNodeId(toNode.id.slice('prompt:'.length))) as FlowNode
+    const source = group ? requestSourceFor(graph, group, snapshot) : null
+    if (!source) return fail(MSG_CONN_NO_SOURCE)
+    const error = connectHead(source, headOf(graph, llm))
+    if (error) return fail(error)
+    return ok(g, true, null)
+  }
+  return fail(MSG_NO_RULE)
 }

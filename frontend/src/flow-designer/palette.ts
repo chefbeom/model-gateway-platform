@@ -4,6 +4,7 @@ import type {
   ConnectionMeta,
   DeploymentConnectionGroup,
   DeploymentInfo,
+  EndpointInfo,
   FlowCatalog,
   FlowGraph,
   HealthTone,
@@ -15,6 +16,7 @@ import type {
   PaletteNodeItem,
   PaletteOptions,
   PaletteProjectItem,
+  ProviderInfo,
   ServiceFlowSnapshot,
 } from './types'
 
@@ -63,7 +65,7 @@ function nodeItem(nodeType: Extract<AddableNodeType, 'guardrail' | 'masker' | 'p
   }
 }
 
-function modelItem(d: DeploymentInfo, graph: FlowGraph, snapshot: ServiceFlowSnapshot): PaletteModelItem {
+export function modelItem(d: DeploymentInfo, graph: FlowGraph, snapshot: ServiceFlowSnapshot): PaletteModelItem {
   const { availability, reason } = modelAvailability(d, snapshot.catalog)
   const source = d.external
     ? snapshot.catalog.providers.find((p) => p.id === d.externalProviderId)?.displayName ?? '외부 Provider'
@@ -100,17 +102,25 @@ export function shortModelName(displayName: string, providerModelId: string): st
   return short !== '' ? short : name
 }
 
+/** ConnectionMeta of a runtime endpoint (shared by the palette and the connection-centric view). */
+export function endpointConnectionMeta(endpoint: EndpointInfo): ConnectionMeta {
+  return { id: `endpoint:${endpoint.id}`, kind: 'endpoint', label: endpoint.displayName, detail: [endpoint.runtimeType, endpoint.addressLabel].filter((x) => !!x).join(' · '), tone: toneOf(endpoint.enabled, endpoint.healthStatus), enabled: endpoint.enabled }
+}
+
+/** ConnectionMeta of an external provider (shared by the palette and the connection-centric view). */
+export function providerConnectionMeta(provider: ProviderInfo): ConnectionMeta {
+  return { id: `provider:${provider.id}`, kind: 'provider', label: provider.displayName, detail: provider.providerType, tone: toneOf(provider.enabled, provider.healthStatus), enabled: provider.enabled }
+}
+
 /** Resolves the connection a deployment belongs to; missing catalog entries land in an "unknown connection". */
 export function connectionOf(d: DeploymentInfo, catalog: FlowCatalog): ConnectionMeta {
   if (d.external) {
     const provider = d.externalProviderId ? catalog.providers.find((p) => p.id === d.externalProviderId) : undefined
-    if (provider) return { id: `provider:${provider.id}`, kind: 'provider', label: provider.displayName, detail: provider.providerType, tone: toneOf(provider.enabled, provider.healthStatus), enabled: provider.enabled }
+    if (provider) return providerConnectionMeta(provider)
     return { id: 'unknown-external', kind: 'provider', label: UNKNOWN_CONNECTION, detail: '', tone: 'unknown', enabled: true }
   }
   const endpoint = d.runtimeEndpointId ? catalog.endpoints.find((e) => e.id === d.runtimeEndpointId) : undefined
-  if (endpoint) {
-    return { id: `endpoint:${endpoint.id}`, kind: 'endpoint', label: endpoint.displayName, detail: [endpoint.runtimeType, endpoint.addressLabel].filter((x) => !!x).join(' · '), tone: toneOf(endpoint.enabled, endpoint.healthStatus), enabled: endpoint.enabled }
-  }
+  if (endpoint) return endpointConnectionMeta(endpoint)
   return { id: 'unknown-local', kind: 'endpoint', label: UNKNOWN_CONNECTION, detail: '', tone: 'unknown', enabled: true }
 }
 
@@ -205,7 +215,15 @@ export function buildPalette(snapshot: ServiceFlowSnapshot, graph: FlowGraph, op
       // A disabled connection whose models are all hidden is dropped (the group-level "hidden" toggle still reveals it);
       // an enabled one stays as a header so users know it exists.
       if (visible.length === 0 && !g.connection.enabled) continue
-      connections.push({ ...g.connection, models: visible, activeCount: g.activeCount, totalCount: all.length, hiddenCount: hidden })
+      connections.push({
+        ...g.connection,
+        models: visible,
+        activeCount: g.activeCount,
+        totalCount: all.length,
+        hiddenCount: hidden,
+        onCanvas: graph.nodes.some((n) => n.id === g.connection.id),
+        addable: g.connection.id.startsWith('endpoint:') || g.connection.id.startsWith('provider:'),
+      })
     }
     // Flattened list keeps the historical global order (availability, then name).
     const models = connections.flatMap((c) => c.models).sort(compareModels)

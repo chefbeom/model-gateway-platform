@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick } from 'vue'
 import CapabilityPicker from '../CapabilityPicker.vue'
-import { GUARDRAIL_PRESETS, NODE_TYPES, PROMPT_HELP_COMMON, PROMPT_HELP_MODEL, describeEdge, describeNode, modelAvailability, nodeFacts, nodeSpec, presetOf } from './catalog'
+import FlowConnectionModels from './FlowConnectionModels.vue'
+import { GUARDRAIL_PRESETS, NODE_TYPES, PROMPT_HELP_COMMON, PROMPT_HELP_MODEL, describeEdge, describeNode, hostNodeIdFor, modelAvailability, nodeFacts, nodeSpec, presetOf } from './catalog'
+import { connectionGroups, connectionOfNode, describeConnectionNode, isConnectionNode } from './connections'
 import { groupModelsByConnection, shortModelName } from './palette'
 import { insertableTypesForEdge, isBranchPrompt, promptScopeForSplice } from './workflow'
 import type {
@@ -14,6 +16,7 @@ import type {
   FlowNode,
   FlowPropValue,
   FlowSelection,
+  FlowViewMode,
   ServiceFlowSnapshot,
   ValidationIssue,
 } from './types'
@@ -25,6 +28,7 @@ const props = withDefaults(defineProps<{
   issues: ValidationIssue[]
   readOnly: boolean
   mode?: DesignerMode
+  viewMode?: FlowViewMode
 }>(), { mode: 'advanced' })
 
 const emit = defineEmits<{
@@ -90,7 +94,37 @@ function issueClickable(issue: ValidationIssue): boolean {
 }
 
 /* ------------------------------ node details ------------------------------ */
-const view = computed(() => (node.value ? describeNode(node.value, props.graph, props.snapshot) : null))
+const connectionFirst = computed(() => props.viewMode === 'connection')
+/** Connection view + a single connection (host) node selected. */
+const connectionPanel = computed(() => connectionFirst.value && !!node.value && isConnectionNode(node.value))
+const connectionMembers = computed(() => {
+  if (!connectionPanel.value || !node.value) return []
+  const group = connectionGroups(props.graph).find((g) => g.connectionId === node.value!.id)
+  return (group?.llms ?? []).map((n) => ({
+    id: n.id,
+    title: describeNode(n, props.graph, props.snapshot).title,
+    summary: `P${n.props.priority ?? '-'} · W${n.props.weight ?? '-'}${n.props.enabled === false ? ' · 중지' : ''}`,
+  }))
+})
+/** Connection view: the model-replace select only offers models of the same connection (D9). */
+const currentHost = computed(() => (connectionFirst.value && node.value && node.value.type === 'llm' ? connectionOfNode(props.graph, node.value.id) : null))
+const edgeIntoModel = computed(() => {
+  const e = edge.value
+  if (!connectionFirst.value || !e || (e.kind !== 'route' && e.kind !== 'flow' && e.kind !== 'access')) return false
+  return connectionOfNode(props.graph, e.to.nodeId) !== null
+})
+
+function pickMember(id: string) {
+  emit('update:selection', { nodeIds: [id], edgeIds: [] })
+  emit('focus-node', id)
+}
+
+function removeConnection() {
+  if (!node.value || props.readOnly) return
+  emit('command', { type: 'removeItems', nodeIds: [node.value.id], edgeIds: [], withConnectionModels: true })
+}
+
+const view = computed(() => (node.value ? (connectionPanel.value ? describeConnectionNode(node.value, props.graph, props.snapshot) : describeNode(node.value, props.graph, props.snapshot)) : null))
 const spec = computed(() => (node.value ? nodeSpec(node.value.type) : null))
 const facts = computed(() => (node.value ? nodeFacts(node.value, props.graph, props.snapshot) : []))
 const nodeIssues = computed(() => (node.value ? props.issues.filter((i) => i.nodeId === node.value!.id) : []))
@@ -245,7 +279,7 @@ const takenDeploymentIds = computed(() => {
 
 const modelOptions = computed(() => {
   const catalog = props.snapshot.catalog
-  const free = catalog.deployments.filter((d) => !takenDeploymentIds.value.has(d.id))
+  const free = catalog.deployments.filter((d) => !takenDeploymentIds.value.has(d.id) && (currentHost.value === null || hostNodeIdFor(d) === currentHost.value))
   const groups: Array<{ key: string; label: string; items: Array<{ id: string; label: string }> }> = []
   for (const external of [false, true]) {
     for (const g of groupModelsByConnection(free.filter((d) => d.external === external), catalog)) {
@@ -325,7 +359,7 @@ function removeEdge() {
 
 function removeSelection() {
   if (props.readOnly) return
-  emit('command', { type: 'removeItems', nodeIds: [...props.selection.nodeIds], edgeIds: [...props.selection.edgeIds] })
+  emit('command', { type: 'removeItems', nodeIds: [...props.selection.nodeIds], edgeIds: [...props.selection.edgeIds], withConnectionModels: connectionFirst.value })
 }
 
 const edgeInfo = computed(() => (edge.value ? describeEdge(edge.value) : null))
@@ -391,6 +425,23 @@ function insertOnEdge(type: AddableNodeType) {
           <dd>{{ row.value }}</dd>
         </template>
       </dl>
+
+      <template v-if="connectionPanel">
+        <p v-if="view.tone === 'error' || view.tone === 'muted'" class="fd-note fd-note--warning">이 연결은 지금 요청을 처리할 수 없어 아래 모델이 흐리게 표시됩니다.</p>
+        <section class="fd-group">
+          <h3 class="fd-subheading">이 연결의 모델 {{ connectionMembers.length }}개</h3>
+          <p v-if="connectionMembers.length === 0" class="fd-empty">아직 모델이 없습니다. 아래에서 모델을 고르세요.</p>
+          <ul v-else class="fd-issue-list">
+            <li v-for="member in connectionMembers" :key="member.id">
+              <button type="button" class="fd-issue" @click="pickMember(member.id)">
+                <span>{{ member.title }}</span>
+                <span class="fd-issue-code">{{ member.summary }}</span>
+              </button>
+            </li>
+          </ul>
+        </section>
+        <FlowConnectionModels :snapshot="snapshot" :graph="graph" :connection-id="node.id" :read-only="readOnly" @command="emit('command', $event)" />
+      </template>
 
       <p v-if="readOnly" class="fd-note">보기 전용 모드에서는 속성을 편집할 수 없습니다.</p>
 
@@ -496,6 +547,7 @@ function insertOnEdge(type: AddableNodeType) {
                   <option v-for="item in group.items" :key="item.id" :value="item.id">{{ item.label }}</option>
                 </optgroup>
               </select>
+              <p v-if="connectionFirst" class="fd-help">연결 중심 보기에서는 같은 연결의 모델로만 바꿀 수 있습니다. 다른 연결의 모델은 그 연결 노드에서 추가하세요.</p>
             </template>
 
             <p v-if="fieldHelp(field)" class="fd-help">{{ fieldHelp(field) }}</p>
@@ -533,7 +585,8 @@ function insertOnEdge(type: AddableNodeType) {
         <button v-if="view.protected" type="button" class="secondary-button fd-small-button fd-danger" :disabled="readOnly" @click="releaseAndRemove">보호 해제 후 삭제</button>
         <button type="button" class="secondary-button fd-small-button" :disabled="readOnly" @click="toggleCollapse">{{ node.collapsed ? '펼치기' : '접기' }}</button>
         <button type="button" class="secondary-button fd-small-button" @click="emit('focus-node', node.id)">화면 중앙</button>
-        <button type="button" class="secondary-button fd-small-button fd-danger" :disabled="!canDeleteNode" :title="spec.deletable && !view.protected ? '' : '삭제할 수 없는 노드입니다.'" @click="removeNode">삭제</button>
+        <button v-if="connectionPanel" type="button" class="secondary-button fd-small-button fd-danger" :disabled="readOnly" @click="removeConnection">연결 삭제{{ connectionMembers.length > 0 ? ` (모델 ${connectionMembers.length}개 포함)` : '' }}</button>
+        <button v-if="!connectionPanel" type="button" class="secondary-button fd-small-button fd-danger" :disabled="!canDeleteNode" :title="spec.deletable && !view.protected ? '' : '삭제할 수 없는 노드입니다.'" @click="removeNode">삭제</button>
       </div>
     </div>
 
@@ -542,6 +595,7 @@ function insertOnEdge(type: AddableNodeType) {
       <h2 class="fd-heading">간선</h2>
       <p class="fd-meta">{{ edgeInfo.label }}</p>
       <p class="fd-text">{{ edgeInfo.meaning }}</p>
+      <p v-if="edgeIntoModel" class="fd-note">연결 중심 보기에서는 연결 노드를 거쳐 그려지지만, 실제 간선은 아래의 시작 → 끝입니다.</p>
       <dl class="fd-facts">
         <dt>시작</dt>
         <dd>{{ nodeTitle(edge.from.nodeId) }}</dd>

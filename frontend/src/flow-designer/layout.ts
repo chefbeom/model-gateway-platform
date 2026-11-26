@@ -125,7 +125,7 @@ export function snapToGrid(value: number, grid = GRID_SIZE): number {
   return Math.round(value / grid) * grid + 0
 }
 
-function snapUp(value: number, grid = GRID_SIZE): number {
+export function snapUp(value: number, grid = GRID_SIZE): number {
   return Math.ceil(value / grid) * grid + 0
 }
 
@@ -184,7 +184,7 @@ function probeNode(type: NodeType | AddableNodeType): FlowNode {
 }
 
 /** Pushes a node down until it no longer overlaps any other node (at most 200 steps). */
-function freeSpot(others: FlowNode[], node: FlowNode, x: number, y: number): Point {
+export function freeSpot(others: FlowNode[], node: FlowNode, x: number, y: number): Point {
   const size = nodeSize(node)
   const rects = others.filter((n) => n.id !== node.id).map(nodeRect)
   let cy = snapUp(y)

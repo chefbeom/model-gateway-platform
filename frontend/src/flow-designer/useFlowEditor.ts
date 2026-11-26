@@ -9,6 +9,7 @@ import { executePlan } from './execute'
 import { createAdminTransport, currentUserId, loadFlowLayout, loadFlowSnapshot, loadServiceList, saveFlowLayout } from './flowApi'
 import { FlowLoadError } from './flowSnapshot'
 import { nodeSpec } from './catalog'
+import { isConnectionNode } from './connections'
 import { applyCommand } from './graphOps'
 import { createHistory, recordHistory, redoHistory, undoHistory, type HistoryState } from './history'
 import { extractLayout, layoutGeneration, suggestNodePosition } from './layout'
@@ -21,6 +22,7 @@ import type {
   FlowPlan,
   FlowSelection,
   FlowToolbarAction,
+  FlowViewMode,
   OperationResult,
   Point,
   Rect,
@@ -41,6 +43,8 @@ const EMPTY_SELECTION: FlowSelection = { nodeIds: [], edgeIds: [] }
 let autoClearInstalled = false
 // Remembered in module memory only (never browser storage): a reload starts in basic mode again.
 let lastMode: DesignerMode = 'basic'
+// Remembered in module memory only (never browser storage): a reload starts in the connection-centric view.
+let lastViewMode: FlowViewMode = 'connection'
 const LEGACY_LAYOUT_MESSAGE = '이전 버전 배치를 새 워크플로우 배치로 정리했습니다. [배치 저장]을 누르면 저장됩니다.'
 const TARGET_PROMPT_UNSUPPORTED_MESSAGE = '서버가 모델별 시스템 프롬프트를 저장하지 않았습니다(백엔드 업데이트 필요).'
 const STALE_PLAN_MESSAGE = '검토 이후 서버 구성이 바뀌어 변경 목록을 다시 계산했습니다. 다시 확인하세요.'
@@ -82,6 +86,7 @@ export function useFlowEditor(props: FlowEditorProps, canvas: Ref<CanvasHandle |
   const selectedKey = ref<string>(NEW_SERVICE_KEY)
   const draftTick = ref(0)
   const restoredAt = ref<string | null>(null)
+  const viewMode = ref<FlowViewMode>(lastViewMode)
 
   const layoutAvailable = ref(false)
   const savedFingerprint = ref('')
@@ -122,7 +127,7 @@ export function useFlowEditor(props: FlowEditorProps, canvas: Ref<CanvasHandle |
   const canUndo = computed(() => history.value.past.length > 0)
   const canRedo = computed(() => history.value.future.length > 0)
   const canNormalize = computed(() => issues.value.some(issue => issue.code === 'WF_ORDER_NONCANONICAL'))
-  const showQuickStart = computed(() => graph.value !== null && isEmptyWorkflow(graph.value) && !quickStartDismissed.value && !readOnly.value)
+  const showQuickStart = computed(() => graph.value !== null && isEmptyWorkflow(graph.value) && !graph.value.nodes.some(node => isConnectionNode(node)) && !quickStartDismissed.value && !readOnly.value)
   const serviceLabel = computed(() => {
     const snapshot = base.value
     if (!snapshot) return ''
@@ -278,6 +283,18 @@ export function useFlowEditor(props: FlowEditorProps, canvas: Ref<CanvasHandle |
     if (command.type === 'addNode' && command.autoWire !== false && added.length > 0) {
       const type = command.nodeType
       if (type === 'guardrail' || type === 'prompt' || type === 'cache' || type === 'params') return `${nodeSpec(type).label} 노드를 처리 순서에 맞는 위치에 넣었습니다.`
+    }
+    if ((command.type === 'addConnectionModels' || command.type === 'connectConnection') && routerAdded) return 'LLM이 두 개가 되어 라우터를 자동으로 추가했습니다.'
+    if (command.type === 'addConnection' && added.length > 0) return '연결을 놓았습니다. 연결 노드의 [＋ 모델 추가] 또는 인스펙터에서 이 연결의 모델을 고르세요.'
+    if (command.type === 'addConnectionModels') {
+      const models = added.filter(node => node.type === 'llm').length
+      if (models > 0) return `모델 ${models}개를 연결 뒤에 추가했습니다.`
+    }
+    if (command.type === 'removeItems' && command.withConnectionModels === true) {
+      const remaining = new Set(after.nodes.map(node => node.id))
+      const connections = before.nodes.filter(node => isConnectionNode(node) && command.nodeIds.includes(node.id) && !remaining.has(node.id)).length
+      const models = before.nodes.filter(node => node.type === 'llm' && !remaining.has(node.id)).length
+      if (connections > 0) return `연결 ${connections}개와 모델 ${models}개를 워크플로우에서 뺐습니다. 실행 취소(Ctrl+Z)로 되돌릴 수 있습니다.`
     }
     return ''
   }
@@ -520,12 +537,14 @@ export function useFlowEditor(props: FlowEditorProps, canvas: Ref<CanvasHandle |
       case 'undo': undo(); break
       case 'redo': redo(); break
       case 'fit': canvas.value?.fit(); break
-      case 'auto-layout': handleCommand({ type: 'autoLayout' }); break
+      case 'auto-layout': handleCommand({ type: 'autoLayout', view: viewMode.value }); break
       case 'zoom-in': canvas.value?.zoomCenter(1.25); break
       case 'zoom-out': canvas.value?.zoomCenter(1 / 1.25); break
       case 'zoom-reset': canvas.value?.zoomCenter('reset'); break
       case 'mode-basic': mode.value = 'basic'; lastMode = 'basic'; break
       case 'mode-advanced': mode.value = 'advanced'; lastMode = 'advanced'; break
+      case 'view-connection': viewMode.value = 'connection'; lastViewMode = 'connection'; break
+      case 'view-model': viewMode.value = 'model'; lastViewMode = 'model'; break
       case 'normalize-order': handleCommand({ type: 'normalizeOrder' }); break
       case 'validate': selection.value = { ...EMPTY_SELECTION }; inspectorOpen.value = true; break
       case 'plan': void openPlan(); break
@@ -584,7 +603,7 @@ export function useFlowEditor(props: FlowEditorProps, canvas: Ref<CanvasHandle |
   return {
     loadState, loadError, message, base, graph, viewport, selection, serviceOptions, selectedKey, restoredAt, hasNewDraft,
     layoutAvailable, layoutDirty, planOpen, planPhase, plan, planResults, planBusy,
-    narrow, compact, paletteOpen, inspectorOpen, mode, canNormalize, showQuickStart,
+    narrow, compact, paletteOpen, inspectorOpen, mode, viewMode, canNormalize, showQuickStart,
     issues, nodeChanges, changeCount, errorCount, warningCount, busy, readOnly, canUndo, canRedo, serviceLabel,
     selectService, dismissQuickStart, openInspector, retry, init, handleCommand, undo, redo, focusNode, updateSelection, updateViewport,
     onToolbarAction, openPlan, closePlan, mergeRemote, applyPlan, reload

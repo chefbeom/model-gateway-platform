@@ -13,6 +13,10 @@ const props = defineProps<{
   /** Entries are `in:<portId>` / `out:<portId>` (compatible) or `hot:in:<portId>` (snap target). */
   highlightPortIds: string[]
   readOnly: boolean
+  /** Connection view: the card is behind an offline or disabled connection. */
+  dimmed?: boolean
+  /** Connection view: label of the in-card action button (e.g. '＋ 모델 추가'). */
+  action?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -67,7 +71,7 @@ function onKeydown(event: KeyboardEvent) {
 <template>
   <div
     class="fd-node"
-    :class="{ 'is-selected': selected, 'is-collapsed': node.collapsed, 'is-readonly': readOnly }"
+    :class="{ 'is-selected': selected, 'is-collapsed': node.collapsed, 'is-readonly': readOnly, 'is-dimmed': dimmed === true }"
     :data-node-id="node.id"
     :data-category="view.category"
     :data-tone="view.tone"
@@ -114,6 +118,7 @@ function onKeydown(event: KeyboardEvent) {
             <span class="fd-port-label">{{ inPorts[i - 1]?.label ?? '' }}</span>
             <span class="fd-port-label">{{ outPorts[i - 1]?.label ?? '' }}</span>
           </div>
+          <button v-if="action" type="button" class="fd-node-action" :aria-label="`${view.title}: ${action}`" @click.stop="emit('activate', node.id)">{{ action }}</button>
         </div>
         <div class="fd-summary" :style="{ height: `${SUMMARY_HEIGHT}px` }">
           <div v-if="view.badges.length > 0" class="fd-badges">
@@ -173,6 +178,9 @@ function onKeydown(event: KeyboardEvent) {
   cursor: grab;
 }
 .fd-node.is-readonly .fd-node-body { cursor: default; }
+.fd-node.is-dimmed .fd-node-body { opacity: .5; }
+.fd-node-action { position: absolute; left: 50%; top: 2px; transform: translateX(-50%); height: 20px; padding: 0 8px; border: 1px solid var(--accent-border); border-radius: 6px; background: var(--accent-dim); color: var(--accent-strong); font-size: 9.5px; font-weight: 800; white-space: nowrap; cursor: pointer; }
+.fd-node-action:hover, .fd-node-action:focus-visible { background: var(--accent-strong); color: var(--surface); outline: none; }
 .fd-node:hover .fd-node-body { border-color: var(--border-strong); }
 .fd-node.is-selected .fd-node-body {
   border-color: var(--accent-strong);

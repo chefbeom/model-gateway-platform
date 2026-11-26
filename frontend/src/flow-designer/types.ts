@@ -292,9 +292,43 @@ export interface PaletteModelItem { deploymentId: string; displayName: string; p
 /** The connection (runtime endpoint or external provider) a model comes from. */
 export interface ConnectionMeta { id: string /* 'endpoint:<id>' | 'provider:<id>' | 'unknown-local' | 'unknown-external' */; kind: 'endpoint' | 'provider'; label: string; detail: string; tone: HealthTone; enabled: boolean }
 export interface DeploymentConnectionGroup { connection: ConnectionMeta; items: DeploymentInfo[]; activeCount: number }
-export interface PaletteConnectionGroup extends ConnectionMeta { models: PaletteModelItem[]; activeCount: number; totalCount: number; hiddenCount: number }
+export interface PaletteConnectionGroup extends ConnectionMeta { models: PaletteModelItem[]; activeCount: number; totalCount: number; hiddenCount: number; /** A host node with this id is on the canvas. */ onCanvas: boolean; /** 'endpoint:'/'provider:' ids only (not the unknown-* buckets). */ addable: boolean }
 export interface PaletteGroup { id: PaletteGroupId; label: string; nodes: PaletteNodeItem[]; projects: PaletteProjectItem[]; models: PaletteModelItem[]; connections: PaletteConnectionGroup[]; hiddenCount: number }
 export interface PaletteOptions { query: string; showInactive: boolean; mode: DesignerMode }
+
+/* ---------------- Connection-centric view (docs/workflow-connection-first-design.ko.md) ---------------- */
+export type FlowViewMode = 'connection' | 'model'
+export type ConnectionHealth = 'online' | 'degraded' | 'offline' | 'disabled' | 'unknown'
+export interface ConnectionGroupView {
+  /** Host node id = connection id ('endpoint:<id>' | 'provider:<id>'). */
+  connectionId: string
+  kind: 'endpoint' | 'provider'
+  /** LLM node ids in server dispatch order (priority asc, weight desc, id). */
+  llmNodeIds: string[]
+  /** Model-specific prompt node ids of those LLMs. */
+  promptNodeIds: string[]
+  health: ConnectionHealth
+  /** Display rect of the whole group (connection node + models), unpadded. */
+  frame: Rect
+}
+/** An edge as drawn in the connection view. Interactive edges keep the id of the domain edge they redraw. */
+export interface ViewEdge extends FlowEdge {
+  /** true: a real domain edge (selectable, deletable, splice-able); false: drawn only. */
+  interactive: boolean
+  /** Dashed membership line of a model that receives no request edge. */
+  detached: boolean
+}
+export interface ConnectionView {
+  groups: ConnectionGroupView[]
+  /** Display position of every node whose position is derived (hosts, their LLMs and model prompts). */
+  positions: Record<string, Point>
+  edges: ViewEdge[]
+  /** node id -> connection id for every grouped node (host, LLMs, model prompts). */
+  groupOf: Record<string, string>
+  /** LLM and model-prompt ids behind an offline or disabled connection, sorted. */
+  dimmed: string[]
+}
+export interface ConnectionModelChoices { connection: ConnectionMeta; items: PaletteModelItem[]; hiddenCount: number }
 
 /* ---------------- Geometry ---------------- */
 export interface Point { x: number; y: number }
@@ -312,7 +346,7 @@ export type AddableNodeType = 'project' | 'guardrail' | 'masker' | 'prompt' | 'p
 export type FlowCommand =
   | { type: 'moveNodes'; moves: Array<{ nodeId: string; x: number; y: number }> }
   | { type: 'addNode'; nodeType: AddableNodeType; refId?: string | null; position?: Point | null; spliceEdgeId?: string | null; autoWire?: boolean }
-  | { type: 'removeItems'; nodeIds: string[]; edgeIds: string[]; force?: boolean }
+  | { type: 'removeItems'; nodeIds: string[]; edgeIds: string[]; force?: boolean; /** Connection view: host nodes may be removed and take their models along. */ withConnectionModels?: boolean }
   | { type: 'connect'; from: PortRef; to: PortRef }
   | { type: 'updateProps'; nodeId: string; patch: Record<string, FlowPropValue> }
   | { type: 'replaceModel'; nodeId: string; deploymentId: string }
@@ -320,11 +354,14 @@ export type FlowCommand =
   | { type: 'normalizeOrder' }
   | { type: 'applyTemplate'; template: WorkflowTemplateId; projectIds: string[]; deploymentIds: string[] }
   | { type: 'toggleCollapse'; nodeIds: string[]; collapsed: boolean }
-  | { type: 'autoLayout' }
+  | { type: 'autoLayout'; view?: FlowViewMode }
+  | { type: 'addConnection'; connectionId: string; position?: Point | null }
+  | { type: 'addConnectionModels'; connectionId: string; deploymentIds: string[]; position?: Point | null }
+  | { type: 'connectConnection'; from: PortRef; to: PortRef }
 export interface CommandResult { graph: FlowGraph; changed: boolean; error: string | null; select: FlowSelection | null }
 export type ConnectCheck = { ok: true; replaces: string[] } | { ok: false; reason: string }
 export type NodeChangeKind = 'added' | 'modified'
-export type FlowToolbarAction = 'undo' | 'redo' | 'fit' | 'auto-layout' | 'zoom-in' | 'zoom-out' | 'zoom-reset' | 'validate' | 'plan' | 'revert' | 'reload' | 'save-layout' | 'toggle-palette' | 'toggle-inspector' | 'mode-basic' | 'mode-advanced' | 'normalize-order'
+export type FlowToolbarAction = 'undo' | 'redo' | 'fit' | 'auto-layout' | 'zoom-in' | 'zoom-out' | 'zoom-reset' | 'validate' | 'plan' | 'revert' | 'reload' | 'save-layout' | 'toggle-palette' | 'toggle-inspector' | 'mode-basic' | 'mode-advanced' | 'normalize-order' | 'view-connection' | 'view-model'
 
 /* ---------------- Validation ---------------- */
 export type IssueSeverity = 'error' | 'warning' | 'info'
