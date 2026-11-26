@@ -289,7 +289,11 @@ export type PaletteGroupId = 'entry' | 'guard' | 'prompt' | 'cache' | 'routing' 
 export interface PaletteNodeItem { nodeType: AddableNodeType; label: string; description: string; icon: string; clickDisabledReason: string | null; draggable: boolean; onCanvas: boolean }
 export interface PaletteProjectItem { projectId: string; name: string; status: string; onCanvas: boolean; granted: boolean; guarded: boolean }
 export interface PaletteModelItem { deploymentId: string; displayName: string; providerModelId: string; sourceName: string; external: boolean; availability: ModelAvailability; tone: HealthTone; reason: string | null; onCanvas: boolean }
-export interface PaletteGroup { id: PaletteGroupId; label: string; nodes: PaletteNodeItem[]; projects: PaletteProjectItem[]; models: PaletteModelItem[]; hiddenCount: number }
+/** The connection (runtime endpoint or external provider) a model comes from. */
+export interface ConnectionMeta { id: string /* 'endpoint:<id>' | 'provider:<id>' | 'unknown-local' | 'unknown-external' */; kind: 'endpoint' | 'provider'; label: string; detail: string; tone: HealthTone; enabled: boolean }
+export interface DeploymentConnectionGroup { connection: ConnectionMeta; items: DeploymentInfo[]; activeCount: number }
+export interface PaletteConnectionGroup extends ConnectionMeta { models: PaletteModelItem[]; activeCount: number; totalCount: number; hiddenCount: number }
+export interface PaletteGroup { id: PaletteGroupId; label: string; nodes: PaletteNodeItem[]; projects: PaletteProjectItem[]; models: PaletteModelItem[]; connections: PaletteConnectionGroup[]; hiddenCount: number }
 export interface PaletteOptions { query: string; showInactive: boolean; mode: DesignerMode }
 
 /* ---------------- Geometry ---------------- */

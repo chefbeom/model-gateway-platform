@@ -11,7 +11,8 @@ const { compile, normalizePrompt, canonicalCapabilities, sameValue } = await loa
 const { validateGraph, issueCountsByNode } = await loadTypeScript('../src/flow-designer/validate.ts', import.meta.url)
 const diff = await loadTypeScript('../src/flow-designer/diff.ts', import.meta.url)
 const history = await loadTypeScript('../src/flow-designer/history.ts', import.meta.url)
-const { buildPalette } = await loadTypeScript('../src/flow-designer/palette.ts', import.meta.url)
+const palette = await loadTypeScript("../src/flow-designer/palette.ts", import.meta.url)
+const { buildPalette } = palette
 
 const {
   NODE_TYPES, CONNECTION_RULES, DEFAULT_CONFIG, GUARDRAIL_PRESETS, WORKFLOW_TEMPLATES, portSpec, describeNode, nodeFacts, describeEdge,
@@ -1457,4 +1458,84 @@ test('every generated body only uses keys from the body types', () => {
   for (const kind of ['createService', 'patchService', 'updateScheduling', 'createTarget', 'patchTarget', 'deleteTarget', 'grantAccess', 'revokeAccess']) assert.ok(seen.has(kind), kind)
   assert.ok(allOps.some((o) => o.kind === 'createTarget' && 'systemPromptTemplate' in o.body))
   assert.ok(allOps.some((o) => o.kind === 'patchTarget' && 'clearSystemPromptTemplate' in o.body))
+})
+
+/* ---------------- 22b. palette connection groups ---------------- */
+
+test('22b. palette groups models by connection; helpers shortModelName / groupModelsByConnection', () => {
+  const { shortModelName, groupModelsByConnection } = palette
+  assert.equal(shortModelName('/opt/llm/models/gemma-4-12b-it-qat-q4_0.gguf', 'x'), 'gemma-4-12b-it-qat-q4_0')
+  assert.equal(shortModelName('C:\\models\\Llama-3.SAFETENSORS', 'x'), 'Llama-3')
+  assert.equal(shortModelName('models/gemini-3.8-flash', 'x'), 'gemini-3.8-flash') // path-like: directories stripped
+  assert.equal(shortModelName('gpt-4.1.bin-v2', 'x'), 'gpt-4.1.bin-v2') // not path-like: unchanged
+  assert.equal(shortModelName('Model A.gguf', 'x'), 'Model A.gguf') // not path-like: extension kept
+  assert.equal(shortModelName('', '/m/a.gguf'), 'a') // empty name falls back to providerModelId
+  assert.equal(shortModelName('/trailing/', 'x'), 'trailing')
+
+  const g = baseGraph()
+  const opts = { query: '', showInactive: false, mode: 'advanced' }
+  const snap = JSON.parse(JSON.stringify(base))
+  snap.catalog.endpoints.push(
+    { id: 'ep2', displayName: 'bc250', runtimeType: 'LLAMA_CPP', enabled: true, healthStatus: 'HEALTHY', addressLabel: 'http://10.0.0.2:4040' },
+    { id: 'ep3', displayName: 'Offline Box', runtimeType: 'OLLAMA', enabled: false, healthStatus: 'UNKNOWN', addressLabel: 'http://10.0.0.3:11434' },
+  )
+  snap.catalog.deployments.push(
+    dep('d', { runtimeEndpointId: 'ep2', displayName: '/opt/llm/models/zeta.gguf', providerModelId: '/opt/llm/models/zeta.gguf' }),
+    dep('e', { runtimeEndpointId: 'ep2', loaded: false }),
+    dep('f', { runtimeEndpointId: 'ep3', enabled: false }),
+    dep('g', { runtimeEndpointId: 'gone', displayName: 'Orphan' }),
+    dep('h', { runtimeEndpointId: null, externalProviderId: 'nope', external: true, displayName: 'Ext Orphan' }),
+  )
+  const local = (o = opts, s = snap) => buildPalette(s, g, o).find((x) => x.id === 'llm-local')
+  const external = (o = opts, s = snap) => buildPalette(s, g, o).find((x) => x.id === 'llm-external')
+
+  // grouping, ordering (connections with an active model first, then label in ko order), unknown connection
+  const conns = local().connections
+  assert.deepEqual(conns.map((c) => c.id), ['endpoint:ep2', 'endpoint:ep1', 'unknown-local'])
+  assert.deepEqual(conns.map((c) => c.label), ['bc250', 'GPU Box', '알 수 없는 연결'])
+  assert.deepEqual(conns[0], { ...conns[0], kind: 'endpoint', detail: 'LLAMA_CPP · http://10.0.0.2:4040', tone: 'healthy', enabled: true, activeCount: 1, totalCount: 2, hiddenCount: 1 })
+  assert.deepEqual(conns[0].models.map((m) => m.deploymentId), ['d'])
+  assert.deepEqual(conns[1].models.map((m) => m.deploymentId), ['a', 'c']) // active, degraded; inactive hidden
+  assert.equal(conns[1].totalCount, 3)
+  assert.equal(conns[1].hiddenCount, 1)
+  assert.equal(conns[2].kind, 'endpoint')
+  assert.deepEqual(conns[2].models.map((m) => m.deploymentId), ['g'])
+  const ext = external().connections
+  assert.deepEqual(ext.map((c) => [c.id, c.kind, c.detail]), [['provider:pv1', 'provider', 'OPENAI'], ['unknown-external', 'provider', ''], ['provider:pv2', 'provider', 'OPENAI']]) // pv2 has no active model (header only)
+
+  // flattened models / hiddenCount keep the historical semantics
+  assert.equal(local().hiddenCount, 3) // b, e and f (the disabled connection is dropped as a header but still counted)
+  assert.deepEqual(local().models.map((m) => m.availability), ['active', 'active', 'active', 'degraded'])
+  assert.equal(local().models.length, conns.reduce((n, c) => n + c.models.length, 0))
+  assert.ok(!conns.some((c) => c.id === 'endpoint:ep3'), 'a disabled connection with all models hidden is omitted')
+
+  // showInactive reveals everything, including the disabled connection
+  const all = local({ ...opts, showInactive: true })
+  assert.equal(all.hiddenCount, 0)
+  assert.ok(all.connections.some((c) => c.id === 'endpoint:ep3' && c.enabled === false && c.tone === 'muted' && c.models.length === 1))
+  assert.equal(all.models.length, snap.catalog.deployments.filter((d) => !d.external).length)
+
+  // an enabled connection whose models are all hidden stays as a header
+  const noActive = JSON.parse(JSON.stringify(snap))
+  noActive.catalog.deployments = noActive.catalog.deployments.map((d) => (d.runtimeEndpointId === 'ep2' ? { ...d, loaded: false } : d))
+  const hiddenOnly = local(opts, noActive).connections.find((c) => c.id === 'endpoint:ep2')
+  assert.deepEqual([hiddenOnly.models.length, hiddenOnly.hiddenCount, hiddenOnly.activeCount, hiddenOnly.totalCount], [0, 2, 0, 2])
+
+  // search: a connection label / detail match shows all of its models
+  const bySearch = local({ ...opts, query: ' BC250 ' })
+  assert.deepEqual(bySearch.connections.map((c) => c.id), ['endpoint:ep2'])
+  assert.deepEqual(bySearch.connections[0].models.map((m) => m.deploymentId), ['d', 'e'])
+  assert.deepEqual(bySearch.models.map((m) => m.deploymentId), ['d', 'e'])
+  assert.equal(bySearch.hiddenCount, 0)
+  assert.deepEqual(local({ ...opts, query: '10.0.0.1' }).connections.map((c) => c.id), ['endpoint:ep1'])
+  // model-name search keeps only matching models and drops empty connections
+  assert.deepEqual(local({ ...opts, query: 'zeta' }).connections.map((c) => [c.id, c.models.map((m) => m.deploymentId)]), [['endpoint:ep2', ['d']]])
+  // non-LLM groups have no connections
+  assert.ok(buildPalette(snap, g, opts).filter((x) => !x.id.startsWith('llm')).every((x) => x.connections.length === 0))
+
+  // shared helper used by the quick start and the inspector
+  const grouped = groupModelsByConnection(snap.catalog.deployments.filter((d) => !d.external), snap.catalog)
+  assert.deepEqual(grouped.map((x) => [x.connection.id, x.items.map((d) => d.id), x.activeCount]), [
+    ['endpoint:ep2', ['d', 'e'], 1], ['endpoint:ep1', ['a', 'c', 'b'], 1], ['unknown-local', ['g'], 1], ['endpoint:ep3', ['f'], 0],
+  ])
 })
